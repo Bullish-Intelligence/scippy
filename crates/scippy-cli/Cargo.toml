@@ -1,0 +1,14 @@
+[package]
+name = "scippy-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "scippy"
+path = "src/main.rs"
+
+[dependencies]
+scippy-core = { path = "../scippy-core" }
+scippy-python = { path = "../../languages/python" }
+scippy-typescript = { path = "../../languages/typescript" }

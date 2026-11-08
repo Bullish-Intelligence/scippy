@@ -1,0 +1,62 @@
+{
+  "answers": {},
+  "composer_digest": "8cc74b3caac86bd909367e6fc0cf762d2d727da74f0f1c359e820ecfd2d99083",
+  "layers": {
+    "base": {
+      "answers": {},
+      "composer_digest": "8cc74b3caac86bd909367e6fc0cf762d2d727da74f0f1c359e820ecfd2d99083",
+      "manifest_digest": "83cd90135d8d4b54c1a375c61a8db2e8d71b4c2b3ea917bda8f3afa113fe8907",
+      "omissions": [],
+      "owners": {
+        ".gitignore": "static:static/dot-gitignore",
+        "devenv.nix": "devenv_nix",
+        "devenv.yaml": "static:static/devenv.yaml"
+      },
+      "render_digest": "c1cd7a4f79161a8d1b2d7551e31a978a9ef346dd7f534f02ff780b9611d70f5a",
+      "revision": 3,
+      "source": "/home/andrew/.config/devman/projects/scippy/copyroom/rust-environment",
+      "source_digest": "5fa3e5c3925ef6991763ada51cda7cb130623f31d350e48d524be18a5e42ac39",
+      "templateer_digest": "e3f860d0ca60c83dd9bd7643850678bc295582542df64648697391bfc8a22200",
+      "templateer_version": "0.6.0"
+    },
+    "rust-workspace": {
+      "answers": {},
+      "composer_digest": "8cc74b3caac86bd909367e6fc0cf762d2d727da74f0f1c359e820ecfd2d99083",
+      "kind": "template",
+      "manifest_digest": "cb9ed8be1b9e559bf2118647ff785806c0ae2963e9acba882ac310cc0d32b7b6",
+      "owners": {
+        "Cargo.toml": "workspace_manifest",
+        "README.md": "readme",
+        "crates/scippy-cli/Cargo.toml": "cli_manifest",
+        "crates/scippy-cli/src/main.rs": "cli_main",
+        "crates/scippy-core/Cargo.toml": "core_manifest",
+        "crates/scippy-core/src/lib.rs": "core_lib",
+        "languages/python/Cargo.toml": "python_manifest",
+        "languages/python/src/lib.rs": "python_lib",
+        "languages/typescript/Cargo.toml": "typescript_manifest",
+        "languages/typescript/src/lib.rs": "typescript_lib"
+      },
+      "render_digest": "cbc18e1e75ed7ac29452c17119001b9d645348c69338411ede7cd81185c3e2bc",
+      "revision": 0,
+      "source": "/home/andrew/.config/devman/projects/scippy/copyroom/rust-workspace",
+      "source_digest": "1adb4cf372db2cff88125b9c65b0c0c617dd0085a72a9000179b0439ac7dbd48",
+      "templateer_digest": "e3f860d0ca60c83dd9bd7643850678bc295582542df64648697391bfc8a22200",
+      "templateer_version": "0.6.0"
+    }
+  },
+  "manifest_digest": "83cd90135d8d4b54c1a375c61a8db2e8d71b4c2b3ea917bda8f3afa113fe8907",
+  "omissions": [],
+  "owners": {
+    ".gitignore": "static:static/dot-gitignore",
+    "devenv.nix": "devenv_nix",
+    "devenv.yaml": "static:static/devenv.yaml"
+  },
+  "project_id": "0649f7f691bb497bb16b7965a2907ad2",
+  "render_digest": "c1cd7a4f79161a8d1b2d7551e31a978a9ef346dd7f534f02ff780b9611d70f5a",
+  "revision": 3,
+  "schema": 2,
+  "source": "/home/andrew/.config/devman/projects/scippy/copyroom/rust-environment",
+  "source_digest": "5fa3e5c3925ef6991763ada51cda7cb130623f31d350e48d524be18a5e42ac39",
+  "templateer_digest": "e3f860d0ca60c83dd9bd7643850678bc295582542df64648697391bfc8a22200",
+  "templateer_version": "0.6.0"
+}
