@@ -24,7 +24,11 @@ use crate::project::ProjectRelativePath;
 /// The name that the rules use for the builtins file.
 pub(crate) const BUILTINS_NAME: &str = "<builtins>";
 
-/// Limits for the work on one reference. Defaults follow the fork recommendation.
+/// Limits for the work on one reference.
+///
+/// The Python rules of the fork at 4738172 add paths for annotations and base classes.
+/// The old limits (30,000 work, 5,000,000 arena cells) stopped about 1,500 more mypy
+/// references than before. These limits bring the count back to the old level.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ResolveLimits {
     /// Units of work: one for each path that the search extends, one for each candidate.
@@ -38,9 +42,9 @@ pub(crate) struct ResolveLimits {
 impl Default for ResolveLimits {
     fn default() -> Self {
         Self {
-            max_work: 30_000,
+            max_work: 100_000,
             max_queue_len: 2_000,
-            max_arena_cells: 5_000_000,
+            max_arena_cells: 20_000_000,
         }
     }
 }

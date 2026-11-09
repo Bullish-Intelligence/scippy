@@ -195,15 +195,22 @@ fn a_shadowing_name_never_binds_to_the_outer_definition() {
     );
     // A local variable shadows the function: the engine drops the shadowed path.
     assert_eq!(
-        indexed.symbols_of("outer.py", "    return process\n#", "process"),
+        indexed.symbols_of(
+            "outer.py",
+            "return process\n#          ^^^^^^^ reference local 2",
+            "process"
+        ),
         ["local 2"]
     );
-    // A parameter shadows the function in Python, but the binding rules of the engine do not
-    // yet give it a higher precedence. The reference is ambiguous and gets no target.
-    // The outer function is never the target.
-    for o in indexed.find("outer.py", "return process\n\n\ndef rebinding", "process") {
-        assert_ne!(o.symbol, outer);
-    }
+    // A parameter shadows the function through precedence. The outer function is never the target.
+    assert_eq!(
+        indexed.symbols_of(
+            "outer.py",
+            "return process\n#          ^^^^^^^ reference local 1",
+            "process"
+        ),
+        ["local 1"]
+    );
 }
 
 #[test]
@@ -261,7 +268,7 @@ fn a_plain_name_prefers_its_nearest_binding() {
         indexed.symbols_of("flow.py", "return self.w", "w"),
         [global("flow/Child#w.")]
     );
-    assert!(indexed.report.multi_target.nearest_binding >= 5);
+    assert!(indexed.report.multi_target.nearest_binding >= 2);
 }
 
 #[test]
@@ -301,7 +308,14 @@ fn a_plain_name_never_targets_an_instance_field() {
         [state_id]
     );
     assert_eq!(indexed.report.references_ambiguous, 0);
-    assert!(indexed.report.multi_target.pack_refused >= 2);
+    // The engine now ranks the parameter above the field. The shadow filter takes these.
+    assert!(indexed.report.multi_target.shadow_filtered >= 3);
+    // A method does not see the class body. The pack refuses `State#limit` and keeps the module name.
+    assert_eq!(
+        indexed.symbols_of("fields.py", "print(limit)", "limit"),
+        [global("fields/limit.")]
+    );
+    assert!(indexed.report.multi_target.pack_refused >= 1);
 }
 
 #[test]

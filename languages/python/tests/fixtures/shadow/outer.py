@@ -9,6 +9,7 @@ def local_shadow(process):
 #   ^^^^^^^^^^^^ definition scippy python workspace . outer/local_shadow().
 #                ^^^^^^^ definition local 1
     return process
+#          ^^^^^^^ reference local 1
 
 
 def rebinding():

@@ -3,6 +3,7 @@ class State:
 #   ^^ definition scippy python workspace . fields/State#id.
     count = 0
 #   ^^^^^ definition scippy python workspace . fields/State#count.
+    limit = 1
     label = count
 #   ^^^^^ definition scippy python workspace . fields/State#label.
 #           ^^^^^ reference scippy python workspace . fields/State#count.
@@ -20,6 +21,11 @@ class State:
 
     def show(self):
         print(count)
+        print(limit)
+#             ^^^^^ reference scippy python workspace . fields/limit.
         return self.id
 #              ^^^^ reference local 3
 #                   ^^ reference scippy python workspace . fields/State#id.
+
+
+limit = 3
