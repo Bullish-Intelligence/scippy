@@ -1,0 +1,557 @@
+//! End-to-end tests of the Python pack through the whole pipeline.
+//!
+//! Each fixture is a small project under `tests/fixtures`. The tests index it,
+//! parse the index, and check the occurrences against hand-written expectations.
+//! Positive expectations live in the fixture sources as `scip test` assertions.
+//! `scip test` has no negative assertion, so the tests check absent targets in Rust.
+//!
+//! The scip CLI steps skip with a message when `scip` is not on PATH.
+//! Set `SCIPPY_REQUIRE_SCIP=1` to fail instead of skip.
+//! Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use protobuf::Message;
+use scip::types::{Index, Occurrence, SymbolRole};
+use scippy_core::{IndexReport, IndexRequest, InputLimits, Severity, index_project};
+use scippy_python::PythonPack;
+
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
+const PREFIX: &str = "scippy python workspace . ";
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(FIXTURES).join(name)
+}
+
+struct Indexed {
+    root: PathBuf,
+    _scratch: tempfile::TempDir,
+    path: PathBuf,
+    report: IndexReport,
+    index: Index,
+}
+
+fn index_at(root: &Path) -> Indexed {
+    index_with(IndexRequest::new(root, ""))
+}
+
+fn index_with(mut request: IndexRequest) -> Indexed {
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("index.scip");
+    request.output = path.clone();
+    let report = index_project(&request, &[&PythonPack]).unwrap();
+    let index = Index::parse_from_bytes(&fs::read(&path).unwrap()).unwrap();
+    Indexed {
+        root: request.root,
+        _scratch: scratch,
+        path,
+        report,
+        index,
+    }
+}
+
+fn index(name: &str) -> Indexed {
+    index_at(&fixture(name))
+}
+
+impl Indexed {
+    fn document(&self, path: &str) -> Option<&scip::types::Document> {
+        self.index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == path)
+    }
+
+    /// The occurrences of the document that start on `line` (1-based) at `column`.
+    fn at(&self, path: &str, line: i32, column: i32) -> Vec<&Occurrence> {
+        self.document(path)
+            .unwrap_or_else(|| panic!("no document {path}"))
+            .occurrences
+            .iter()
+            .filter(|o| match &o.typed_range {
+                Some(scip::types::occurrence::Typed_range::SingleLineRange(r)) => {
+                    r.line == line - 1 && r.start_character == column
+                }
+                _ => false,
+            })
+            .collect()
+    }
+
+    fn symbols_at(&self, path: &str, line: i32, column: i32) -> Vec<&str> {
+        self.at(path, line, column)
+            .iter()
+            .map(|o| o.symbol.as_str())
+            .collect()
+    }
+
+    /// The occurrences of `word` inside the first `context` of the source file.
+    /// The fixture files hold assertion comments, so the tests find lines by text.
+    fn find(&self, path: &str, context: &str, word: &str) -> Vec<&Occurrence> {
+        let (line, column) = self.locate(path, context, word);
+        self.at(path, line, column)
+    }
+
+    fn symbols_of(&self, path: &str, context: &str, word: &str) -> Vec<&str> {
+        self.find(path, context, word)
+            .iter()
+            .map(|o| o.symbol.as_str())
+            .collect()
+    }
+
+    /// The 1-based line and the byte column of `word` in the first `context`.
+    fn locate(&self, path: &str, context: &str, word: &str) -> (i32, i32) {
+        let text = fs::read_to_string(self.root.join(path)).unwrap();
+        let at = text.find(context).expect("context") + context.rfind(word).expect("word");
+        let line = text[..at].matches('\n').count() as i32 + 1;
+        let column = at - text[..at].rfind('\n').map_or(0, |n| n + 1);
+        (line, column as i32)
+    }
+
+    fn has_symbol(&self, path: &str, symbol: &str) -> bool {
+        self.document(path)
+            .unwrap()
+            .occurrences
+            .iter()
+            .any(|o| o.symbol == symbol)
+    }
+}
+
+fn global(rest: &str) -> String {
+    format!("{PREFIX}{rest}")
+}
+
+fn is_definition(o: &Occurrence) -> bool {
+    o.symbol_roles & SymbolRole::Definition as i32 != 0
+}
+
+fn is_import(o: &Occurrence) -> bool {
+    o.symbol_roles & SymbolRole::Import as i32 != 0
+}
+
+// ---- the acceptance fixture of the concept document, section 3.2 ----
+
+#[test]
+fn an_aliased_import_gives_one_symbol_to_the_definition_the_import_and_the_call() {
+    let indexed = index("alias");
+    let process = global("src/services/process().");
+
+    // The definition in services.py.
+    let definition = indexed.find("src/services.py", "def process", "process");
+    assert_eq!(definition.len(), 1);
+    assert_eq!(definition[0].symbol, process);
+    assert!(is_definition(definition[0]));
+
+    // The import occurrence: `process` in `from services import process as run`.
+    let import = indexed.find("src/app.py", "import process as run", "process");
+    assert_eq!(import.len(), 1);
+    assert_eq!(import[0].symbol, process);
+    assert!(is_import(import[0]));
+    assert!(!is_definition(import[0]));
+
+    // The call site: `run("hello")`.
+    let call = indexed.find("src/app.py", "= run(", "run");
+    assert_eq!(call.len(), 1);
+    assert_eq!(call[0].symbol, process);
+    assert_eq!(call[0].symbol_roles, 0, "a plain reference");
+
+    // The symbol information belongs to services.py.
+    let services = indexed.document("src/services.py").unwrap();
+    let info = services
+        .symbols
+        .iter()
+        .find(|s| s.symbol == process)
+        .expect("symbol information");
+    assert_eq!(info.display_name, "process");
+    assert_eq!(
+        info.kind.enum_value().unwrap(),
+        scip::types::symbol_information::Kind::Function
+    );
+    // The alias name `run` in the import statement gets no occurrence of its own.
+    assert!(indexed.find("src/app.py", "as run", "run").is_empty());
+    // The alias policy: the call had two raw ends, and it is not ambiguous.
+    assert_eq!(indexed.report.references_ambiguous, 0);
+    assert!(indexed.report.multi_target.alias_collapsed >= 1);
+}
+
+// ---- shadowing, unresolved, ambiguous ----
+
+#[test]
+fn a_shadowing_name_never_binds_to_the_outer_definition() {
+    let indexed = index("shadow");
+    let outer = global("outer/process().");
+    // `process` in other.py resolves to other.py, never to outer.py.
+    assert_eq!(
+        indexed.symbols_of("other.py", "return process(3)", "process"),
+        [global("other/process().")]
+    );
+    assert!(!indexed.has_symbol("other.py", &outer));
+    // The module-level call in outer.py reaches the outer function.
+    assert_eq!(
+        indexed.symbols_of("outer.py", "return process(2)", "process"),
+        [outer.as_str()]
+    );
+    // A local variable shadows the function: the engine drops the shadowed path.
+    assert_eq!(
+        indexed.symbols_of("outer.py", "    return process\n#", "process"),
+        ["local 2"]
+    );
+    // A parameter shadows the function in Python, but the binding rules of the engine do not
+    // yet give it a higher precedence. The reference is ambiguous and gets no target.
+    // The outer function is never the target.
+    for o in indexed.find("outer.py", "return process\n\n\ndef rebinding", "process") {
+        assert_ne!(o.symbol, outer);
+    }
+}
+
+#[test]
+fn unresolved_names_get_no_target() {
+    let indexed = index("unresolved");
+    // `thing` comes from a module that does not exist. A decoy defines the same name.
+    assert!(indexed.find("missing.py", "= thing(1)", "thing").is_empty());
+    assert!(!indexed.has_symbol("missing.py", &global("decoy/thing().")));
+    // A name that nobody defines.
+    assert!(
+        indexed
+            .find("missing.py", "unknown_name(2)", "unknown_name")
+            .is_empty()
+    );
+    assert!(indexed.report.references_unresolved >= 2);
+}
+
+#[test]
+fn ambiguous_names_get_no_target() {
+    let indexed = index("ambiguous");
+    // `f` is imported from a in one branch and from b in the other.
+    assert!(indexed.find("c.py", "value = f()", "f").is_empty());
+    assert_eq!(indexed.report.references_ambiguous, 1);
+    assert_eq!(indexed.report.multi_target.ambiguous, 1);
+    // Each import site still resolves to its own definition.
+    assert_eq!(
+        indexed.symbols_of("c.py", "from a import f", "f"),
+        [global("a/f().")]
+    );
+}
+
+// ---- positions ----
+
+#[test]
+fn columns_count_utf8_bytes() {
+    let indexed = index("unicode");
+    // `from lib import grüße, 日本`: `grüße` starts at byte 16 and is 7 bytes long.
+    let o = indexed.at("use.py", 1, 16);
+    assert_eq!(o.len(), 1);
+    assert_eq!(o[0].symbol, global("lib/`grüße`()."));
+    // `日本` follows `grüße` and `, `, so it starts at byte 25.
+    assert_eq!(indexed.symbols_at("use.py", 1, 25), [global("lib/`日本`.")]);
+    // `naïve = 日本`: `naïve` is 6 bytes long, so `日本` starts at byte 9.
+    assert_eq!(
+        indexed.symbols_of("use.py", "naïve = 日本", "日本"),
+        [global("lib/`日本`.")]
+    );
+    assert_eq!(indexed.locate("use.py", "naïve = 日本", "日本").1, 9);
+    // The call `grüße("é")` on a line with more non-ASCII text after it.
+    assert_eq!(
+        indexed.symbols_of("use.py", "x = grüße(", "grüße"),
+        [global("lib/`grüße`().")]
+    );
+}
+
+#[test]
+fn crlf_line_endings_keep_the_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.py"), "def f():\r\n    return 1\r\n").unwrap();
+    fs::write(
+        dir.path().join("b.py"),
+        "from a import f\r\n\r\nx = f()\r\n",
+    )
+    .unwrap();
+    let indexed = index_at(dir.path());
+    assert_eq!(indexed.symbols_at("b.py", 1, 14), [global("a/f().")]);
+    assert_eq!(indexed.symbols_at("b.py", 3, 4), [global("a/f().")]);
+    assert_eq!(indexed.symbols_at("a.py", 1, 4), [global("a/f().")]);
+}
+
+// ---- syntax errors ----
+
+#[test]
+fn a_syntax_error_skips_one_file_and_the_others_still_index() {
+    let indexed = index("syntax_error");
+    assert!(indexed.document("bad.py").is_none());
+    assert!(indexed.document("good.py").is_some());
+    assert_eq!(indexed.report.files_skipped, 1);
+    assert_eq!(indexed.report.files_indexed, 1);
+    let diagnostic = indexed
+        .report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "syntax-error")
+        .expect("a syntax-error diagnostic");
+    assert_eq!(diagnostic.file.as_deref(), Some("bad.py"));
+    assert!(diagnostic.range.is_some());
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert_eq!(
+        indexed.symbols_of("good.py", "value = fine()", "fine"),
+        [global("good/fine().")]
+    );
+}
+
+// ---- packages, roots, cycles ----
+
+#[test]
+fn packages_resolve_across_roots_and_cycles_end() {
+    let indexed = index("packages");
+    // `from pkg import helper` goes through the re-export in pkg/__init__.py.
+    assert_eq!(
+        indexed.symbols_of("lib/main.py", "x = helper()", "helper"),
+        [global("lib/pkg/core/helper().")]
+    );
+    // The relative import `from ..core import helper`.
+    assert_eq!(
+        indexed.symbols_of("lib/pkg/sub/leaf.py", "answer = helper()", "helper"),
+        [global("lib/pkg/core/helper().")]
+    );
+    // Two modules in different roots define `helper`. The symbols differ.
+    let lib = indexed.find("lib/pkg/core.py", "def helper", "helper");
+    let other = indexed.find("other/core.py", "def helper", "helper");
+    assert_ne!(lib[0].symbol, other[0].symbol);
+    // The import cycle between a.py and b.py resolves and the run ends.
+    assert_eq!(
+        indexed.symbols_of("lib/pkg/a.py", "return from_b()", "from_b"),
+        [global("lib/pkg/b/from_b().")]
+    );
+    // A call of a method through a class instance resolves to the method.
+    assert_eq!(
+        indexed.symbols_of("lib/main.py", "box.get()", "get"),
+        [global("lib/pkg/core/Box#get().")]
+    );
+}
+
+// ---- input limits ----
+
+#[test]
+fn the_file_limit_skips_a_large_file_with_a_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("small.py"), "x = 1\n").unwrap();
+    fs::write(
+        dir.path().join("big.py"),
+        format!("x = 1\n{}", "#".repeat(100)),
+    )
+    .unwrap();
+    let mut request = IndexRequest::new(dir.path(), "");
+    request.limits = InputLimits {
+        max_file_bytes: 50,
+        max_total_bytes: 1000,
+    };
+    let indexed = index_with(request);
+    assert!(indexed.document("small.py").is_some());
+    assert!(indexed.document("big.py").is_none());
+    assert!(
+        indexed
+            .report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "file-too-large" && d.file.as_deref() == Some("big.py"))
+    );
+}
+
+#[test]
+fn the_total_limit_stops_the_run_with_an_error_diagnostic() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["a.py", "b.py", "c.py"] {
+        fs::write(dir.path().join(name), "x = 1\n").unwrap();
+    }
+    let mut request = IndexRequest::new(dir.path(), "");
+    let limits = InputLimits {
+        max_file_bytes: 100,
+        max_total_bytes: 14,
+    };
+    request.limits = limits;
+    let indexed = index_with(request);
+    assert_eq!(indexed.report.files_indexed, 2);
+    let error = indexed
+        .report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "input-limit-reached")
+        .expect("a limit diagnostic");
+    assert_eq!(error.severity, Severity::Error);
+    assert_eq!(error.file.as_deref(), Some("c.py"));
+
+    // Strict mode turns the error into a failure.
+    let mut strict = IndexRequest::new(dir.path(), dir.path().join("strict.scip"));
+    strict.limits = limits;
+    strict.strict = true;
+    assert!(index_project(&strict, &[&PythonPack]).is_err());
+}
+
+// ---- determinism ----
+
+#[test]
+fn another_checkout_root_changes_only_the_root_uri() {
+    let copy = tempfile::tempdir().unwrap();
+    copy_dir(&fixture("packages"), copy.path());
+    let normalised = |mut indexed: Indexed| {
+        let metadata = indexed.index.metadata.as_mut().unwrap();
+        metadata.project_root.clear();
+        metadata.tool_info.as_mut().unwrap().version.clear();
+        indexed.index.write_to_bytes().unwrap()
+    };
+    let here = index("packages");
+    let there = index_at(copy.path());
+    assert_ne!(
+        here.index.metadata.project_root,
+        there.index.metadata.project_root
+    );
+    assert_eq!(normalised(here), normalised(there));
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            fs::create_dir_all(&target).unwrap();
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+// ---- the official scip CLI ----
+
+fn scip() -> Option<PathBuf> {
+    let found = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|dir| dir.join("scip"))
+        .find(|candidate| candidate.is_file());
+    if found.is_none() {
+        assert!(
+            std::env::var_os("SCIPPY_REQUIRE_SCIP").is_none(),
+            "the scip CLI is not on PATH and SCIPPY_REQUIRE_SCIP is set"
+        );
+        eprintln!(
+            "SKIPPED: the scip CLI is not on PATH. Install it from https://github.com/scip-code/scip/releases"
+        );
+    }
+    found
+}
+
+fn run(scip: &Path, cwd: &Path, args: &[&str]) -> Output {
+    let output = Command::new(scip)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    eprintln!(
+        "$ scip {} ({})\n{}{}",
+        args.join(" "),
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+const SCIP_FIXTURES: &[&str] = &[
+    "alias",
+    "unicode",
+    "packages",
+    "ambiguous",
+    "shadow",
+    "unresolved",
+    "syntax_error",
+];
+
+#[test]
+fn scip_lint_accepts_every_fixture_index() {
+    let Some(scip) = scip() else { return };
+    for name in SCIP_FIXTURES {
+        let indexed = index(name);
+        let output = run(
+            &scip,
+            &fixture(name),
+            &["lint", indexed.path.to_str().unwrap()],
+        );
+        assert!(output.status.success(), "{name}");
+        let text = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr);
+        assert!(!text.to_lowercase().contains("error"), "{name}: {text}");
+    }
+}
+
+#[test]
+fn scip_test_accepts_the_annotated_sources() {
+    let Some(scip) = scip() else { return };
+    for name in SCIP_FIXTURES {
+        let indexed = index(name);
+        let mut args = vec![
+            "test",
+            "--from",
+            indexed.path.to_str().unwrap(),
+            "--comment-syntax",
+            "#",
+        ];
+        // The syntax-error fixture has a file that is not in the index on purpose.
+        if *name != "syntax_error" {
+            args.push("--check-documents");
+        }
+        // `scip test` reads the directory from its first argument.
+        args.push(".");
+        let output = run(&scip, &fixture(name), &args);
+        assert!(output.status.success(), "{name}");
+    }
+}
+
+fn check_golden(name: &str, actual: &str) {
+    let path = Path::new(GOLDEN).join(name);
+    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, actual).unwrap();
+    }
+    let expected = fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("missing golden file {}", path.display()));
+    assert_eq!(
+        actual, expected,
+        "golden file {name} differs. Run with UPDATE_GOLDEN=1 to update it."
+    );
+}
+
+#[test]
+fn scip_snapshot_matches_the_golden_files() {
+    let Some(scip) = scip() else { return };
+    let scratch = tempfile::tempdir().unwrap();
+    for (name, files) in [
+        ("alias", &["src/services.py", "src/app.py"][..]),
+        ("ambiguous", &["c.py"][..]),
+        ("shadow", &["outer.py", "other.py"][..]),
+        ("unicode", &["lib.py", "use.py"][..]),
+    ] {
+        let indexed = index(name);
+        let out = scratch.path().join(name);
+        let output = run(
+            &scip,
+            &fixture(name),
+            &[
+                "snapshot",
+                "--from",
+                indexed.path.to_str().unwrap(),
+                "--to",
+                out.to_str().unwrap(),
+                "--comment-syntax",
+                "#",
+                // The default `--strict=true` fails on every index in scip 0.10.0.
+                "--strict=false",
+            ],
+        );
+        assert!(output.status.success(), "{name}");
+        for file in files {
+            let actual = fs::read_to_string(out.join(file)).unwrap();
+            check_golden(&format!("{name}/{file}"), &actual);
+        }
+    }
+}

@@ -1,6 +1,6 @@
 //! Run the `scippy` binary end to end.
 //!
-//! At Gate 1 the binary writes documents without occurrences.
+//! The binary indexes Python files. The TypeScript pack only routes files at this stage.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,10 +75,13 @@ fn indexes_a_tree_into_sorted_documents() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    // The TypeScript pack does not support indexing yet. The run skips its two files.
     assert!(
-        stdout.contains("files discovered: 5\nfiles indexed: 4\n"),
+        stdout.contains("files discovered: 5\nfiles indexed: 2\nfiles skipped: 2\n"),
         "{stdout}"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unsupported-language"), "{stderr}");
 
     let index = parse(&out);
     let documents: Vec<_> = index
@@ -86,16 +89,9 @@ fn indexes_a_tree_into_sorted_documents() {
         .iter()
         .map(|d| (d.relative_path.as_str(), d.language.as_str()))
         .collect();
-    assert_eq!(
-        documents,
-        [
-            ("a.py", "Python"),
-            ("b.py", "Python"),
-            ("pkg/a.tsx", "TypeScript"),
-            ("pkg/z.ts", "TypeScript")
-        ]
-    );
-    assert!(index.documents.iter().all(|d| d.occurrences.is_empty()));
+    assert_eq!(documents, [("a.py", "Python"), ("b.py", "Python")]);
+    // `x = 1` is one definition of `x`.
+    assert!(index.documents.iter().all(|d| d.occurrences.len() == 1));
     let root_uri = &index.metadata.as_ref().unwrap().project_root;
     assert!(
         root_uri.starts_with("file:///") && root_uri.ends_with("/project"),
@@ -144,6 +140,76 @@ fn a_second_run_with_the_output_inside_the_root_gives_the_same_bytes() {
     assert!(scippy(&args).status.success());
     assert_eq!(first, fs::read(&out).unwrap());
     assert_eq!(parse(&out).documents.len(), 1);
+}
+
+#[test]
+fn indexes_the_aliased_import_across_files_and_reports_the_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/services.py"),
+        "def process(value):\n    return value\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/app.py"),
+        "from services import process as run\nresult = run(1)\n",
+    )
+    .unwrap();
+    let out = dir.path().join("index.scip");
+    let output = scippy(&["index", root.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("references ambiguous: 0\n"), "{stdout}");
+    assert!(stdout.contains("references resolved: 3\n"), "{stdout}");
+    let index = parse(&out);
+    let symbols: Vec<_> = index
+        .documents
+        .iter()
+        .flat_map(|d| d.occurrences.iter().map(|o| o.symbol.as_str()))
+        .filter(|s| s.ends_with("process()."))
+        .collect();
+    // The definition, the import occurrence, and the call.
+    assert_eq!(
+        symbols,
+        ["scippy python workspace . src/services/process()."; 3]
+    );
+}
+
+#[test]
+fn the_input_limit_flags_skip_files_and_say_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    write_tree(&root, &["a.py", "b.py", "c.py"]);
+    let out = dir.path().join("index.scip");
+    let output = scippy(&[
+        "index",
+        root.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--max-total-bytes",
+        "12",
+    ]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error[input-limit-reached] c.py"),
+        "{stderr}"
+    );
+    assert_eq!(parse(&out).documents.len(), 2);
+
+    let output = scippy(&[
+        "index",
+        root.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--max-file-bytes",
+        "3",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning[file-too-large] a.py"), "{stderr}");
+    assert_eq!(parse(&out).documents.len(), 0);
 }
 
 #[test]
