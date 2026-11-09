@@ -51,3 +51,9 @@
   name: (dotted_name (identifier) @import))
 (import_from_statement
   name: (aliased_import name: (dotted_name (identifier) @import)))
+
+; Members of a value: the `x` in `a.x`. The path of such a reference passes the definition of the
+; object `a`. Every other name is a plain name. The reconciler applies a stricter
+; nearest-binding rule to a plain name.
+(attribute
+  attribute: (identifier) @member)

@@ -9,13 +9,25 @@
 //! 2. A bounded search gives no target. It can lack ends.
 //! 3. An end that joins to no declaration is a binding, such as an import alias or a module.
 //!    The final definition replaces it.
-//! 4. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
+//! 4. A reference prefers the nearest binding. The engine follows values, so a name can reach
+//!    its own binding and then the definition that the value comes from.
+//!    A value-flow end is an end whose path passes the definition of another symbol.
+//!    The reconciler drops value-flow ends when a nearest end exists.
+//!    - A plain name has no reason to pass a definition. Any definition of another symbol on the
+//!      path makes the end a value-flow end.
+//!    - A member reference, such as `a.x`, must pass the definition of its object, `a`.
+//!      The path to every end passes it. Only a definition that is itself an end of the
+//!      reference counts: the end of a path that passes the field `x` is a value-flow end.
+//!      The pack marks member references. The core never reads syntax.
+//! 5. A definition in a project file wins over a definition in an external asset, such as the
+//!    builtins. A project definition shadows the builtin of the same name.
+//! 6. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
 //!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved.
-//! 5. A reference never takes a document-local symbol of another document.
+//! 7. A reference never takes a document-local symbol of another document.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::bindings::{Bound, RawBinding, RawEnd};
+use crate::bindings::{Bound, Place, RawBinding, RawEnd};
 use crate::extract::SourceAnchor;
 use crate::identity::SymbolId;
 
@@ -42,18 +54,25 @@ pub(crate) enum BindingOutcome {
 }
 
 /// Declaration anchors with their symbols. It is the join table.
+///
+/// Project declarations and declarations of external assets live in separate tables.
 #[derive(Default)]
 pub(crate) struct DeclarationIndex {
-    by_anchor: HashMap<SourceAnchor, SymbolId>,
+    project: HashMap<SourceAnchor, SymbolId>,
+    external: HashMap<SourceAnchor, SymbolId>,
 }
 
 impl DeclarationIndex {
     pub fn insert(&mut self, anchor: SourceAnchor, symbol: SymbolId) {
-        self.by_anchor.insert(anchor, symbol);
+        self.project.insert(anchor, symbol);
     }
 
-    pub fn get(&self, anchor: &SourceAnchor) -> Option<&SymbolId> {
-        self.by_anchor.get(anchor)
+    pub fn get(&self, place: &Place) -> Option<&SymbolId> {
+        if place.external {
+            self.external.get(&place.anchor)
+        } else {
+            self.project.get(&place.anchor)
+        }
     }
 }
 
@@ -66,22 +85,54 @@ pub(crate) struct Reconciled {
     pub ends: usize,
     /// Ends that only shadowed paths reach. The reconciler ignores them.
     pub shadowed: usize,
-    /// Ends outside the indexed project, such as builtins.
+    /// Ends in an external asset, such as the builtins.
     pub outside: usize,
-    /// Ends that joined to a declaration, counted by anchor.
+    /// Ends in the project that joined to a declaration, counted by anchor.
     pub joined: usize,
+    /// Joined ends that the nearest-binding rule dropped.
+    pub value_flow_dropped: usize,
     /// The ends that joined no declaration, as `syntax_type` or `-`.
     pub unjoined: Vec<String>,
-    /// The joined declarations as `file:start`, for the trace.
+    /// The joined declarations as `file:start`, for the trace. An external end has the prefix `~`.
     pub targets: Vec<String>,
+}
+
+/// The ends of one definition node. Paths with different routes reach one node.
+struct EndGroup<'a> {
+    place: Option<&'a Place>,
+    syntax_type: &'a Option<String>,
+    /// The `through` lists of the paths that reach the node.
+    routes: Vec<&'a [Place]>,
+}
+
+fn group_ends(ends: &BTreeSet<RawEnd>) -> Vec<EndGroup<'_>> {
+    let mut groups: Vec<EndGroup> = Vec::new();
+    for end in ends {
+        // The set is sorted, so the entries of one node are adjacent.
+        match groups.last_mut() {
+            Some(last)
+                if last.place == end.place.as_ref() && last.syntax_type == &end.syntax_type =>
+            {
+                last.routes.push(&end.through);
+            }
+            _ => groups.push(EndGroup {
+                place: end.place.as_ref(),
+                syntax_type: &end.syntax_type,
+                routes: vec![&end.through],
+            }),
+        }
+    }
+    groups
 }
 
 /// Merge the raw bindings of one document by reference span and reconcile each location.
 ///
+/// `members` holds the spans of the references that name a member of a value.
 /// The result is sorted by span.
 pub(crate) fn reconcile(
     declarations: &DeclarationIndex,
     bindings: Vec<RawBinding>,
+    members: &HashSet<(u32, u32)>,
 ) -> Vec<Reconciled> {
     type Merged = (BTreeSet<RawEnd>, BTreeSet<RawEnd>, Option<Bound>);
     let mut merged: BTreeMap<SourceAnchor, Merged> = BTreeMap::new();
@@ -95,36 +146,81 @@ pub(crate) fn reconcile(
     merged
         .into_iter()
         .map(|(reference, (ends, shadowed, bound))| {
+            let groups = group_ends(&ends);
             // A node that is shadowed in one search and kept in another is not shadowed.
-            let shadowed: BTreeSet<RawEnd> = shadowed.difference(&ends).cloned().collect();
-            let mut joined: BTreeSet<&SourceAnchor> = BTreeSet::new();
+            let shadowed = group_ends(&shadowed)
+                .iter()
+                .filter(|s| {
+                    !groups
+                        .iter()
+                        .any(|g| g.place == s.place && g.syntax_type == s.syntax_type)
+                })
+                .count();
+            let is_member = members.contains(&(reference.start_byte, reference.end_byte));
+
+            let mut unjoined = Vec::new();
+            let mut joined: Vec<(&EndGroup, &Place, &SymbolId)> = Vec::new();
+            for group in &groups {
+                match group
+                    .place
+                    .and_then(|place| declarations.get(place).map(|symbol| (place, symbol)))
+                {
+                    Some((place, symbol)) => joined.push((group, place, symbol)),
+                    None => unjoined.push(group.syntax_type.clone().unwrap_or_else(|| "-".into())),
+                }
+            }
+            let outside = groups
+                .iter()
+                .filter(|g| g.place.is_some_and(|p| p.external))
+                .count();
+            let project_joined = joined
+                .iter()
+                .filter(|(_, place, _)| !place.external)
+                .count();
+
+            // The nearest binding. A route is direct when it passes no definition of another
+            // symbol. A member reference counts only the definitions of its own ends.
+            let end_places: HashSet<&Place> = joined.iter().map(|(_, place, _)| *place).collect();
+            let direct = |(group, _, symbol): &(&EndGroup, &Place, &SymbolId)| {
+                group.routes.iter().any(|route| {
+                    route.iter().all(|through| {
+                        declarations.get(through).is_none_or(|s| {
+                            s == *symbol || (is_member && !end_places.contains(through))
+                        })
+                    })
+                })
+            };
+            let nearest: Vec<_> = joined.iter().filter(|j| direct(j)).collect();
+            let (kept, value_flow_dropped): (Vec<_>, usize) = if nearest.is_empty() {
+                (joined.iter().collect(), 0)
+            } else {
+                let dropped = joined.len() - nearest.len();
+                (nearest, dropped)
+            };
+
+            // A definition in the project shadows a definition of an external asset.
+            let in_project = kept.iter().any(|(_, place, _)| !place.external);
             let mut usable: BTreeSet<SymbolId> = BTreeSet::new();
             let mut foreign = false;
-            let mut unjoined = Vec::new();
             let mut targets = Vec::new();
-            let outside = ends.iter().filter(|e| e.anchor.is_none()).count();
-            for end in &ends {
-                let target = end
-                    .anchor
-                    .as_ref()
-                    .and_then(|a| declarations.get(a).map(|symbol| (a, symbol)));
-                let Some((anchor, symbol)) = target else {
-                    unjoined.push(end.syntax_type.clone().unwrap_or_else(|| "-".into()));
-                    continue;
-                };
-                joined.insert(anchor);
-                targets.push(format!("{}:{}", anchor.path.as_str(), anchor.start_byte));
+            for (_, place, symbol) in kept.iter().filter(|(_, p, _)| p.external != in_project) {
+                targets.push(format!(
+                    "{}{}:{}",
+                    if place.external { "~" } else { "" },
+                    place.anchor.path.as_str(),
+                    place.anchor.start_byte
+                ));
                 // A document-local symbol is valid only in the document that declares it.
-                if symbol.is_local() && anchor.path != reference.path {
+                if symbol.is_local() && place.anchor.path != reference.path {
                     foreign = true;
                 } else {
-                    usable.insert(symbol.clone());
+                    usable.insert((*symbol).clone());
                 }
             }
 
             let outcome = if let Some(bound) = bound {
                 BindingOutcome::Bounded(bound)
-            } else if ends.is_empty() {
+            } else if groups.is_empty() {
                 BindingOutcome::Unresolved(UnresolvedReason::NoPath)
             } else if joined.is_empty() {
                 BindingOutcome::Unresolved(UnresolvedReason::NoDeclaration)
@@ -138,10 +234,11 @@ pub(crate) fn reconcile(
             Reconciled {
                 reference,
                 outcome,
-                ends: ends.len(),
-                shadowed: shadowed.len(),
+                ends: groups.len(),
+                shadowed,
                 outside,
-                joined: joined.len(),
+                joined: project_joined,
+                value_flow_dropped,
                 unjoined,
                 targets,
             }
@@ -164,10 +261,26 @@ mod tests {
         }
     }
 
+    fn place(path: &str, start: u32) -> Place {
+        Place {
+            anchor: anchor(path, start),
+            external: false,
+        }
+    }
+
     fn end(path: &str, start: u32, syntax: Option<&str>) -> RawEnd {
         RawEnd {
-            anchor: Some(anchor(path, start)),
+            place: Some(place(path, start)),
             syntax_type: syntax.map(str::to_string),
+            through: vec![],
+        }
+    }
+
+    /// An end that the path reaches after it passes the given definitions.
+    fn end_through(path: &str, start: u32, through: &[(&str, u32)]) -> RawEnd {
+        RawEnd {
+            through: through.iter().map(|(p, s)| place(p, *s)).collect(),
+            ..end(path, start, None)
         }
     }
 
@@ -208,7 +321,9 @@ mod tests {
     }
 
     fn outcome(bindings: Vec<RawBinding>) -> BindingOutcome {
-        reconcile(&index(), bindings).remove(0).outcome
+        reconcile(&index(), bindings, &HashSet::new())
+            .remove(0)
+            .outcome
     }
 
     #[test]
@@ -230,7 +345,7 @@ mod tests {
             vec![end("a.py", 0, None), end("app.py", 20, None)],
             None,
         );
-        let all = reconcile(&index(), vec![one, two]);
+        let all = reconcile(&index(), vec![one, two], &HashSet::new());
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].outcome, BindingOutcome::Resolved(sym(0)));
         assert_eq!(all[0].ends, 2);
@@ -292,8 +407,9 @@ mod tests {
     fn an_end_outside_the_project_is_unresolved() {
         let reference = anchor("app.py", 50);
         let ends = vec![RawEnd {
-            anchor: None,
+            place: None,
             syntax_type: Some("function".into()),
+            through: vec![],
         }];
         assert_eq!(
             outcome(vec![binding(reference, ends, None)]),
@@ -316,5 +432,101 @@ mod tests {
             outcome(vec![binding(own, vec![end("c.py", 5, None)], None)]),
             BindingOutcome::Resolved(sym(9))
         );
+    }
+
+    fn outcome_with(
+        index: &DeclarationIndex,
+        bindings: Vec<RawBinding>,
+        members: &HashSet<(u32, u32)>,
+    ) -> BindingOutcome {
+        reconcile(index, bindings, members).remove(0).outcome
+    }
+
+    #[test]
+    fn a_plain_name_drops_an_end_that_passes_another_definition() {
+        // `a.py:0` is the binding. The path to `a.py:10` passes it: a value flows on.
+        let reference = anchor("app.py", 50);
+        let ends = vec![
+            end("a.py", 0, None),
+            end_through("a.py", 10, &[("a.py", 0)]),
+        ];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Resolved(sym(0))
+        );
+    }
+
+    #[test]
+    fn a_path_through_a_binding_of_the_same_symbol_is_direct() {
+        // A rebinding passes its earlier site. Both sites are one symbol.
+        let reference = anchor("app.py", 50);
+        let ends = vec![
+            end("a.py", 10, None),
+            end_through("b.py", 0, &[("a.py", 0)]),
+        ];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Ambiguous(vec![sym(0), sym(1)])
+        );
+    }
+
+    #[test]
+    fn an_unjoined_definition_on_the_path_does_not_count() {
+        // An import alias is a definition that joins no declaration.
+        let reference = anchor("app.py", 50);
+        let ends = vec![end_through("a.py", 0, &[("app.py", 20)])];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Resolved(sym(0))
+        );
+    }
+
+    #[test]
+    fn when_every_end_passes_a_definition_every_end_stays() {
+        let reference = anchor("app.py", 50);
+        let ends = vec![
+            end_through("a.py", 0, &[("a.py", 10)]),
+            end_through("a.py", 10, &[("a.py", 0)]),
+        ];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Ambiguous(vec![sym(0), sym(1)])
+        );
+    }
+
+    #[test]
+    fn two_direct_ends_stay_ambiguous() {
+        let reference = anchor("app.py", 50);
+        let ends = vec![end("a.py", 0, None), end("a.py", 10, None)];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Ambiguous(vec![sym(0), sym(1)])
+        );
+    }
+
+    #[test]
+    fn a_member_reference_passes_the_definition_of_its_object() {
+        // `c.py:5` is the definition of the object. Every path passes it.
+        let reference = anchor("app.py", 50);
+        let members = HashSet::from([(50, 53)]);
+        let object = ("c.py", 5);
+        let ends = vec![
+            end_through("a.py", 0, &[object]),
+            end_through("a.py", 10, &[object]),
+        ];
+        let reconciled = outcome_with(
+            &index(),
+            vec![binding(reference.clone(), ends, None)],
+            &members,
+        );
+        // The object is not an end, so no end is a value-flow end.
+        assert_eq!(reconciled, BindingOutcome::Ambiguous(vec![sym(0), sym(1)]));
+        // The end of a path that passes another end is a value-flow end.
+        let ends = vec![
+            end_through("a.py", 0, &[object]),
+            end_through("a.py", 10, &[object, ("a.py", 0)]),
+        ];
+        let reconciled = outcome_with(&index(), vec![binding(reference, ends, None)], &members);
+        assert_eq!(reconciled, BindingOutcome::Resolved(sym(0)));
     }
 }

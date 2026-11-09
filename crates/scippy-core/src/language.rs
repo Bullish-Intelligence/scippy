@@ -109,7 +109,10 @@ pub struct Builtins {
 ///
 /// A match with `@name` and `@definition.<kind>` is a declaration. `@name` marks the identifier.
 /// `@definition.<kind>` marks the whole declaration. A match with `@import` marks an identifier
-/// that names an imported symbol. Other captures are ignored.
+/// that names an imported symbol. A match with `@member` marks an identifier that names a member
+/// of a value, such as the `x` in `a.x`. The path of such a reference passes the definition of the
+/// object, so the reconciler uses a weaker nearest-binding rule for it. Other captures are
+/// ignored.
 pub struct ExtractionSpec {
     pub query: &'static str,
 }

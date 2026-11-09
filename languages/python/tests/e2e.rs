@@ -235,6 +235,47 @@ fn ambiguous_names_get_no_target() {
     );
 }
 
+// ---- the nearest binding ----
+
+#[test]
+fn a_plain_name_prefers_its_nearest_binding() {
+    let indexed = index("flow");
+    // `self` is the parameter. The class that the value comes from is not a second target.
+    assert_eq!(
+        indexed.symbols_of("flow.py", "self.v = v", "self"),
+        ["local 1"]
+    );
+    // `v` is the parameter. The field that it feeds is not a second target.
+    assert_eq!(
+        indexed.symbols_of("flow.py", "self.v = v", "v"),
+        ["local 2"]
+    );
+    // `x = make(); x` is the local `x`, not the function that made the value.
+    assert_eq!(indexed.symbols_of("flow.py", "return x", "x"), ["local 4"]);
+    // `self.v` is the field, not the parameter that the field takes its value from.
+    assert_eq!(
+        indexed.symbols_of("flow.py", "self.w = self.v", "v"),
+        [global("flow/Child#v.")]
+    );
+    assert_eq!(
+        indexed.symbols_of("flow.py", "return self.w", "w"),
+        [global("flow/Child#w.")]
+    );
+    assert!(indexed.report.multi_target.nearest_binding >= 5);
+}
+
+#[test]
+fn a_real_ambiguity_survives_the_nearest_binding_rule() {
+    let indexed = index("flow");
+    // `f` is imported from lib in one branch and defined in flow.py in the other.
+    // Each binding is direct, so both stay and the reference has no target.
+    assert!(indexed.find("flow.py", "value = f()", "f").is_empty());
+    assert_eq!(indexed.report.references_ambiguous, 1);
+    // The conditional import of the `ambiguous` fixture stays ambiguous too.
+    let indexed = index("ambiguous");
+    assert_eq!(indexed.report.references_ambiguous, 1);
+}
+
 // ---- positions ----
 
 #[test]
@@ -459,6 +500,7 @@ fn run(scip: &Path, cwd: &Path, args: &[&str]) -> Output {
 
 const SCIP_FIXTURES: &[&str] = &[
     "alias",
+    "flow",
     "unicode",
     "packages",
     "ambiguous",

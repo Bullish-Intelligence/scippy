@@ -37,6 +37,8 @@ pub(crate) struct Facts {
     pub declarations: Vec<DeclarationFact>,
     /// Spans of identifiers that name an imported symbol.
     pub imports: Vec<(u32, u32)>,
+    /// Spans of identifiers that name a member of a value, such as the `x` in `a.x`.
+    pub members: Vec<(u32, u32)>,
     /// Declarations that two captures claimed with different kinds. The extractor drops them.
     pub conflicts: Vec<(u32, u32)>,
 }
@@ -54,6 +56,7 @@ pub(crate) struct Extractor {
     query: Query,
     name: u32,
     import: Option<u32>,
+    member: Option<u32>,
     definitions: Vec<(u32, DeclKind)>,
 }
 
@@ -65,12 +68,14 @@ impl Extractor {
             .map_err(|e| bad(format!("the extraction query does not compile: {e}")))?;
         let mut name = None;
         let mut import = None;
+        let mut member = None;
         let mut definitions = Vec::new();
         for (index, capture) in query.capture_names().iter().enumerate() {
             let index = index as u32;
             match *capture {
                 "name" => name = Some(index),
                 "import" => import = Some(index),
+                "member" => member = Some(index),
                 other => {
                     if let Some(kind) = other.strip_prefix("definition.") {
                         let kind = DeclKind::from_capture(kind)
@@ -86,6 +91,7 @@ impl Extractor {
             query,
             name,
             import,
+            member,
             definitions,
         })
     }
@@ -112,12 +118,16 @@ impl Extractor {
     pub fn facts(&self, path: &ProjectRelativePath, source: &str, tree: &Tree) -> Facts {
         let mut by_anchor: BTreeMap<(u32, u32), Vec<DeclarationFact>> = BTreeMap::new();
         let mut imports = Vec::new();
+        let mut members = Vec::new();
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&self.query, tree.root_node(), source.as_bytes());
         while let Some(m) = matches.next() {
             let node = |index: u32| m.captures.iter().find(|c| c.index == index).map(|c| c.node);
             if let Some(import) = self.import.and_then(node) {
                 imports.push((import.start_byte() as u32, import.end_byte() as u32));
+            }
+            if let Some(member) = self.member.and_then(node) {
+                members.push((member.start_byte() as u32, member.end_byte() as u32));
             }
             let definition = self
                 .definitions
@@ -157,6 +167,9 @@ impl Extractor {
         imports.sort_unstable();
         imports.dedup();
         facts.imports = imports;
+        members.sort_unstable();
+        members.dedup();
+        facts.members = members;
         facts
     }
 }

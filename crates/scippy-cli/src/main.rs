@@ -93,9 +93,10 @@ fn main() -> ExitCode {
                     );
                     let m = &report.multi_target;
                     println!(
-                        "multi-target: raw {} -> shadow-filtered {}, alias-collapsed {}, builtin-shadow {}, same-symbol {}, ambiguous {}, unresolved {}, bounded {}",
+                        "multi-target: raw {} -> shadow-filtered {}, nearest-binding {}, alias-collapsed {}, builtin-shadow {}, same-symbol {}, ambiguous {}, unresolved {}, bounded {}",
                         m.raw,
                         m.shadow_filtered,
+                        m.nearest_binding,
                         m.alias_collapsed,
                         m.builtin_shadow,
                         m.same_symbol,

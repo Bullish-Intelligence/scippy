@@ -22,7 +22,7 @@ use crate::language::{Analysis, BindingRules};
 use crate::project::ProjectRelativePath;
 
 /// The name that the rules use for the builtins file.
-const BUILTINS_NAME: &str = "<builtins>";
+pub(crate) const BUILTINS_NAME: &str = "<builtins>";
 
 /// Limits for the work on one reference. Defaults follow the fork recommendation.
 #[derive(Clone, Copy, Debug)]
@@ -55,13 +55,27 @@ pub(crate) enum Bound {
     Failed,
 }
 
+/// The site of a definition node: a span in a project file or in an external asset.
+///
+/// An external asset is a source file that the pack supplies and the project does not own.
+/// The builtins file is an example.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Place {
+    pub anchor: SourceAnchor,
+    /// True when the span belongs to an external asset.
+    pub external: bool,
+}
+
 /// The end of a binding path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RawEnd {
-    /// The definition node. `None` when the end is outside the indexed project.
-    pub anchor: Option<SourceAnchor>,
+    /// The definition node. `None` when the node has no source span.
+    pub place: Option<Place>,
     /// The kind that the rules gave to the definition. It serves diagnostics only.
     pub syntax_type: Option<String>,
+    /// The definition nodes that the path passes before it reaches the end, sorted.
+    /// A path that passes a definition follows a value from that definition to the end.
+    pub through: Vec<Place>,
 }
 
 /// What the engine found for one reference node.
@@ -233,7 +247,7 @@ impl BindingEngine {
                         |graph, partials, path: &PartialPath| {
                             // Drop every path that another path shadows. The engine does not
                             // do it. Its own test runner applies the same filter.
-                            let end = end_of(graph, path.end_node);
+                            let end = end_of(graph, partials, path);
                             all.insert(end.clone());
                             if kept.iter().any(|(other, _)| other.shadows(partials, path)) {
                                 return;
@@ -285,27 +299,36 @@ fn anchor_from_info(info: &SourceInfo, path: &ProjectRelativePath) -> Option<Sou
     })
 }
 
-fn end_of(graph: &StackGraph, node: Handle<Node>) -> RawEnd {
-    let outside = RawEnd {
-        anchor: None,
-        syntax_type: None,
-    };
-    let Some(file) = graph[node].file() else {
-        return outside;
-    };
-    let Some(info) = graph.source_info(node) else {
-        return outside;
-    };
+fn place_of(graph: &StackGraph, node: Handle<Node>) -> Option<Place> {
+    let file = graph[node].file()?;
+    let info = graph.source_info(node)?;
     let name = graph[file].name();
-    let anchor = if name == BUILTINS_NAME {
-        None
-    } else {
-        ProjectRelativePath::new(name)
-            .ok()
-            .and_then(|path| anchor_from_info(info, &path))
-    };
+    let external = name == BUILTINS_NAME;
+    let path = ProjectRelativePath::new(name).ok()?;
+    let anchor = anchor_from_info(info, &path)?;
+    Some(Place { anchor, external })
+}
+
+fn end_of(graph: &StackGraph, partials: &PartialPaths, path: &PartialPath) -> RawEnd {
+    let end = path.end_node;
+    let place = place_of(graph, end);
+    // The edges of the path name every node of the path except the last one.
+    let mut through: Vec<Place> = path
+        .edges
+        .iter_unordered(partials)
+        .filter_map(|edge| graph.node_for_id(edge.source_node_id))
+        .filter(|&node| graph[node].is_definition())
+        .filter_map(|node| place_of(graph, node))
+        .filter(|p| Some(p) != place.as_ref())
+        .collect();
+    through.sort();
+    through.dedup();
     RawEnd {
-        anchor,
-        syntax_type: info.syntax_type.into_option().map(|h| graph[h].to_string()),
+        place,
+        syntax_type: graph
+            .source_info(end)
+            .and_then(|info| info.syntax_type.into_option())
+            .map(|h| graph[h].to_string()),
+        through,
     }
 }

@@ -40,6 +40,20 @@ Every symbol has the scheme `scippy`. Without a manifest, the Python pack uses t
 `python workspace`. Pass `--package-name` and `--package-version` to change them.
 A declaration inside a function gets a document-local symbol.
 
+## Resolution policy
+
+The reconciler turns the engine paths of one reference into one target, or none.
+
+- It drops a path that another path shadows, and it merges the reference nodes at one span.
+- It ignores an end that joins no declaration, such as an import alias or a module.
+- It counts distinct symbols. One symbol is Resolved. Two or more are Ambiguous.
+- It prefers the nearest binding. The engine follows values, so a name such as `self` reaches
+  its parameter and then the class that the value comes from. The reconciler drops an end
+  when its path passes the definition of another symbol. The language pack marks member
+  references with the `@member` capture. For `a.x`, only a definition that is an end of the
+  same reference counts, because every path passes the definition of `a`.
+- A reference with no target gets no occurrence.
+
 ## Debugging an index
 
 `--trace FILE` writes one line for each reference location with its outcome:

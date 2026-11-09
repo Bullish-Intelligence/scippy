@@ -251,7 +251,8 @@ fn index_pack(
     let mut out = Vec::with_capacity(docs.len());
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
-        let reconciled = reconcile(&index, bindings);
+        let members: HashSet<(u32, u32)> = doc.facts.members.iter().copied().collect();
+        let reconciled = reconcile(&index, bindings, &members);
         for r in &reconciled {
             count(report, r);
         }
@@ -354,6 +355,8 @@ fn count(report: &mut IndexReport, r: &Reconciled) {
             if multi {
                 if r.shadowed > 0 {
                     stats.shadow_filtered += 1;
+                } else if r.value_flow_dropped > 0 {
+                    stats.nearest_binding += 1;
                 } else if r.joined == 1 && r.outside > 0 {
                     stats.builtin_shadow += 1;
                 } else if r.joined == 1 {
