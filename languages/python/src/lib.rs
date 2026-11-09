@@ -206,6 +206,8 @@ impl Analysis for PythonPack {
                     globals: vec![("ROOT_PATH".to_string(), STUB_ROOT_PATH.to_string())],
                 })
                 .collect(),
+            // The Python rules need it. The fork sets the same flag in its language configuration.
+            shadow_aware_similar_paths: true,
         }
     }
 

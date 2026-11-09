@@ -262,6 +262,7 @@ impl Analysis for TypeScriptPack {
                 source: rules::STACK_GRAPHS_BUILTINS_SOURCE,
             }),
             assets: Vec::new(),
+            shadow_aware_similar_paths: false,
         }
     }
 

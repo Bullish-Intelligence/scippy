@@ -262,6 +262,10 @@ pub struct BindingRules {
     /// More external assets, such as the stub modules of the standard library.
     /// The resolver builds each one as a file of its own, next to the builtins.
     pub assets: Vec<ExternalAsset>,
+    /// Ask the stitcher for shadow aware similar path detection. Set it when the rules need
+    /// it, as the Python rules do. The resolver sets it for the indexing step and for the
+    /// resolution step. Without it, a name can lose a binding.
+    pub shadow_aware_similar_paths: bool,
 }
 
 impl BindingRules {

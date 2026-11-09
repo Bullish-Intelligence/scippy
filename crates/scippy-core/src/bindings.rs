@@ -110,6 +110,8 @@ pub(crate) struct BindingEngine {
     files: Vec<(Handle<File>, ProjectRelativePath)>,
     /// The names of the external assets, such as the builtins. They are not project files.
     external: HashSet<String>,
+    /// The pack asks for shadow aware similar path detection in every stitcher.
+    shadow_aware: bool,
 }
 
 impl BindingEngine {
@@ -140,6 +142,7 @@ impl BindingEngine {
             database: Database::new(),
             files: Vec::new(),
             external: HashSet::new(),
+            shadow_aware: rules.shadow_aware_similar_paths,
         };
         engine.load_assets(&rules).map_err(bad)?;
         Ok(engine)
@@ -262,7 +265,7 @@ impl BindingEngine {
             &self.graph,
             &mut self.partials,
             file,
-            StitcherConfig::default(),
+            StitcherConfig::default().with_shadow_aware_similar_paths(self.shadow_aware),
             &stack_graphs::NoCancellation,
             |_, _, path| paths.push(path.clone()),
         );
@@ -279,12 +282,14 @@ impl BindingEngine {
     /// The result lists the files in the order of `add_file`, and the nodes of a file in graph order.
     pub fn resolve(&mut self, limits: ResolveLimits) -> Vec<RawBinding> {
         let mut out = Vec::new();
-        let config = StitcherConfig::default().with_limits(StitcherLimits {
-            max_work: Some(limits.max_work),
-            max_queue_len: Some(limits.max_queue_len),
-            max_arena_cells: Some(limits.max_arena_cells),
-            max_path_length: None,
-        });
+        let config = StitcherConfig::default()
+            .with_shadow_aware_similar_paths(self.shadow_aware)
+            .with_limits(StitcherLimits {
+                max_work: Some(limits.max_work),
+                max_queue_len: Some(limits.max_queue_len),
+                max_arena_cells: Some(limits.max_arena_cells),
+                max_path_length: None,
+            });
         let files = std::mem::take(&mut self.files);
         let external = &self.external;
         for (file, path) in &files {
