@@ -29,7 +29,7 @@ pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
 pub use language::{
     Analysis, BindingRules, Builtins, DeclKind, ExternalIdentity, ExtractionSpec, Identity,
-    LanguagePack, ProjectModel, Reach, Scope,
+    LanguagePack, ProjectModel, Reach, ReferenceKind, Scope,
 };
 pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};

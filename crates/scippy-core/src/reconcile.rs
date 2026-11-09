@@ -24,12 +24,17 @@
 //! 6. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
 //!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved.
 //! 7. A reference never takes a document-local symbol of another document.
+//!
+//! The language pack can refuse a declaration as the target of a reference. The refusal runs
+//! after the join and before the nearest-binding rule. The reconciler drops each joined end
+//! that the pack refuses. A reference whose every joined end is refused has no target.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::bindings::{Bound, Place, RawBinding, RawEnd};
 use crate::extract::SourceAnchor;
 use crate::identity::SymbolId;
+use crate::language::{ProjectModel, ReferenceKind, Scope};
 
 /// Why a reference has no target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -41,6 +46,8 @@ pub(crate) enum UnresolvedReason {
     NoDeclaration,
     /// The only declarations are document-local symbols of another document.
     NotAddressable,
+    /// The language pack refused every declaration that the ends joined.
+    NotTargetable,
 }
 
 /// The normalized outcome of one reference location.
@@ -53,30 +60,128 @@ pub(crate) enum BindingOutcome {
     Bounded(Bound),
 }
 
+/// A declaration in the join table.
+struct Entry {
+    symbol: SymbolId,
+    /// The enclosing declarations, from the outermost to the innermost.
+    scopes: Vec<Scope>,
+    declaration: Scope,
+}
+
+/// What the reconciler asks the language pack about a reference.
+///
+/// It holds the containers of one document. They give the declarations that enclose a reference.
+pub(crate) struct Targeting<'a> {
+    model: Option<&'a dyn ProjectModel>,
+    /// Containers of the document with their extents and scopes, outermost first.
+    containers: Vec<((u32, u32), Scope)>,
+}
+
+impl<'a> Targeting<'a> {
+    /// Ask the model for each end. `containers` are the extents of the container declarations.
+    pub fn new(model: &'a dyn ProjectModel, mut containers: Vec<((u32, u32), Scope)>) -> Self {
+        containers.sort_by_key(|(extent, _)| (extent.0, std::cmp::Reverse(extent.1)));
+        Self {
+            model: Some(model),
+            containers,
+        }
+    }
+
+    /// Accept every end.
+    #[cfg(test)]
+    pub fn accept_all() -> Self {
+        Self {
+            model: None,
+            containers: Vec::new(),
+        }
+    }
+
+    /// The containers that enclose the span, from the outermost to the innermost.
+    fn enclosing(&self, start: u32, end: u32) -> Vec<Scope> {
+        self.containers
+            .iter()
+            .take_while(|(extent, _)| extent.0 <= start)
+            .filter(|(extent, _)| end <= extent.1)
+            .map(|(_, scope)| scope.clone())
+            .collect()
+    }
+}
+
 /// Declaration anchors with their symbols. It is the join table.
 ///
 /// Project declarations and declarations of external assets live in separate tables.
 #[derive(Default)]
 pub(crate) struct DeclarationIndex {
-    project: HashMap<SourceAnchor, SymbolId>,
-    external: HashMap<SourceAnchor, SymbolId>,
+    project: HashMap<SourceAnchor, Entry>,
+    external: HashMap<SourceAnchor, Entry>,
 }
 
 impl DeclarationIndex {
+    #[cfg(test)]
+    #[cfg(test)]
     pub fn insert(&mut self, anchor: SourceAnchor, symbol: SymbolId) {
-        self.project.insert(anchor, symbol);
+        self.insert_scoped(anchor, symbol, Vec::new(), test_scope());
     }
 
+    /// Insert a project declaration with the scope chain that the pack sees.
+    pub fn insert_scoped(
+        &mut self,
+        anchor: SourceAnchor,
+        symbol: SymbolId,
+        scopes: Vec<Scope>,
+        declaration: Scope,
+    ) {
+        self.project.insert(
+            anchor,
+            Entry {
+                symbol,
+                scopes,
+                declaration,
+            },
+        );
+    }
+
+    #[cfg(test)]
     pub fn insert_external(&mut self, anchor: SourceAnchor, symbol: SymbolId) {
-        self.external.insert(anchor, symbol);
+        self.insert_external_scoped(anchor, symbol, Vec::new(), test_scope());
     }
 
-    pub fn get(&self, place: &Place) -> Option<&SymbolId> {
+    /// Insert an external declaration with the scope chain that the pack sees.
+    pub fn insert_external_scoped(
+        &mut self,
+        anchor: SourceAnchor,
+        symbol: SymbolId,
+        scopes: Vec<Scope>,
+        declaration: Scope,
+    ) {
+        self.external.insert(
+            anchor,
+            Entry {
+                symbol,
+                scopes,
+                declaration,
+            },
+        );
+    }
+
+    fn entry(&self, place: &Place) -> Option<&Entry> {
         if place.external {
             self.external.get(&place.anchor)
         } else {
             self.project.get(&place.anchor)
         }
+    }
+
+    pub fn get(&self, place: &Place) -> Option<&SymbolId> {
+        self.entry(place).map(|e| &e.symbol)
+    }
+}
+
+#[cfg(test)]
+fn test_scope() -> Scope {
+    Scope {
+        kind: crate::language::DeclKind::Variable,
+        name: "x".to_string(),
     }
 }
 
@@ -95,6 +200,8 @@ pub(crate) struct Reconciled {
     pub joined: usize,
     /// Joined ends that the nearest-binding rule dropped.
     pub value_flow_dropped: usize,
+    /// Joined ends that the language pack refused for the kind of the reference.
+    pub refused: usize,
     /// The ends that joined no declaration, as `syntax_type` or `-`.
     pub unjoined: Vec<String>,
     /// The joined declarations as `file:start`, for the trace. An external end has the prefix `~`.
@@ -132,11 +239,13 @@ fn group_ends(ends: &BTreeSet<RawEnd>) -> Vec<EndGroup<'_>> {
 /// Merge the raw bindings of one document by reference span and reconcile each location.
 ///
 /// `members` holds the spans of the references that name a member of a value.
+/// `targeting` asks the language pack whether a reference can name a declaration.
 /// The result is sorted by span.
 pub(crate) fn reconcile(
     declarations: &DeclarationIndex,
     bindings: Vec<RawBinding>,
     members: &HashSet<(u32, u32)>,
+    targeting: &Targeting,
 ) -> Vec<Reconciled> {
     type Merged = (BTreeSet<RawEnd>, BTreeSet<RawEnd>, Option<Bound>);
     let mut merged: BTreeMap<SourceAnchor, Merged> = BTreeMap::new();
@@ -161,6 +270,11 @@ pub(crate) fn reconcile(
                 })
                 .count();
             let is_member = members.contains(&(reference.start_byte, reference.end_byte));
+            let kind = if is_member {
+                ReferenceKind::Member
+            } else {
+                ReferenceKind::Plain
+            };
 
             let mut unjoined = Vec::new();
             let mut joined: Vec<(&EndGroup, &Place, &SymbolId)> = Vec::new();
@@ -173,6 +287,17 @@ pub(crate) fn reconcile(
                     None => unjoined.push(group.syntax_type.clone().unwrap_or_else(|| "-".into())),
                 }
             }
+            // The language pack can refuse a declaration for this kind of reference.
+            let before = joined.len();
+            if let Some(model) = targeting.model.filter(|_| !joined.is_empty()) {
+                let from = targeting.enclosing(reference.start_byte, reference.end_byte);
+                joined.retain(|(_, place, _)| {
+                    declarations.entry(place).is_none_or(|e| {
+                        model.accepts_target(kind, &from, &e.scopes, &e.declaration)
+                    })
+                });
+            }
+            let refused = before - joined.len();
             let outside = groups
                 .iter()
                 .filter(|g| g.place.is_some_and(|p| p.external))
@@ -226,6 +351,8 @@ pub(crate) fn reconcile(
                 BindingOutcome::Bounded(bound)
             } else if groups.is_empty() {
                 BindingOutcome::Unresolved(UnresolvedReason::NoPath)
+            } else if joined.is_empty() && refused > 0 {
+                BindingOutcome::Unresolved(UnresolvedReason::NotTargetable)
             } else if joined.is_empty() {
                 BindingOutcome::Unresolved(UnresolvedReason::NoDeclaration)
             } else if usable.is_empty() {
@@ -243,6 +370,7 @@ pub(crate) fn reconcile(
                 outside,
                 joined: project_joined,
                 value_flow_dropped,
+                refused,
                 unjoined,
                 targets,
             }
@@ -255,6 +383,7 @@ mod tests {
     use super::*;
     use crate::bindings::RawEnd;
     use crate::identity::{Descriptor, IdentityBuilder, Package};
+    use crate::language::ReferenceKind;
     use crate::project::ProjectRelativePath;
 
     fn anchor(path: &str, start: u32) -> SourceAnchor {
@@ -325,9 +454,14 @@ mod tests {
     }
 
     fn outcome(bindings: Vec<RawBinding>) -> BindingOutcome {
-        reconcile(&index(), bindings, &HashSet::new())
-            .remove(0)
-            .outcome
+        reconcile(
+            &index(),
+            bindings,
+            &HashSet::new(),
+            &Targeting::accept_all(),
+        )
+        .remove(0)
+        .outcome
     }
 
     #[test]
@@ -349,7 +483,12 @@ mod tests {
             vec![end("a.py", 0, None), end("app.py", 20, None)],
             None,
         );
-        let all = reconcile(&index(), vec![one, two], &HashSet::new());
+        let all = reconcile(
+            &index(),
+            vec![one, two],
+            &HashSet::new(),
+            &Targeting::accept_all(),
+        );
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].outcome, BindingOutcome::Resolved(sym(0)));
         assert_eq!(all[0].ends, 2);
@@ -462,7 +601,9 @@ mod tests {
         bindings: Vec<RawBinding>,
         members: &HashSet<(u32, u32)>,
     ) -> BindingOutcome {
-        reconcile(index, bindings, members).remove(0).outcome
+        reconcile(index, bindings, members, &Targeting::accept_all())
+            .remove(0)
+            .outcome
     }
 
     #[test]
@@ -581,6 +722,7 @@ mod tests {
             &external_index(),
             vec![binding(reference, ends, None)],
             &HashSet::new(),
+            &Targeting::accept_all(),
         );
         assert_eq!(all[0].outcome, BindingOutcome::Resolved(sym(0)));
         assert_eq!(all[0].outside, 1);
@@ -616,5 +758,113 @@ mod tests {
             outcome(vec![binding(reference, ends, None)]),
             BindingOutcome::Unresolved(UnresolvedReason::NoDeclaration)
         );
+    }
+
+    /// A model that refuses every declaration with the name `field` for a plain reference.
+    struct Refuser;
+
+    impl ProjectModel for Refuser {
+        fn resolver_globals(&self, _: &ProjectRelativePath) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn identity(
+            &self,
+            _: &ProjectRelativePath,
+            _: &[Scope],
+            _: &Scope,
+        ) -> crate::language::Identity {
+            unreachable!("the reconciler never asks for an identity")
+        }
+
+        fn accepts_target(
+            &self,
+            reference: ReferenceKind,
+            _from: &[Scope],
+            _scopes: &[Scope],
+            declaration: &Scope,
+        ) -> bool {
+            !(reference == ReferenceKind::Plain && declaration.name == "field")
+        }
+    }
+
+    fn refusing_index() -> DeclarationIndex {
+        use crate::language::DeclKind;
+        let scope = |name: &str| Scope {
+            kind: DeclKind::Variable,
+            name: name.to_string(),
+        };
+        let mut index = DeclarationIndex::default();
+        index.insert_scoped(anchor("a.py", 0), sym(0), vec![], scope("field"));
+        index.insert_scoped(anchor("a.py", 10), sym(1), vec![], scope("other"));
+        index
+    }
+
+    fn refusing_outcome(ends: Vec<RawEnd>, members: &HashSet<(u32, u32)>) -> Reconciled {
+        let containers = vec![(
+            (0, 100),
+            Scope {
+                kind: crate::language::DeclKind::Function,
+                name: "f".to_string(),
+            },
+        )];
+        let targeting = Targeting::new(&Refuser, containers);
+        let reference = anchor("app.py", 50);
+        reconcile(
+            &refusing_index(),
+            vec![binding(reference, ends, None)],
+            members,
+            &targeting,
+        )
+        .remove(0)
+    }
+
+    #[test]
+    fn the_pack_can_drop_an_end_for_a_plain_reference() {
+        let ends = vec![end("a.py", 0, None), end("a.py", 10, None)];
+        let one = refusing_outcome(ends.clone(), &HashSet::new());
+        assert_eq!(one.outcome, BindingOutcome::Resolved(sym(1)));
+        assert_eq!(one.refused, 1);
+        // A member reference is not refused. Both ends stay.
+        let members = HashSet::from([(50, 53)]);
+        let two = refusing_outcome(ends, &members);
+        assert_eq!(two.outcome, BindingOutcome::Ambiguous(vec![sym(0), sym(1)]));
+        assert_eq!(two.refused, 0);
+    }
+
+    #[test]
+    fn a_reference_whose_every_end_is_refused_has_no_target() {
+        let one = refusing_outcome(vec![end("a.py", 0, None)], &HashSet::new());
+        assert_eq!(
+            one.outcome,
+            BindingOutcome::Unresolved(UnresolvedReason::NotTargetable)
+        );
+    }
+
+    #[test]
+    fn the_containers_of_a_reference_reach_the_pack() {
+        let scope = |name: &str| Scope {
+            kind: crate::language::DeclKind::Class,
+            name: name.to_string(),
+        };
+        let targeting = Targeting::new(
+            &Refuser,
+            vec![
+                ((20, 40), scope("inner")),
+                ((0, 100), scope("outer")),
+                ((60, 90), scope("other")),
+            ],
+        );
+        let names = |start, end| -> Vec<String> {
+            targeting
+                .enclosing(start, end)
+                .into_iter()
+                .map(|s| s.name)
+                .collect()
+        };
+        assert_eq!(names(25, 28), ["outer", "inner"]);
+        assert_eq!(names(45, 48), ["outer"]);
+        assert_eq!(names(70, 73), ["outer", "other"]);
+        assert!(names(150, 153).is_empty());
     }
 }

@@ -30,6 +30,18 @@
 //! Declarations that share one descriptor path in one document are one entity.
 //! A variable that the code rebinds, and an overloaded function, each get one symbol.
 //!
+//! # Plain names and class scope
+//!
+//! A bare name in Python follows two scope rules that the binding rules do not enforce.
+//! The model refuses the targets that break them. The reconciler drops those ends.
+//!
+//! - A bare name never names an instance attribute. Code reaches `self.x` with the receiver,
+//!   so only a `@member` reference can end in a `self.x` field. In `__init__(self, id)`, the name
+//!   `id` is the parameter, even when the engine also follows the value into the field `id`.
+//! - A name that the class body binds is visible in that body only. A method, a nested function,
+//!   and a nested class do not see it. A plain name in a method cannot name a class variable, a
+//!   method, or a nested class of its own class. A plain name in the class body still can.
+//!
 //! # Builtins
 //!
 //! The binding rules ship a builtins stub, `builtins.py`. A reference that ends in the stub
@@ -55,7 +67,8 @@ use std::path::Path;
 
 use scippy_core::{
     Analysis, BindingRules, Builtins, DeclKind, Descriptor, ExternalIdentity, ExtractionSpec,
-    Identity, LanguagePack, Package, ProjectModel, ProjectRelativePath, Reach, Scope, SymbolKind,
+    Identity, LanguagePack, Package, ProjectModel, ProjectRelativePath, Reach, ReferenceKind,
+    Scope, SymbolKind,
 };
 
 pub struct PythonPack;
@@ -243,6 +256,26 @@ impl ProjectModel for PythonModel {
         describe(self.module_descriptors(path), scopes, declaration)
     }
 
+    fn accepts_target(
+        &self,
+        reference: ReferenceKind,
+        from: &[Scope],
+        scopes: &[Scope],
+        declaration: &Scope,
+    ) -> bool {
+        if reference == ReferenceKind::Member {
+            return true;
+        }
+        // An instance attribute needs a receiver: `self.x`.
+        if declaration.kind == DeclKind::Field {
+            return false;
+        }
+        // A name in a class body is visible in that body only. A method, a nested function,
+        // and a nested class do not see it.
+        let owned_by_class = scopes.last().is_some_and(|s| s.kind == DeclKind::Class);
+        !owned_by_class || from == scopes
+    }
+
     fn external_identity(
         &self,
         asset: &str,
@@ -397,6 +430,55 @@ mod tests {
             (vec!["lib".into()], vec!["pkg".into(), "sub".into()])
         );
         assert_eq!(parts("x.py"), (vec![], vec!["x".into()]));
+    }
+
+    fn scope(kind: DeclKind, name: &str) -> Scope {
+        Scope {
+            kind,
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_plain_name_never_names_an_instance_attribute() {
+        let model = PythonModel::new(&[]);
+        let class = [scope(DeclKind::Class, "C")];
+        let init = [scope(DeclKind::Class, "C"), scope(DeclKind::Function, "f")];
+        let field = scope(DeclKind::Field, "x");
+        for from in [&class[..], &init[..]] {
+            assert!(!model.accepts_target(ReferenceKind::Plain, from, &class, &field));
+            assert!(model.accepts_target(ReferenceKind::Member, from, &class, &field));
+        }
+    }
+
+    #[test]
+    fn a_class_body_name_is_visible_in_the_class_body_only() {
+        let model = PythonModel::new(&[]);
+        let class = vec![scope(DeclKind::Class, "C")];
+        let method = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
+        let inner = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Class, "D")];
+        let accepts = |kind, from: &[Scope], scopes: &[Scope], name: &str| {
+            model.accepts_target(kind, from, scopes, &scope(kind_of(name), name))
+        };
+        fn kind_of(name: &str) -> DeclKind {
+            if name == "m" {
+                DeclKind::Function
+            } else {
+                DeclKind::Variable
+            }
+        }
+        let plain = ReferenceKind::Plain;
+        // The class body reaches its own variable.
+        assert!(accepts(plain, &class, &class, "count"));
+        // A method and a nested class do not.
+        assert!(!accepts(plain, &method, &class, "count"));
+        assert!(!accepts(plain, &inner, &class, "count"));
+        assert!(!accepts(plain, &method, &class, "m"));
+        // A member reference always passes. A local of a method passes in the method.
+        assert!(accepts(ReferenceKind::Member, &method, &class, "count"));
+        assert!(accepts(plain, &method, &method, "local"));
+        // A module-level name passes everywhere.
+        assert!(accepts(plain, &method, &[], "top"));
     }
 
     #[test]

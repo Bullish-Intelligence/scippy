@@ -43,6 +43,18 @@ impl DeclKind {
     }
 }
 
+/// How a reference names its target, in terms that every language shares.
+///
+/// The pack marks a reference as a member with the `@member` capture.
+/// Every other reference is plain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReferenceKind {
+    /// A name that stands alone, such as the `x` in `f(x)`.
+    Plain,
+    /// A name that selects a member of a value, such as the `x` in `a.x`.
+    Member,
+}
+
 /// One step of the declaration chain: the kind and the name of a declaration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scope {
@@ -101,6 +113,30 @@ pub trait ProjectModel: Send + Sync {
         scopes: &[Scope],
         declaration: &Scope,
     ) -> Identity;
+
+    /// Say whether a reference can name a declaration.
+    ///
+    /// The reconciler asks for each candidate end that joins a declaration.
+    /// It drops the end when the answer is no.
+    /// A reference whose every joined end is refused has no target.
+    /// - `reference` tells whether the reference is plain or a member.
+    /// - `from` lists the declarations that enclose the reference, from the outermost to the
+    ///   innermost. An enclosing declaration is a container: a class or a function.
+    ///   A reference in a parameter list or in a base class list counts as inside its container.
+    /// - `scopes` lists the declarations that enclose the target, in the same order.
+    /// - `declaration` is the target.
+    ///
+    /// The default accepts every declaration.
+    fn accepts_target(
+        &self,
+        reference: ReferenceKind,
+        from: &[Scope],
+        scopes: &[Scope],
+        declaration: &Scope,
+    ) -> bool {
+        let _ = (reference, from, scopes, declaration);
+        true
+    }
 
     /// Assign an identity to a declaration of an external asset, such as the builtins.
     ///

@@ -69,6 +69,8 @@ pub struct MultiTargetStats {
     /// Resolved because one end joined to a declaration and another end is outside the
     /// project, for example a builtin. A local definition shadows the builtin.
     pub builtin_shadow: usize,
+    /// Resolved because the language pack refused some ends as targets of the reference kind.
+    pub pack_refused: usize,
     /// Resolved because the nearest-binding rule dropped value-flow ends.
     pub nearest_binding: usize,
     /// Resolved because several declarations share one symbol. An example is a rebound variable.

@@ -14,7 +14,9 @@ use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
 use crate::language::{Analysis, LanguagePack, ProjectModel, Reach, Scope};
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
-use crate::reconcile::{BindingOutcome, DeclarationIndex, Reconciled, UnresolvedReason, reconcile};
+use crate::reconcile::{
+    BindingOutcome, DeclarationIndex, Reconciled, Targeting, UnresolvedReason, reconcile,
+};
 use crate::report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
 
 /// The SCIP scheme of every symbol that Scippy writes.
@@ -46,6 +48,9 @@ struct Declared {
     symbol: SymbolId,
     kind: crate::emit::SymbolKind,
     display_name: String,
+    /// The enclosing declarations and the declaration itself, for the target policy of the pack.
+    scopes: Vec<Scope>,
+    declaration: Scope,
 }
 
 pub(crate) fn run(
@@ -242,7 +247,12 @@ fn index_pack(
         doc.declared = assign_identities(&*model, &mut builder, doc)?;
         report.declarations += doc.declared.len();
         for d in &doc.declared {
-            index.insert(d.fact.anchor.clone(), d.symbol.clone());
+            index.insert_scoped(
+                d.fact.anchor.clone(),
+                d.symbol.clone(),
+                d.scopes.clone(),
+                d.declaration.clone(),
+            );
         }
     }
 
@@ -265,7 +275,21 @@ fn index_pack(
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let members: HashSet<(u32, u32)> = doc.facts.members.iter().copied().collect();
-        let reconciled = reconcile(&index, bindings, &members);
+        let containers = doc
+            .facts
+            .declarations
+            .iter()
+            .filter(|f| f.kind.is_container())
+            .map(|f| {
+                let scope = Scope {
+                    kind: f.kind,
+                    name: f.name.clone(),
+                };
+                (f.extent, scope)
+            })
+            .collect();
+        let targeting = Targeting::new(&*model, containers);
+        let reconciled = reconcile(&index, bindings, &members, &targeting);
         for r in &reconciled {
             count(report, r);
             if let BindingOutcome::Resolved(symbol) = &r.outcome {
@@ -342,7 +366,12 @@ fn declare_external(
         };
         match IdentityBuilder::new(SCHEME, identity.package).symbol(&identity.descriptors) {
             Ok(symbol) => {
-                index.insert_external(fact.anchor.clone(), symbol.clone());
+                index.insert_external_scoped(
+                    fact.anchor.clone(),
+                    symbol.clone(),
+                    scopes.clone(),
+                    declaration.clone(),
+                );
                 symbols.entry(symbol.clone()).or_insert(SymbolInfo {
                     symbol,
                     kind: identity.kind,
@@ -418,14 +447,11 @@ fn assign_identities(
     let mut out = Vec::with_capacity(facts.len());
     for (i, fact) in facts.iter().enumerate() {
         let scopes = scope_chain(facts, &containers, i);
-        let identity = model.identity(
-            &doc.path,
-            &scopes,
-            &Scope {
-                kind: fact.kind,
-                name: fact.name.clone(),
-            },
-        );
+        let declaration = Scope {
+            kind: fact.kind,
+            name: fact.name.clone(),
+        };
+        let identity = model.identity(&doc.path, &scopes, &declaration);
         let symbol = match identity.reach {
             Reach::Global => builder.define(&identity.descriptors, fact.anchor.clone())?,
             Reach::Document => {
@@ -438,6 +464,8 @@ fn assign_identities(
             symbol,
             kind: identity.kind,
             display_name: identity.display_name,
+            scopes,
+            declaration,
         });
     }
     Ok(out)
@@ -458,6 +486,8 @@ fn count(report: &mut IndexReport, r: &Reconciled) {
             if multi {
                 if r.shadowed > 0 {
                     stats.shadow_filtered += 1;
+                } else if r.refused > 0 {
+                    stats.pack_refused += 1;
                 } else if r.value_flow_dropped > 0 {
                     stats.nearest_binding += 1;
                 } else if r.joined == 1 && r.outside > 0 {
@@ -499,6 +529,7 @@ fn reason_code(reason: UnresolvedReason) -> &'static str {
         UnresolvedReason::NoPath => "no-path",
         UnresolvedReason::NoDeclaration => "no-declaration",
         UnresolvedReason::NotAddressable => "not-addressable",
+        UnresolvedReason::NotTargetable => "not-targetable",
     }
 }
 

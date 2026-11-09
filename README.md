@@ -62,6 +62,11 @@ The reconciler turns the engine paths of one reference into one target, or none.
   when its path passes the definition of another symbol. The language pack marks member
   references with the `@member` capture. For `a.x`, only a definition that is an end of the
   same reference counts, because every path passes the definition of `a`.
+- It asks the language pack whether a reference can name each joined declaration, and drops
+  the ends that the pack refuses. The Python pack refuses an instance field for a plain name,
+  because Python needs `self.x`. It also refuses a name that a class body binds, for a plain name
+  outside that body, because a method does not see class scope. A reference whose every end the
+  pack refuses is unresolved with the reason `not-targetable`.
 - A reference with no target gets no occurrence.
 
 ## Debugging an index

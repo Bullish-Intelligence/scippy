@@ -276,6 +276,54 @@ fn a_real_ambiguity_survives_the_nearest_binding_rule() {
     assert_eq!(indexed.report.references_ambiguous, 1);
 }
 
+// ---- the pack policy: plain names and class scope ----
+
+#[test]
+fn a_plain_name_never_targets_an_instance_field() {
+    let indexed = index("fields");
+    let state_id = global("fields/State#id.");
+    // Without the policy, `id` reaches the parameter and the field `State#id`. It is the parameter.
+    assert_eq!(
+        indexed.symbols_of("fields.py", "print(id)", "id"),
+        ["local 1"]
+    );
+    assert_eq!(
+        indexed.symbols_of("fields.py", "assert id,", "id"),
+        ["local 1"]
+    );
+    assert_eq!(
+        indexed.symbols_of("fields.py", "id or \"main\"", "id"),
+        ["local 1"]
+    );
+    // `self.id` is a member reference. It still resolves to the field.
+    assert_eq!(
+        indexed.symbols_of("fields.py", "return self.id", "id"),
+        [state_id]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+    assert!(indexed.report.multi_target.pack_refused >= 2);
+}
+
+#[test]
+fn a_class_body_name_resolves_in_the_class_body_and_not_in_a_method() {
+    let indexed = index("fields");
+    // The class body binds `count`. The body reads it as a plain name.
+    assert_eq!(
+        indexed.symbols_of("fields.py", "label = count", "count"),
+        [global("fields/State#count.")]
+    );
+    // A method does not see the class body. `print(count)` has no target in Python.
+    assert!(
+        indexed
+            .find("fields.py", "print(count)", "count")
+            .is_empty()
+    );
+    assert_eq!(
+        indexed.report.unresolved_reasons.get("not-targetable"),
+        Some(&1)
+    );
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.
@@ -609,6 +657,7 @@ const SCIP_FIXTURES: &[&str] = &[
     "alias",
     "builtins",
     "flow",
+    "fields",
     "unicode",
     "packages",
     "ambiguous",
