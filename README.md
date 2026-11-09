@@ -5,11 +5,10 @@ The design documents are in the notes project, through the `.loci` link.
 
 ## Status
 
-Gate 2 (the shared extraction and resolver adapter) is done for Python.
-`scippy index PROJECT_ROOT --output index.scip` parses each Python file, resolves names
-across files with the Stack Graphs engine, and writes definition, import, and reference
+The Python pack (Gate 3) and the TypeScript pack (Gate 4) index real projects.
+`scippy index PROJECT_ROOT --output index.scip` parses each Python and TypeScript file, resolves
+names across files with the Stack Graphs engine, and writes definition, import, and reference
 occurrences. A reference that the engine cannot resolve to one declaration gets no target.
-The TypeScript pack only routes files. The run skips TypeScript files and says so.
 `scippy languages` lists the built-in language packs.
 
 ## Workspace
@@ -21,11 +20,14 @@ The TypeScript pack only routes files. The run skips TypeScript files and says s
 - `crates/scippy-cli` provides the `scippy` command.
 - `languages/python` holds the Python pack: the declaration query, the import-root policy,
   and the symbol policy. It uses the binding rules of the fork.
-- `languages/typescript` holds the TypeScript pack stub.
+- `languages/typescript` holds the TypeScript pack: the declaration query, two dialects (`.ts`
+  and `.tsx`), the module and symbol policy, `package.json` and `tsconfig.json` support, and
+  local fixes of the binding rules. The header of `languages/typescript/src/lib.rs` documents
+  the symbol scheme, the supported layouts, and the known gaps.
 
 The resolver is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
-pins it to one commit for the three fork crates. To bump the pin, change the `rev` of the
-three lines to the same commit and run the full verify.
+pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
+four lines to the same commit and run the full verify.
 
 ## Input limits
 
@@ -37,7 +39,10 @@ The graph build used about 1.3 GB for each MB of Python source.
 ## Symbols
 
 Every symbol has the scheme `scippy`. Without a manifest, the Python pack uses the package
-`python workspace`. Pass `--package-name` and `--package-version` to change them.
+`python workspace`. The TypeScript pack takes the package from `package.json` at the project
+root, and otherwise uses `npm workspace`. Pass `--package-name` and `--package-version` to
+change them. A TypeScript module symbol is the project-relative path of the file with its
+extension, for example `` `src/services.ts`/process(). ``.
 A local variable inside a function gets a document-local symbol.
 A parameter of a module-level function or of a method gets a global symbol with the parameter
 descriptor, such as `pkg/mod/f().(name)`. A keyword argument in another document can name it.
@@ -93,6 +98,7 @@ devenv shell -- scripts/verify.sh
 ```
 
 The script runs `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test`.
-The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python fixtures.
+The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python and TypeScript fixtures.
 Set `SCIP_BIN_DIR` when `scip` is not on `PATH`.
-Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots in `languages/python/tests/golden`.
+Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots in `languages/python/tests/golden` and
+`languages/typescript/tests/golden`.
