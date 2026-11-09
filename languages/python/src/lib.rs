@@ -42,6 +42,11 @@
 //!   and a nested class do not see it. A plain name in a method cannot name a class variable, a
 //!   method, or a nested class of its own class. A plain name in the class body still can.
 //!
+//! A member reference, such as the `x` in `a.x`, never names a name that a function body binds:
+//! a parameter, a local variable, or a nested function. The engine can still reach such a
+//! name through value flow, for example the local `old` in `old = self.x`. The model refuses it.
+//! A field passes, and so does a declaration inside a class that a function holds.
+//!
 //! # Builtins
 //!
 //! The binding rules ship a builtins stub, `builtins.py`. A reference that ends in the stub
@@ -264,7 +269,12 @@ impl ProjectModel for PythonModel {
         declaration: &Scope,
     ) -> bool {
         if reference == ReferenceKind::Member {
-            return true;
+            // A name that a function body binds is not an attribute of any value.
+            // Only value flow reaches it: `old = self.x` makes `old` a second end of `x`.
+            // A field is the exception. A class that a function holds can have fields,
+            // class variables, and methods, and they have an enclosing class.
+            let in_function = scopes.last().is_some_and(|s| s.kind == DeclKind::Function);
+            return declaration.kind == DeclKind::Field || !in_function;
         }
         // An instance attribute needs a receiver: `self.x`.
         if declaration.kind == DeclKind::Field {
@@ -479,6 +489,38 @@ mod tests {
         assert!(accepts(plain, &method, &method, "local"));
         // A module-level name passes everywhere.
         assert!(accepts(plain, &method, &[], "top"));
+    }
+
+    #[test]
+    fn a_member_reference_never_names_a_name_that_a_function_binds() {
+        let model = PythonModel::new(&[]);
+        let method = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
+        let local_class = vec![scope(DeclKind::Function, "f"), scope(DeclKind::Class, "L")];
+        let function = vec![scope(DeclKind::Function, "f")];
+        let member = ReferenceKind::Member;
+        let accepts = |scopes: &[Scope], kind| {
+            model.accepts_target(member, &method, scopes, &scope(kind, "x"))
+        };
+        // A local variable, a parameter, and a nested function are not attributes.
+        assert!(!accepts(&method, DeclKind::Variable));
+        assert!(!accepts(&method, DeclKind::Parameter));
+        assert!(!accepts(&function, DeclKind::Function));
+        // A field is an attribute, even when the function has no class.
+        assert!(accepts(&method, DeclKind::Field));
+        assert!(accepts(&function, DeclKind::Field));
+        // A class that a function holds keeps its class variables and methods.
+        assert!(accepts(&local_class, DeclKind::Variable));
+        assert!(accepts(&local_class, DeclKind::Function));
+        // A module variable and a class variable are attributes.
+        assert!(accepts(&[], DeclKind::Variable));
+        assert!(accepts(&[scope(DeclKind::Class, "C")], DeclKind::Variable));
+        // A plain reference keeps its own rules.
+        assert!(model.accepts_target(
+            ReferenceKind::Plain,
+            &method,
+            &method,
+            &scope(DeclKind::Variable, "x")
+        ));
     }
 
     #[test]

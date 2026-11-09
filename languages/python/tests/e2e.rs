@@ -268,7 +268,10 @@ fn a_plain_name_prefers_its_nearest_binding() {
         indexed.symbols_of("flow.py", "return self.w", "w"),
         [global("flow/Child#w.")]
     );
-    assert!(indexed.report.multi_target.nearest_binding >= 2);
+    // The pack refuses the parameter and the local that a member reference reaches by value
+    // flow. The nearest-binding rule has its own unit tests in the core.
+    let stats = &indexed.report.multi_target;
+    assert!(stats.nearest_binding + stats.pack_refused >= 2);
 }
 
 #[test]
@@ -336,6 +339,34 @@ fn a_class_body_name_resolves_in_the_class_body_and_not_in_a_method() {
         indexed.report.unresolved_reasons.get("not-targetable"),
         Some(&1)
     );
+}
+
+#[test]
+fn a_member_reference_never_names_a_local_variable() {
+    let indexed = index("members");
+    let field = global("members/Options#cache_dir.");
+    // `cache_dir = self.options.cache_dir`: the value flows into the local `cache_dir`.
+    // The member reference still names the field, with no second end.
+    assert_eq!(
+        indexed.symbols_of("members.py", "= self.options.cache_dir", "cache_dir"),
+        [field.as_str()]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+    // The local variable keeps its own reference.
+    let local = indexed.symbols_of("members.py", "        cache_dir = self", "cache_dir");
+    assert_eq!(local.len(), 1);
+    assert!(local[0].starts_with("local "), "{local:?}");
+    assert_eq!(
+        indexed.symbols_of("members.py", "return cache_dir", "cache_dir"),
+        local
+    );
+    // A class that a function holds has a real attribute. The member reference reaches it.
+    let depth = indexed.symbols_of("members.py", "return item.depth", "depth");
+    assert_eq!(depth.len(), 1, "{depth:?}");
+    assert!(depth[0].starts_with("local "), "{depth:?}");
+    let cache = indexed.symbols_of("members.py", "item.cache_dir", "cache_dir");
+    assert_eq!(cache.len(), 1, "{cache:?}");
+    assert!(cache[0].starts_with("local "), "{cache:?}");
 }
 
 // ---- builtins as external symbols ----
@@ -674,6 +705,7 @@ const SCIP_FIXTURES: &[&str] = &[
     "fields",
     "unicode",
     "packages",
+    "members",
     "ambiguous",
     "shadow",
     "unresolved",
