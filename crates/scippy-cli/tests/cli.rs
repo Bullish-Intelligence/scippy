@@ -41,7 +41,7 @@ fn lists_the_built_in_languages() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "python\ntypescript\n"
+        "python\ntypescript\nloci\n"
     );
 }
 

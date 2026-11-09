@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use scippy_core::{IndexRequest, InputLimits, LanguagePack, index_project};
+use scippy_loci::LociPack;
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
@@ -45,8 +46,8 @@ enum Command {
 }
 
 /// The static registry of built-in language packs.
-fn registry() -> [&'static dyn LanguagePack; 2] {
-    [&PythonPack, &TypeScriptPack]
+fn registry() -> [&'static dyn LanguagePack; 3] {
+    [&PythonPack, &TypeScriptPack, &LociPack]
 }
 
 fn main() -> ExitCode {
