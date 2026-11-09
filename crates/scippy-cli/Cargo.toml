@@ -12,3 +12,9 @@ path = "src/main.rs"
 scippy-core = { path = "../scippy-core" }
 scippy-python = { path = "../../languages/python" }
 scippy-typescript = { path = "../../languages/typescript" }
+clap.workspace = true
+
+[dev-dependencies]
+protobuf.workspace = true
+scip.workspace = true
+tempfile.workspace = true

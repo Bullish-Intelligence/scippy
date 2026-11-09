@@ -17,3 +17,9 @@ default-members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+protobuf = "3"
+scip = "0.10.0"
+tempfile = "3"
