@@ -22,6 +22,16 @@ pub enum DeclKind {
     Variable,
     Parameter,
     Field,
+    /// An interface: a type that classes implement. It holds members like a class.
+    Interface,
+    /// An enumeration. It holds its members.
+    Enum,
+    /// A name for a type: `type A = B`.
+    TypeAlias,
+    /// A namespace that holds declarations. It is not the module of a document.
+    Namespace,
+    /// A type parameter. Only the document that declares it can address it.
+    TypeParameter,
     /// The module of a document. The core gives it an empty anchor at the start of the module node.
     Module,
 }
@@ -35,13 +45,31 @@ impl DeclKind {
             "variable" => Self::Variable,
             "parameter" => Self::Parameter,
             "field" => Self::Field,
+            "interface" => Self::Interface,
+            "enum" => Self::Enum,
+            "type" => Self::TypeAlias,
+            "namespace" => Self::Namespace,
+            "typeparameter" => Self::TypeParameter,
             _ => return None,
         })
     }
 
     /// A container can hold other declarations.
     pub(crate) fn is_container(self) -> bool {
-        matches!(self, Self::Class | Self::Function)
+        matches!(
+            self,
+            Self::Class
+                | Self::Function
+                | Self::Interface
+                | Self::Enum
+                | Self::Namespace
+                | Self::TypeAlias
+        )
+    }
+
+    /// A class-like declaration holds methods that other class-likes override or implement.
+    pub fn is_class_like(self) -> bool {
+        matches!(self, Self::Class | Self::Interface)
     }
 }
 
@@ -105,6 +133,12 @@ pub struct ExternalIdentity {
 
 /// The pack's view of one project. The core builds it once for each indexing run.
 pub trait ProjectModel: Send + Sync {
+    /// The package that the project names in its manifest, when the pack found one.
+    /// It replaces `default_package`. The request can still replace the name and the version.
+    fn package(&self) -> Option<Package> {
+        None
+    }
+
     /// Global variables for the binding rules of one file, for example the import root.
     fn resolver_globals(&self, path: &ProjectRelativePath) -> Vec<(String, String)>;
 
@@ -184,6 +218,32 @@ pub trait ProjectModel: Send + Sync {
     }
 }
 
+/// A project file that is not source code and still shapes name resolution.
+///
+/// `tsconfig.json` is an example: it maps module names to directories. The analyzer adds
+/// nodes to the stack graph for the file. The binding rules never parse it.
+pub struct SupportFile {
+    /// The project-relative path of the file. It becomes the file name in the graph.
+    pub path: ProjectRelativePath,
+    pub source: String,
+    pub analyzer: Box<dyn tree_sitter_stack_graphs::FileAnalyzer>,
+}
+
+/// A syntax variant of a language that needs its own grammar and its own binding rules.
+///
+/// TypeScript and TSX are an example: one language, two grammars. All files of one pack share
+/// one stack graph, so a file of one dialect can import a file of another dialect.
+pub struct Dialect {
+    pub grammar: tree_sitter::Language,
+    /// Where the rules come from. It appears in messages only.
+    pub tsg_path: &'static str,
+    /// The `.tsg` stack graph rules of the dialect.
+    pub tsg_source: &'static str,
+    /// Query patterns for this dialect only. The core appends them to the query of the pack.
+    /// A pattern can name nodes that only this grammar has. Use an empty string for none.
+    pub query: &'static str,
+}
+
 /// The assets that the resolver needs to compile a language.
 pub struct BindingRules {
     /// Where the rules come from. It appears in messages only.
@@ -244,6 +304,23 @@ pub struct Builtins {
 /// of a value, such as the `x` in `a.x`. The path of such a reference passes the definition of the
 /// object, so the reconciler uses a weaker nearest-binding rule for it.
 ///
+/// A match with `@anchor` marks a node in a declaration match. Its span is a second anchor of the
+/// declaration. Use it when the binding rules end a path at a node other than the identifier,
+/// for example the whole statement of a default export.
+///
+/// A match with `@alias.name` and `@alias.target` marks a binding name and a node. The binding
+/// name takes the target of the reference at the span of the node. For `import * as ns from "m"`,
+/// the name is `ns` and the node is the string `"m"`. A reference that ends at `ns` then names the
+/// module. The name gets a reference occurrence of its own. A match with `@hidden` marks a node
+/// whose reference gets no occurrence, for example a reference that the binding rules anchor at a
+/// whole statement.
+///
+/// A match with `@scope` marks a node that holds declarations and has no name, such as an arrow
+/// function. The chain of scopes of a declaration inside it has a function entry. Its name is
+/// `@` and the byte offset of the start of the node, for example `@120`. No identifier has such a
+/// name, and no two nodes of a document share it. The pack decides what the scope means for the
+/// declarations inside.
+///
 /// A match with `@module` marks the root node of a document. The binding rules define the module
 /// at the start of that node, with an empty span. The core joins the module declaration to that
 /// span.
@@ -287,5 +364,38 @@ pub trait Analysis: Send + Sync {
     /// The package identity that a project without a manifest uses.
     fn default_package(&self) -> Package;
     /// Build the project model from all files that the pack owns.
-    fn project_model(&self, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel>;
+    /// `root` is the project root. A pack can read its manifest files there.
+    fn project_model(&self, root: &Path, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel>;
+    /// Repair source text that the grammar rejects but the language accepts.
+    ///
+    /// The core calls this for a file that has a syntax error. The pack returns the text with
+    /// the offending syntax blanked out, or `None`. The repaired text must have the same length
+    /// in bytes and the same line breaks, so that every position stays valid.
+    /// The core parses the repaired text. If it still has an error, the core skips the file.
+    /// The default repairs nothing.
+    fn repair_syntax(&self, source: &str) -> Option<String> {
+        let _ = source;
+        None
+    }
+    /// The support files of the project, such as its configuration. The default is none.
+    /// `root` is the project root. `files` lists the source files that the pack owns.
+    /// The core adds each support file to the stack graph after the source files.
+    fn support_files(&self, root: &Path, files: &[ProjectRelativePath]) -> Vec<SupportFile> {
+        let _ = (root, files);
+        Vec::new()
+    }
+    /// The dialects after the primary one. The primary dialect is the one that
+    /// [`Analysis::grammar`] and [`Analysis::binding_rules`] give. It has the number 0.
+    /// The dialect `extra_dialects()[i]` has the number `i + 1`.
+    /// The query of the pack, the builtins, and the other assets are the same for every dialect.
+    /// A dialect can add query patterns of its own.
+    /// The default is no other dialect.
+    fn extra_dialects(&self) -> Vec<Dialect> {
+        Vec::new()
+    }
+    /// The number of the dialect of a file. The default is the primary dialect.
+    fn dialect_of(&self, path: &ProjectRelativePath) -> usize {
+        let _ = path;
+        0
+    }
 }

@@ -50,6 +50,13 @@ pub enum SymbolKind {
     Constant,
     Field,
     Parameter,
+    Interface,
+    Enum,
+    EnumMember,
+    TypeAlias,
+    Namespace,
+    TypeParameter,
+    Property,
 }
 
 /// Metadata of a symbol that the document defines.
@@ -326,6 +333,13 @@ fn scip_symbol(info: SymbolInfo) -> SymbolInformation {
         SymbolKind::Constant => Kind::Constant,
         SymbolKind::Field => Kind::Field,
         SymbolKind::Parameter => Kind::Parameter,
+        SymbolKind::Interface => Kind::Interface,
+        SymbolKind::Enum => Kind::Enum,
+        SymbolKind::EnumMember => Kind::EnumMember,
+        SymbolKind::TypeAlias => Kind::TypeAlias,
+        SymbolKind::Namespace => Kind::Namespace,
+        SymbolKind::TypeParameter => Kind::TypeParameter,
+        SymbolKind::Property => Kind::Property,
     };
     SymbolInformation {
         symbol: info.symbol.as_str().to_string(),

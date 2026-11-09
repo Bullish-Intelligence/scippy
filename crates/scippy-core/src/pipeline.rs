@@ -9,7 +9,7 @@ use crate::IndexRequest;
 use crate::bindings::{BindingEngine, Bound, RawBinding, ResolveLimits};
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
-use crate::extract::{DeclarationFact, Extractor, Facts};
+use crate::extract::{DeclarationFact, Extractor, Facts, SourceAnchor};
 use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
 use crate::inherit::Inheritance;
 use crate::language::{
@@ -160,8 +160,17 @@ fn index_pack(
     trace: &mut Vec<String>,
 ) -> Result<PackIndex, ScippyError> {
     let paths: Vec<ProjectRelativePath> = files.iter().map(|f| f.path.clone()).collect();
-    let model = analysis.project_model(&paths);
-    let extractor = Extractor::new(pack.id(), analysis)?;
+    let model = analysis.project_model(root, &paths);
+    // One extractor for each dialect. The first one is the primary dialect.
+    let mut extractors = vec![Extractor::new(pack.id(), analysis, analysis.grammar(), "")?];
+    for dialect in analysis.extra_dialects() {
+        extractors.push(Extractor::new(
+            pack.id(),
+            analysis,
+            dialect.grammar,
+            dialect.query,
+        )?);
+    }
     let mut engine = BindingEngine::new(pack.id(), analysis)?;
 
     // Stages B to D, for each file: read, parse, extract, and build the binding graph.
@@ -203,25 +212,57 @@ fn index_pack(
                 continue;
             }
         };
-        let tree = match extractor.parse(&source) {
+        let dialect = analysis.dialect_of(&file.path).min(extractors.len() - 1);
+        let extractor = &extractors[dialect];
+        // The text that the parser and the resolver read. It differs from `source` only when
+        // the pack repaired a construct that its grammar rejects.
+        let mut parsed_text: Option<String> = None;
+        let first = extractor.parse(&source);
+        let tree = match first {
             Ok(tree) => tree,
             Err(error) => {
-                report.files_skipped += 1;
-                report.diagnostics.push(diagnostic(
-                    Stage::Parse,
-                    Severity::Warning,
-                    "syntax-error",
-                    Some((error.start_byte, error.end_byte)),
-                    "skipped: the file has a syntax error".to_string(),
-                ));
-                continue;
+                let repaired = analysis.repair_syntax(&source).filter(|fixed| {
+                    fixed.len() == source.len()
+                        && fixed.bytes().filter(|&b| b == b'\n').count()
+                            == source.bytes().filter(|&b| b == b'\n').count()
+                });
+                let tree = repaired.and_then(|fixed| {
+                    let tree = extractor.parse(&fixed).ok()?;
+                    parsed_text = Some(fixed);
+                    Some(tree)
+                });
+                if let Some(tree) = tree {
+                    report.diagnostics.push(diagnostic(
+                        Stage::Parse,
+                        Severity::Warning,
+                        "repaired-syntax",
+                        Some((error.start_byte, error.end_byte)),
+                        "the grammar rejects this file. The pack blanked out the syntax that it does not know"
+                            .to_string(),
+                    ));
+                    tree
+                } else {
+                    report.files_skipped += 1;
+                    report.diagnostics.push(diagnostic(
+                        Stage::Parse,
+                        Severity::Warning,
+                        "syntax-error",
+                        Some((error.start_byte, error.end_byte)),
+                        "skipped: the file has a syntax error".to_string(),
+                    ));
+                    continue;
+                }
             }
         };
-        let facts = extractor.facts(&file.path, &source, &tree);
+        let text = parsed_text.as_deref().unwrap_or(&source);
+        let facts = extractor.facts(&file.path, text, &tree);
         drop(tree);
-        if let Err(failure) =
-            engine.add_file(&file.path, &source, &model.resolver_globals(&file.path))
-        {
+        if let Err(failure) = engine.add_file(
+            dialect,
+            &file.path,
+            text,
+            &model.resolver_globals(&file.path),
+        ) {
             report.files_skipped += 1;
             report.diagnostics.push(diagnostic(
                 Stage::Bind,
@@ -250,8 +291,25 @@ fn index_pack(
         });
     }
 
+    // The support files of the pack, such as `tsconfig.json`.
+    for support in analysis.support_files(root, &paths) {
+        let sources: Vec<ProjectRelativePath> = docs.iter().map(|d| d.path.clone()).collect();
+        if let Err(failure) = engine.add_support_file(&support, &sources) {
+            report.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                stage: Stage::Bind,
+                file: Some(support.path.as_str().to_string()),
+                range: None,
+                code: "support-file-error",
+                message: format!("ignored: {}", failure.message),
+            });
+        }
+    }
+
     // Stage F: assign identities.
-    let mut package = analysis.default_package();
+    let mut package = model
+        .package()
+        .unwrap_or_else(|| analysis.default_package());
     if let Some(name) = &request.package_name {
         package.name = name.clone();
     }
@@ -264,17 +322,28 @@ fn index_pack(
         doc.declared = assign_identities(&*model, &mut builder, doc)?;
         report.declarations += doc.declared.len();
         for d in &doc.declared {
-            index.insert_scoped(
-                d.fact.anchor.clone(),
-                d.symbol.clone(),
-                d.scopes.clone(),
-                d.declaration.clone(),
-            );
+            let extra = d
+                .fact
+                .extra_anchors
+                .iter()
+                .map(|&(start, end)| SourceAnchor {
+                    path: d.fact.anchor.path.clone(),
+                    start_byte: start,
+                    end_byte: end,
+                });
+            for anchor in std::iter::once(d.fact.anchor.clone()).chain(extra) {
+                index.insert_scoped(
+                    anchor,
+                    d.symbol.clone(),
+                    d.scopes.clone(),
+                    d.declaration.clone(),
+                );
+            }
         }
     }
 
     // The declarations of external assets, such as the builtins.
-    let externals = declare_external(&extractor, analysis, &*model, report, &mut index);
+    let externals = declare_external(&extractors[0], analysis, &*model, report, &mut index);
 
     // Stage D: resolve. Stage E: reconcile.
     let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
@@ -285,6 +354,39 @@ fn index_pack(
             .push(binding);
     }
     drop(engine);
+
+    // A binding name takes the target of its reference. It joins as a module-like binding.
+    for doc in &docs {
+        let Some(bindings) = by_document.get(&doc.path) else {
+            continue;
+        };
+        for &(name, target) in &doc.facts.aliases {
+            let symbols: BTreeSet<&SymbolId> = bindings
+                .iter()
+                .filter(|b| {
+                    b.bound.is_none() && (b.reference.start_byte, b.reference.end_byte) == target
+                })
+                .flat_map(|b| b.ends.iter())
+                .filter_map(|end| end.place.as_ref())
+                .filter_map(|place| index.get(place))
+                .filter(|symbol| !symbol.is_local())
+                .collect();
+            if let [symbol] = symbols.into_iter().collect::<Vec<_>>()[..] {
+                let anchor = SourceAnchor {
+                    path: doc.path.clone(),
+                    start_byte: name.0,
+                    end_byte: name.1,
+                };
+                let text = doc.source.get(name.0 as usize..name.1 as usize);
+                let binding = Scope {
+                    kind: DeclKind::Module,
+                    name: text.unwrap_or_default().to_string(),
+                };
+                let symbol = symbol.clone();
+                index.insert_scoped(anchor, symbol, Vec::new(), binding);
+            }
+        }
+    }
 
     let language = pack.scip_language().to_string();
     let mut out = Vec::with_capacity(docs.len());
@@ -308,6 +410,12 @@ fn index_pack(
                 };
                 (f.extent, scope)
             })
+            .chain(
+                doc.facts
+                    .scopes
+                    .iter()
+                    .map(|&extent| (extent, anonymous_scope(extent))),
+            )
             .collect();
         let targeting = Targeting::new(&*model, containers);
         let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
@@ -348,19 +456,48 @@ fn index_pack(
     })
 }
 
+/// The scope that a node without a name gives to the declarations inside it.
+/// The name is `@` and the byte offset of the start of the node. No identifier can have that
+/// name, and two nodes never share it.
+fn anonymous_scope(extent: (u32, u32)) -> Scope {
+    Scope {
+        kind: DeclKind::Function,
+        name: format!("@{}", extent.0),
+    }
+}
+
+/// The facts of the nodes that hold declarations and have no name. They are containers only.
+fn anonymous_facts(doc: &Doc) -> Vec<DeclarationFact> {
+    doc.facts
+        .scopes
+        .iter()
+        .map(|&extent| DeclarationFact {
+            anchor: SourceAnchor {
+                path: doc.path.clone(),
+                start_byte: extent.0,
+                end_byte: extent.0,
+            },
+            name: anonymous_scope(extent).name,
+            kind: DeclKind::Function,
+            extent,
+            extra_anchors: Vec::new(),
+        })
+        .collect()
+}
+
 /// A method that can override or be overridden: a function that a class directly holds,
 /// with a symbol that other documents can address.
 fn is_method(d: &Declared) -> bool {
     d.fact.kind == DeclKind::Function
         && !d.symbol.is_local()
-        && d.scopes.last().is_some_and(|s| s.kind == DeclKind::Class)
+        && d.scopes.last().is_some_and(|s| s.kind.is_class_like())
 }
 
 /// The innermost class declaration whose extent holds the span.
 fn enclosing_class(declared: &[Declared], start: u32, end: u32) -> Option<&Declared> {
     declared
         .iter()
-        .filter(|d| d.fact.kind == DeclKind::Class)
+        .filter(|d| d.fact.kind.is_class_like())
         .filter(|d| d.fact.extent.0 <= start && end <= d.fact.extent.1)
         .min_by_key(|d| d.fact.extent.1 - d.fact.extent.0)
 }
@@ -565,10 +702,14 @@ fn assign_identities(
     builder: &mut IdentityBuilder,
     doc: &Doc,
 ) -> Result<Vec<Declared>, ScippyError> {
-    let facts = &doc.facts.declarations;
+    // The declarations come first. The nodes without a name follow. They are containers only.
+    let declared_count = doc.facts.declarations.len();
+    let mut facts = doc.facts.declarations.clone();
+    facts.extend(anonymous_facts(doc));
+    let facts = &facts;
     let containers = container_indexes(facts);
     let mut locals: BTreeMap<Vec<Descriptor>, u32> = BTreeMap::new();
-    let mut out = Vec::with_capacity(facts.len() + 1);
+    let mut out = Vec::with_capacity(declared_count + 1);
     // The module of the document. The pack decides whether it has a symbol.
     if let (Some(fact), Some(identity)) = (&doc.facts.module, model.module_identity(&doc.path)) {
         if identity.reach == Reach::Global {
@@ -591,13 +732,13 @@ fn assign_identities(
         .map(|i| innermost_container(facts, &containers, i).map(|j| facts[j].extent))
         .collect();
     let mut held: HashMap<Option<(u32, u32)>, Vec<Scope>> = HashMap::new();
-    for (fact, holder) in facts.iter().zip(&holders) {
+    for (fact, holder) in facts.iter().zip(&holders).take(declared_count) {
         held.entry(*holder).or_default().push(Scope {
             kind: fact.kind,
             name: fact.name.clone(),
         });
     }
-    for (i, fact) in facts.iter().enumerate() {
+    for (i, fact) in facts.iter().enumerate().take(declared_count) {
         let scopes = scope_chain(facts, &containers, i);
         let declaration = Scope {
             kind: fact.kind,
@@ -760,13 +901,15 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
             });
     }
     let imports: BTreeSet<(u32, u32)> = doc.facts.imports.iter().copied().collect();
+    let hidden: BTreeSet<(u32, u32)> = doc.facts.hidden.iter().copied().collect();
     for r in reconciled {
         let BindingOutcome::Resolved(symbol) = &r.outcome else {
             continue;
         };
         let span = (r.reference.start_byte, r.reference.end_byte);
         // A declaration site is a definition occurrence already.
-        if defined.contains(&span) {
+        // A reference node with an empty span has no token to mark.
+        if defined.contains(&span) || span.0 >= span.1 || hidden.contains(&span) {
             continue;
         }
         occurrences.push(Occurrence {

@@ -221,7 +221,7 @@ impl Analysis for PythonPack {
         }
     }
 
-    fn project_model(&self, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel> {
+    fn project_model(&self, _root: &Path, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel> {
         Box::new(PythonModel::new(files))
     }
 }
@@ -606,6 +606,11 @@ fn describe(
         DeclKind::Module => (
             Descriptor::Namespace(declaration.name.clone()),
             SymbolKind::Module,
+        ),
+        // The query of this pack never captures the other kinds.
+        _ => (
+            Descriptor::Term(declaration.name.clone()),
+            SymbolKind::Variable,
         ),
     };
     descriptors.push(last);

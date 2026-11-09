@@ -29,6 +29,9 @@ pub(crate) struct DeclarationFact {
     pub kind: DeclKind,
     /// The span of the whole declaration. A container holds the declarations inside it.
     pub extent: (u32, u32),
+    /// Other spans that the binding rules use as the definition site of this declaration.
+    /// A binding path that ends at such a span ends at the declaration.
+    pub extra_anchors: Vec<(u32, u32)>,
 }
 
 /// The facts of one document.
@@ -45,6 +48,13 @@ pub(crate) struct Facts {
     pub keywords: Vec<(u32, u32)>,
     /// Spans of identifiers that name a supertype in the header of a class.
     pub supertypes: Vec<(u32, u32)>,
+    /// Extents of the nodes that hold declarations and have no name, such as arrow functions.
+    pub scopes: Vec<(u32, u32)>,
+    /// Pairs of a binding name and the span of the reference that gives the name its target.
+    /// The name of an import is an example: `ns` in `import * as ns from "m"` names the module.
+    pub aliases: Vec<((u32, u32), (u32, u32))>,
+    /// Spans whose references get no occurrence in the output.
+    pub hidden: Vec<(u32, u32)>,
     /// Declarations that two captures claimed with different kinds. The extractor drops them.
     pub conflicts: Vec<(u32, u32)>,
 }
@@ -66,14 +76,25 @@ pub(crate) struct Extractor {
     keyword: Option<u32>,
     module: Option<u32>,
     supertype: Option<u32>,
+    scope: Option<u32>,
+    anchor: Option<u32>,
+    alias_name: Option<u32>,
+    alias_target: Option<u32>,
+    hidden: Option<u32>,
     definitions: Vec<(u32, DeclKind)>,
 }
 
 impl Extractor {
-    pub fn new(pack: &'static str, analysis: &dyn Analysis) -> Result<Self, ScippyError> {
+    /// Compile the query of the pack for one grammar.
+    pub fn new(
+        pack: &'static str,
+        analysis: &dyn Analysis,
+        language: tree_sitter::Language,
+        dialect_query: &str,
+    ) -> Result<Self, ScippyError> {
         let bad = |reason: String| ScippyError::Pack { pack, reason };
-        let language = analysis.grammar();
-        let query = Query::new(&language, analysis.extraction_spec().query)
+        let text = format!("{}\n{dialect_query}", analysis.extraction_spec().query);
+        let query = Query::new(&language, &text)
             .map_err(|e| bad(format!("the extraction query does not compile: {e}")))?;
         let mut name = None;
         let mut import = None;
@@ -81,6 +102,11 @@ impl Extractor {
         let mut keyword = None;
         let mut module = None;
         let mut supertype = None;
+        let mut scope = None;
+        let mut anchor = None;
+        let mut alias_name = None;
+        let mut alias_target = None;
+        let mut hidden = None;
         let mut definitions = Vec::new();
         for (index, capture) in query.capture_names().iter().enumerate() {
             let index = index as u32;
@@ -91,6 +117,11 @@ impl Extractor {
                 "keyword" => keyword = Some(index),
                 "module" => module = Some(index),
                 "supertype" => supertype = Some(index),
+                "scope" => scope = Some(index),
+                "anchor" => anchor = Some(index),
+                "alias.name" => alias_name = Some(index),
+                "alias.target" => alias_target = Some(index),
+                "hidden" => hidden = Some(index),
                 other => {
                     if let Some(kind) = other.strip_prefix("definition.") {
                         let kind = DeclKind::from_capture(kind)
@@ -110,6 +141,11 @@ impl Extractor {
             keyword,
             module,
             supertype,
+            scope,
+            anchor,
+            alias_name,
+            alias_target,
+            hidden,
             definitions,
         })
     }
@@ -139,6 +175,9 @@ impl Extractor {
         let mut members = Vec::new();
         let mut keywords = Vec::new();
         let mut supertypes = Vec::new();
+        let mut scopes = Vec::new();
+        let mut aliases = Vec::new();
+        let mut hidden_spans = Vec::new();
         let mut module = None;
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&self.query, tree.root_node(), source.as_bytes());
@@ -158,7 +197,23 @@ impl Extractor {
                     name: String::new(),
                     kind: DeclKind::Module,
                     extent: (start, whole.end_byte() as u32),
+                    extra_anchors: Vec::new(),
                 });
+            }
+            if let (Some(name), Some(target)) = (
+                self.alias_name.and_then(node),
+                self.alias_target.and_then(node),
+            ) {
+                aliases.push((
+                    (name.start_byte() as u32, name.end_byte() as u32),
+                    (target.start_byte() as u32, target.end_byte() as u32),
+                ));
+            }
+            if let Some(hidden) = self.hidden.and_then(node) {
+                hidden_spans.push((hidden.start_byte() as u32, hidden.end_byte() as u32));
+            }
+            if let Some(scope) = self.scope.and_then(node) {
+                scopes.push((scope.start_byte() as u32, scope.end_byte() as u32));
             }
             if let Some(supertype) = self.supertype.and_then(node) {
                 supertypes.push((supertype.start_byte() as u32, supertype.end_byte() as u32));
@@ -188,6 +243,12 @@ impl Extractor {
                     name: text,
                     kind,
                     extent: (whole.start_byte() as u32, whole.end_byte() as u32),
+                    extra_anchors: self
+                        .anchor
+                        .and_then(node)
+                        .map(|n| (n.start_byte() as u32, n.end_byte() as u32))
+                        .into_iter()
+                        .collect(),
                 });
             }
         }
@@ -197,14 +258,21 @@ impl Extractor {
             ..Facts::default()
         };
         for (span, mut found) in by_anchor {
-            found.sort_by_key(|f| (f.kind, f.extent));
+            found.sort_by_key(|f| (f.kind, f.extent, f.extra_anchors.clone()));
             found.dedup();
             let first = &found[0];
             // Equivalent captures merge. Captures with different kinds at one anchor conflict.
             if found.iter().any(|f| f.kind != first.kind) {
                 facts.conflicts.push(span);
             } else {
-                facts.declarations.push(found.swap_remove(0));
+                // Equivalent captures can add anchors. The declaration keeps all of them.
+                let mut anchors: Vec<(u32, u32)> =
+                    found.iter().flat_map(|f| f.extra_anchors.clone()).collect();
+                anchors.sort_unstable();
+                anchors.dedup();
+                let mut first = found.swap_remove(0);
+                first.extra_anchors = anchors;
+                facts.declarations.push(first);
             }
         }
         imports.sort_unstable();
@@ -219,6 +287,15 @@ impl Extractor {
         supertypes.sort_unstable();
         supertypes.dedup();
         facts.supertypes = supertypes;
+        scopes.sort_unstable();
+        scopes.dedup();
+        facts.scopes = scopes;
+        aliases.sort_unstable();
+        aliases.dedup();
+        facts.aliases = aliases;
+        hidden_spans.sort_unstable();
+        hidden_spans.dedup();
+        facts.hidden = hidden_spans;
         facts
     }
 }

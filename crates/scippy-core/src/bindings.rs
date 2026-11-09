@@ -4,7 +4,7 @@
 //! in one database, and resolves each reference node with bounded work.
 //! It returns plain anchors. No fork type leaves this module.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
@@ -18,7 +18,7 @@ use tree_sitter_stack_graphs::{BuildError, NoCancellation, StackGraphLanguage, V
 
 use crate::error::ScippyError;
 use crate::extract::SourceAnchor;
-use crate::language::{Analysis, BindingRules};
+use crate::language::{Analysis, BindingRules, SupportFile};
 use crate::project::ProjectRelativePath;
 
 /// The name that the rules use for the builtins file.
@@ -102,7 +102,8 @@ pub(crate) struct BuildFailure {
 }
 
 pub(crate) struct BindingEngine {
-    language: StackGraphLanguage,
+    /// One compiled rule set for each dialect. The first one is the primary dialect.
+    languages: Vec<StackGraphLanguage>,
     graph: StackGraph,
     partials: PartialPaths,
     database: Database,
@@ -116,14 +117,24 @@ impl BindingEngine {
     pub fn new(pack: &'static str, analysis: &dyn Analysis) -> Result<Self, ScippyError> {
         let rules = analysis.binding_rules();
         let bad = |reason: String| ScippyError::Pack { pack, reason };
-        let language = StackGraphLanguage::from_source(
+        let compile = |grammar, path: &str, source| {
+            StackGraphLanguage::from_source(grammar, PathBuf::from(path), source)
+                .map_err(|e| bad(format!("the binding rules do not compile: {e}")))
+        };
+        let mut languages = vec![compile(
             analysis.grammar(),
-            PathBuf::from(rules.tsg_path),
+            rules.tsg_path,
             rules.tsg_source,
-        )
-        .map_err(|e| bad(format!("the binding rules do not compile: {e}")))?;
+        )?];
+        for dialect in analysis.extra_dialects() {
+            languages.push(compile(
+                dialect.grammar,
+                dialect.tsg_path,
+                dialect.tsg_source,
+            )?);
+        }
         let mut engine = Self {
-            language,
+            languages,
             graph: StackGraph::new(),
             partials: PartialPaths::new(),
             database: Database::new(),
@@ -150,7 +161,7 @@ impl BindingEngine {
                     .add(name.as_str().into(), value.as_str().into())
                     .map_err(|e| e.to_string())?;
             }
-            self.language
+            self.languages[0]
                 .build_stack_graph_into(
                     &mut self.graph,
                     file,
@@ -170,6 +181,7 @@ impl BindingEngine {
     /// On failure the engine never resolves a reference of the file.
     pub fn add_file(
         &mut self,
+        dialect: usize,
         path: &ProjectRelativePath,
         source: &str,
         globals: &[(String, String)],
@@ -185,8 +197,9 @@ impl BindingEngine {
                 .add(name.as_str().into(), value.as_str().into())
                 .map_err(|e| fail(e.to_string()))?;
         }
+        let language = &self.languages[dialect];
         let built = catch_unwind(AssertUnwindSafe(|| {
-            self.language.build_stack_graph_into(
+            language.build_stack_graph_into(
                 &mut self.graph,
                 file,
                 source,
@@ -204,6 +217,42 @@ impl BindingEngine {
         }
         self.add_partial_paths(file);
         self.files.push((file, path.clone()));
+        Ok(())
+    }
+
+    /// Add the nodes of a support file, such as `tsconfig.json`, and store its partial paths.
+    ///
+    /// `all_paths` lists the source files of the project.
+    pub fn add_support_file(
+        &mut self,
+        support: &SupportFile,
+        all_paths: &[ProjectRelativePath],
+    ) -> Result<(), BuildFailure> {
+        let fail = |message: String| BuildFailure { message };
+        let file = self.graph.get_or_create_file(support.path.as_str());
+        let path = PathBuf::from(support.path.as_str());
+        let paths: Vec<PathBuf> = all_paths
+            .iter()
+            .map(|p| PathBuf::from(p.as_str()))
+            .collect();
+        let globals = HashMap::new();
+        let built = catch_unwind(AssertUnwindSafe(|| {
+            support.analyzer.build_stack_graph_into(
+                &mut self.graph,
+                file,
+                &path,
+                &support.source,
+                &mut paths.iter().map(PathBuf::as_path),
+                &globals,
+                &NoCancellation,
+            )
+        }));
+        match built {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(fail(error.to_string())),
+            Err(_) => return Err(fail("the analyzer panicked".into())),
+        }
+        self.add_partial_paths(file);
         Ok(())
     }
 
