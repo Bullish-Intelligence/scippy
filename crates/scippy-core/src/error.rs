@@ -24,6 +24,8 @@ pub enum ScippyError {
     SymbolCollision { symbol: String, detail: String },
     /// Two documents have one path.
     DuplicateDocument { path: String },
+    /// A language pack is invalid: its query or its binding rules do not compile.
+    Pack { pack: &'static str, reason: String },
     /// Strict mode found error diagnostics.
     Strict { errors: usize },
     /// A file system operation failed.
@@ -57,6 +59,7 @@ impl fmt::Display for ScippyError {
                 write!(f, "symbol collision for {symbol:?}: {detail}")
             }
             Self::DuplicateDocument { path } => write!(f, "duplicate document {path}"),
+            Self::Pack { pack, reason } => write!(f, "language pack {pack}: {reason}"),
             Self::Strict { errors } => write!(f, "strict mode: {errors} error diagnostic(s)"),
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Serialize(message) => write!(f, "serialization failed: {message}"),

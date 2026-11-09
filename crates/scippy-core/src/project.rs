@@ -4,8 +4,39 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::ScippyError;
-use crate::language::LanguagePack;
 use crate::report::{Diagnostic, Severity, Stage};
+
+/// What the walker needs from a language pack: the name and the file test.
+pub(crate) trait Router {
+    fn id(&self) -> &'static str;
+    fn accepts(&self, path: &Path) -> bool;
+}
+
+/// Limits on the input of one indexing run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputLimits {
+    /// A file larger than this is skipped with a warning.
+    pub max_file_bytes: u64,
+    /// The walker stops to accept files when the accepted files would exceed this total.
+    pub max_total_bytes: u64,
+}
+
+impl InputLimits {
+    /// One MiB for a file. Hand-written source is far smaller. The largest mypy file is 413 KB.
+    pub const DEFAULT_MAX_FILE_BYTES: u64 = 1024 * 1024;
+    /// 32 MiB for all files. The graph build took about 1.3 GB for each MB of Python source
+    /// (6.2 GB for the 4.7 MB of mypy), so this total bounds the memory of the graph near 40 GB.
+    pub const DEFAULT_MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+}
+
+impl Default for InputLimits {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: Self::DEFAULT_MAX_FILE_BYTES,
+            max_total_bytes: Self::DEFAULT_MAX_TOTAL_BYTES,
+        }
+    }
+}
 
 /// Directories that the walker never enters.
 /// They hold version-control data, dependencies, or build output.
@@ -57,12 +88,18 @@ impl ProjectRelativePath {
     }
 }
 
+/// A file that the walker accepted.
+pub(crate) struct FoundFile {
+    pub path: ProjectRelativePath,
+    /// The index of the pack in the `languages` slice.
+    pub pack: usize,
+}
+
 /// The files that the walker routed to a language pack.
 pub(crate) struct Discovery {
     /// The canonical project root.
     pub root: PathBuf,
-    /// Each file with the index of its pack in the `languages` slice.
-    pub files: Vec<(ProjectRelativePath, usize)>,
+    pub files: Vec<FoundFile>,
     /// Count of all regular files that the walker saw.
     pub files_discovered: usize,
     pub diagnostics: Vec<Diagnostic>,
@@ -71,11 +108,12 @@ pub(crate) struct Discovery {
 /// Walk the project in a deterministic order and route each file to one pack.
 ///
 /// The walker never follows symbolic links and never reads file content.
-/// It skips the output file.
+/// It skips the output file. It enforces the input limits from the sizes that the file system reports.
 pub(crate) fn discover(
     root: &Path,
     output: &Path,
-    languages: &[&dyn LanguagePack],
+    languages: &[&dyn Router],
+    limits: InputLimits,
 ) -> Result<Discovery, ScippyError> {
     let invalid = |reason: String| ScippyError::InvalidRoot {
         path: root.to_path_buf(),
@@ -89,6 +127,9 @@ pub(crate) fn discover(
 
     let mut walk = Walk {
         languages,
+        limits,
+        total_bytes: 0,
+        limit_reached: false,
         output: absolute_output(output),
         found: Discovery {
             root: root.clone(),
@@ -117,7 +158,11 @@ fn absolute_output(output: &Path) -> PathBuf {
 }
 
 struct Walk<'a> {
-    languages: &'a [&'a dyn LanguagePack],
+    languages: &'a [&'a dyn Router],
+    limits: InputLimits,
+    /// The sum of the sizes of the accepted files.
+    total_bytes: u64,
+    limit_reached: bool,
     output: PathBuf,
     found: Discovery,
 }
@@ -208,7 +253,41 @@ impl Walk<'_> {
                 );
                 continue;
             }
-            self.found.files.push((relative, accepting[0]));
+
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if size > self.limits.max_file_bytes {
+                self.warn(
+                    Severity::Warning,
+                    "file-too-large",
+                    Some(relative.as_str().to_string()),
+                    format!(
+                        "skipped: {size} bytes exceed the limit of {} bytes",
+                        self.limits.max_file_bytes
+                    ),
+                );
+                continue;
+            }
+            if self.limit_reached {
+                continue;
+            }
+            if self.total_bytes + size > self.limits.max_total_bytes {
+                self.limit_reached = true;
+                self.warn(
+                    Severity::Error,
+                    "input-limit-reached",
+                    Some(relative.as_str().to_string()),
+                    format!(
+                        "skipped this file and every later file: the total input would exceed {} bytes",
+                        self.limits.max_total_bytes
+                    ),
+                );
+                continue;
+            }
+            self.total_bytes += size;
+            self.found.files.push(FoundFile {
+                path: relative,
+                pack: accepting[0],
+            });
         }
     }
 
@@ -235,11 +314,8 @@ mod tests {
     use super::*;
 
     struct Ext(&'static str, &'static str);
-    impl LanguagePack for Ext {
+    impl Router for Ext {
         fn id(&self) -> &'static str {
-            self.0
-        }
-        fn scip_language(&self) -> &'static str {
             self.0
         }
         fn accepts(&self, path: &Path) -> bool {
@@ -288,8 +364,14 @@ mod tests {
             touch(dir.path(), f);
         }
         let py = Ext("python", "py");
-        let found = discover(dir.path(), &dir.path().join("index.scip"), &[&py]).unwrap();
-        let paths: Vec<_> = found.files.iter().map(|(p, _)| p.as_str()).collect();
+        let found = discover(
+            dir.path(),
+            &dir.path().join("index.scip"),
+            &[&py],
+            InputLimits::default(),
+        )
+        .unwrap();
+        let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["a.py", "b.py", "pkg/y.py", "pkg/z.py"]);
         assert_eq!(found.files_discovered, 5);
         assert!(found.diagnostics.is_empty());
@@ -300,7 +382,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         touch(dir.path(), "a.scip");
         let scip = Ext("scip", "scip");
-        let found = discover(dir.path(), &dir.path().join("a.scip"), &[&scip]).unwrap();
+        let found = discover(
+            dir.path(),
+            &dir.path().join("a.scip"),
+            &[&scip],
+            InputLimits::default(),
+        )
+        .unwrap();
         assert!(found.files.is_empty());
     }
 
@@ -309,7 +397,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         touch(dir.path(), "a.py");
         let (one, two) = (Ext("one", "py"), Ext("two", "py"));
-        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&one, &two]).unwrap();
+        let found = discover(
+            dir.path(),
+            &dir.path().join("o.scip"),
+            &[&one, &two],
+            InputLimits::default(),
+        )
+        .unwrap();
         assert!(found.files.is_empty());
         assert_eq!(found.diagnostics[0].code, "ambiguous-language");
     }
@@ -321,7 +415,13 @@ mod tests {
         touch(dir.path(), "real.py");
         std::os::unix::fs::symlink("real.py", dir.path().join("link.py")).unwrap();
         let py = Ext("python", "py");
-        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py]).unwrap();
+        let found = discover(
+            dir.path(),
+            &dir.path().join("o.scip"),
+            &[&py],
+            InputLimits::default(),
+        )
+        .unwrap();
         assert_eq!(found.files.len(), 1);
         assert_eq!(found.diagnostics[0].code, "symlink-skipped");
     }
@@ -330,8 +430,69 @@ mod tests {
     fn rejects_a_bad_root() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("o.scip");
-        assert!(discover(&dir.path().join("missing"), &out, &[]).is_err());
+        assert!(
+            discover(
+                &dir.path().join("missing"),
+                &out,
+                &[],
+                InputLimits::default()
+            )
+            .is_err()
+        );
         touch(dir.path(), "file.txt");
-        assert!(discover(&dir.path().join("file.txt"), &out, &[]).is_err());
+        assert!(
+            discover(
+                &dir.path().join("file.txt"),
+                &out,
+                &[],
+                InputLimits::default()
+            )
+            .is_err()
+        );
+    }
+
+    fn write(root: &Path, relative: &str, bytes: usize) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, vec![b'x'; bytes]).unwrap();
+    }
+
+    #[test]
+    fn skips_a_file_over_the_file_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "small.py", 10);
+        write(dir.path(), "big.py", 11);
+        let py = Ext("python", "py");
+        let limits = InputLimits {
+            max_file_bytes: 10,
+            max_total_bytes: 1000,
+        };
+        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py], limits).unwrap();
+        let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["small.py"]);
+        assert_eq!(found.diagnostics.len(), 1);
+        assert_eq!(found.diagnostics[0].code, "file-too-large");
+        assert_eq!(found.diagnostics[0].file.as_deref(), Some("big.py"));
+    }
+
+    #[test]
+    fn stops_at_the_total_limit_in_walk_order() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.py", "b.py", "c.py", "d.py"] {
+            write(dir.path(), name, 10);
+        }
+        let py = Ext("python", "py");
+        let limits = InputLimits {
+            max_file_bytes: 10,
+            max_total_bytes: 25,
+        };
+        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py], limits).unwrap();
+        let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["a.py", "b.py"]);
+        // One diagnostic names the first file that the walker dropped.
+        assert_eq!(found.diagnostics.len(), 1);
+        assert_eq!(found.diagnostics[0].code, "input-limit-reached");
+        assert_eq!(found.diagnostics[0].severity, Severity::Error);
+        assert_eq!(found.diagnostics[0].file.as_deref(), Some("c.py"));
     }
 }
