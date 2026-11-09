@@ -4,7 +4,7 @@
 //! in one database, and resolves each reference node with bounded work.
 //! It returns plain anchors. No fork type leaves this module.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 
@@ -107,6 +107,8 @@ pub(crate) struct BindingEngine {
     partials: PartialPaths,
     database: Database,
     files: Vec<(Handle<File>, ProjectRelativePath)>,
+    /// The names of the external assets, such as the builtins. They are not project files.
+    external: HashSet<String>,
 }
 
 impl BindingEngine {
@@ -126,33 +128,40 @@ impl BindingEngine {
             partials: PartialPaths::new(),
             database: Database::new(),
             files: Vec::new(),
+            external: HashSet::new(),
         };
-        engine.load_builtins(&rules).map_err(bad)?;
+        engine.load_assets(&rules).map_err(bad)?;
         Ok(engine)
     }
 
-    fn load_builtins(&mut self, rules: &BindingRules) -> Result<(), String> {
-        let Some(builtins) = &rules.builtins else {
-            return Ok(());
-        };
-        if builtins.source.trim().is_empty() {
-            return Ok(());
+    /// Build each external asset as a file of its own and store its partial paths.
+    fn load_assets(&mut self, rules: &BindingRules) -> Result<(), String> {
+        for asset in rules.external_assets() {
+            if asset.source.trim().is_empty() {
+                continue;
+            }
+            let file = self.graph.get_or_create_file(&asset.name);
+            let mut globals = Variables::new();
+            globals
+                .add("FILE_PATH".into(), asset.name.as_str().into())
+                .map_err(|e| e.to_string())?;
+            for (name, value) in &asset.globals {
+                globals
+                    .add(name.as_str().into(), value.as_str().into())
+                    .map_err(|e| e.to_string())?;
+            }
+            self.language
+                .build_stack_graph_into(
+                    &mut self.graph,
+                    file,
+                    asset.source,
+                    &globals,
+                    &NoCancellation,
+                )
+                .map_err(|e| format!("the asset source {} fails to build: {e}", asset.path))?;
+            self.add_partial_paths(file);
+            self.external.insert(asset.name);
         }
-        let file = self.graph.get_or_create_file(BUILTINS_NAME);
-        let mut globals = Variables::new();
-        globals
-            .add("FILE_PATH".into(), BUILTINS_NAME.into())
-            .map_err(|e| e.to_string())?;
-        self.language
-            .build_stack_graph_into(
-                &mut self.graph,
-                file,
-                builtins.source,
-                &globals,
-                &NoCancellation,
-            )
-            .map_err(|e| format!("the builtins source {} fails to build: {e}", builtins.path))?;
-        self.add_partial_paths(file);
         Ok(())
     }
 
@@ -228,6 +237,7 @@ impl BindingEngine {
             max_path_length: None,
         });
         let files = std::mem::take(&mut self.files);
+        let external = &self.external;
         for (file, path) in &files {
             let references: Vec<Handle<Node>> = self
                 .graph
@@ -251,7 +261,7 @@ impl BindingEngine {
                         |graph, partials, path: &PartialPath| {
                             // Drop every path that another path shadows. The engine does not
                             // do it. Its own test runner applies the same filter.
-                            let end = end_of(graph, partials, path);
+                            let end = end_of(graph, partials, path, external);
                             all.insert(end.clone());
                             if kept.iter().any(|(other, _)| other.shadows(partials, path)) {
                                 return;
@@ -303,26 +313,35 @@ fn anchor_from_info(info: &SourceInfo, path: &ProjectRelativePath) -> Option<Sou
     })
 }
 
-fn place_of(graph: &StackGraph, node: Handle<Node>) -> Option<Place> {
+fn place_of(
+    graph: &StackGraph,
+    node: Handle<Node>,
+    external_files: &HashSet<String>,
+) -> Option<Place> {
     let file = graph[node].file()?;
     let info = graph.source_info(node)?;
     let name = graph[file].name();
-    let external = name == BUILTINS_NAME;
+    let external = external_files.contains(name);
     let path = ProjectRelativePath::new(name).ok()?;
     let anchor = anchor_from_info(info, &path)?;
     Some(Place { anchor, external })
 }
 
-fn end_of(graph: &StackGraph, partials: &PartialPaths, path: &PartialPath) -> RawEnd {
+fn end_of(
+    graph: &StackGraph,
+    partials: &PartialPaths,
+    path: &PartialPath,
+    external: &HashSet<String>,
+) -> RawEnd {
     let end = path.end_node;
-    let place = place_of(graph, end);
+    let place = place_of(graph, end, external);
     // The edges of the path name every node of the path except the last one.
     let mut through: Vec<Place> = path
         .edges
         .iter_unordered(partials)
         .filter_map(|edge| graph.node_for_id(edge.source_node_id))
         .filter(|&node| graph[node].is_definition())
-        .filter_map(|node| place_of(graph, node))
+        .filter_map(|node| place_of(graph, node, external))
         .filter(|p| Some(p) != place.as_ref())
         .collect();
     through.sort();

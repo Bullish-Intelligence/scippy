@@ -130,11 +130,15 @@ pub trait ProjectModel: Send + Sync {
     /// Assign an identity to a declaration.
     ///
     /// `scopes` lists the enclosing declarations from the outermost to the innermost.
+    /// `siblings` lists the other declarations that the same innermost container holds
+    /// directly, in source order. A language can let a later binding share the entity of an
+    /// earlier one, for example a variable that rebinds a parameter.
     fn identity(
         &self,
         path: &ProjectRelativePath,
         scopes: &[Scope],
         declaration: &Scope,
+        siblings: &[Scope],
     ) -> Identity;
 
     /// Say whether a reference can name a declaration.
@@ -186,6 +190,39 @@ pub struct BindingRules {
     pub tsg_source: &'static str,
     /// The builtins source, when the language has one.
     pub builtins: Option<Builtins>,
+    /// More external assets, such as the stub modules of the standard library.
+    /// The resolver builds each one as a file of its own, next to the builtins.
+    pub assets: Vec<ExternalAsset>,
+}
+
+impl BindingRules {
+    /// Every external asset: the builtins first, then the other assets.
+    pub(crate) fn external_assets(&self) -> Vec<ExternalAsset> {
+        let builtins = self.builtins.iter().map(|b| ExternalAsset {
+            name: crate::bindings::BUILTINS_NAME.to_string(),
+            path: b.path,
+            source: b.source,
+            globals: Vec::new(),
+        });
+        builtins.chain(self.assets.iter().cloned()).collect()
+    }
+}
+
+/// A source file that the pack supplies and the project does not own.
+///
+/// The resolver builds it as a file named `name`, with the global `FILE_PATH` set to `name`
+/// and the globals of the asset. A reference that ends in it resolves to an external symbol,
+/// when the project model gives the declaration an [`ExternalIdentity`].
+/// The model receives `name` as the `asset` argument.
+#[derive(Clone, Debug)]
+pub struct ExternalAsset {
+    /// The file name in the graph. It cannot collide with a project path.
+    pub name: String,
+    /// Where the source comes from. It appears in messages only.
+    pub path: &'static str,
+    pub source: &'static str,
+    /// Globals for the binding rules, besides `FILE_PATH`.
+    pub globals: Vec<(String, String)>,
 }
 
 /// A source file that defines the names every file can see.

@@ -11,20 +11,20 @@ class State:
     def __init__(self, id: str | None, temporary: bool = False) -> None:
         if not temporary:
             assert id, "no id"
-#                  ^^ reference local 1
+#                  ^^ reference scippy python workspace . fields/State#__init__().(id)
         print(id)
-#             ^^ reference local 1
+#             ^^ reference scippy python workspace . fields/State#__init__().(id)
         self.id = id or "main"
-#       ^^^^ reference local 0
+#       ^^^^ reference scippy python workspace . fields/State#__init__().(self)
 #            ^^ definition scippy python workspace . fields/State#id.
-#                 ^^ reference local 1
+#                 ^^ reference scippy python workspace . fields/State#__init__().(id)
 
     def show(self):
         print(count)
         print(limit)
 #             ^^^^^ reference scippy python workspace . fields/limit.
         return self.id
-#              ^^^^ reference local 3
+#              ^^^^ reference scippy python workspace . fields/State#show().(self)
 #                   ^^ reference scippy python workspace . fields/State#id.
 
 

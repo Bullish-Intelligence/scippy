@@ -1,23 +1,23 @@
 def process(value):
 #   ^^^^^^^ definition scippy python workspace . outer/process().
-#           ^^^^^ definition local 0
+#           ^^^^^ definition scippy python workspace . outer/process().(value)
     return value
-#          ^^^^^ reference local 0
+#          ^^^^^ reference scippy python workspace . outer/process().(value)
 
 
 def local_shadow(process):
 #   ^^^^^^^^^^^^ definition scippy python workspace . outer/local_shadow().
-#                ^^^^^^^ definition local 1
+#                ^^^^^^^ definition scippy python workspace . outer/local_shadow().(process)
     return process
-#          ^^^^^^^ reference local 1
+#          ^^^^^^^ reference scippy python workspace . outer/local_shadow().(process)
 
 
 def rebinding():
 #   ^^^^^^^^^ definition scippy python workspace . outer/rebinding().
     process = 1
-#   ^^^^^^^ definition local 2
+#   ^^^^^^^ definition local 0
     return process
-#          ^^^^^^^ reference local 2
+#          ^^^^^^^ reference local 0
 
 
 def calls_outer():

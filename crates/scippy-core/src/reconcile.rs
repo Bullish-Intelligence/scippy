@@ -25,6 +25,11 @@
 //! 6. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
 //!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved.
 //! 7. A reference never takes a document-local symbol of another document.
+//! 8. A reference at the span of a declaration of the same document names that declaration.
+//!    It is the same token. An attribute assignment target, such as `self.x = v`, is a
+//!    declaration and a reference at once. The receiver can reach the field of a base class
+//!    too, but the token declares the field of the class that holds the assignment.
+//!    The definition occurrence stands for the reference. The outcome is the declared symbol.
 //!
 //! The language pack can refuse a declaration as the target of a reference. The refusal runs
 //! after the join and before the nearest-binding rule. The reconciler drops each joined end
@@ -352,7 +357,10 @@ pub(crate) fn reconcile(
                 }
             }
 
-            let outcome = if let Some(bound) = bound {
+            let own = declarations.project.get(&reference).map(|e| &e.symbol);
+            let outcome = if let Some(own) = own {
+                BindingOutcome::Resolved(own.clone())
+            } else if let Some(bound) = bound {
                 BindingOutcome::Bounded(bound)
             } else if groups.is_empty() {
                 BindingOutcome::Unresolved(UnresolvedReason::NoPath)
@@ -507,6 +515,22 @@ mod tests {
         assert_eq!(
             outcome(vec![binding(reference, ends, None)]),
             BindingOutcome::Ambiguous(vec![sym(0), sym(1)])
+        );
+    }
+
+    #[test]
+    fn a_reference_at_a_declaration_names_that_declaration() {
+        // `self.x = v`: the receiver reaches two fields, but the token declares one of them.
+        let reference = anchor("a.py", 0);
+        let ends = vec![end("a.py", 0, None), end("a.py", 10, None)];
+        assert_eq!(
+            outcome(vec![binding(reference.clone(), ends, None)]),
+            BindingOutcome::Resolved(sym(0))
+        );
+        // A bound does not change it. The token still declares the entity.
+        assert_eq!(
+            outcome(vec![binding(reference, vec![], Some(Bound::Work))]),
+            BindingOutcome::Resolved(sym(0))
         );
     }
 
@@ -805,6 +829,7 @@ mod tests {
             _: &ProjectRelativePath,
             _: &[Scope],
             _: &Scope,
+            _: &[Scope],
         ) -> crate::language::Identity {
             unreachable!("the reconciler never asks for an identity")
         }

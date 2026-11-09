@@ -6,13 +6,15 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::IndexRequest;
-use crate::bindings::{BUILTINS_NAME, BindingEngine, Bound, RawBinding, ResolveLimits};
+use crate::bindings::{BindingEngine, Bound, RawBinding, ResolveLimits};
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts};
 use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
 use crate::inherit::Inheritance;
-use crate::language::{Analysis, DeclKind, LanguagePack, ProjectModel, Reach, Scope};
+use crate::language::{
+    Analysis, DeclKind, ExternalAsset, LanguagePack, ProjectModel, Reach, Scope,
+};
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
 use crate::reconcile::{
@@ -396,6 +398,7 @@ fn record_inheritance(doc: &Doc, reconciled: &[Reconciled], inheritance: &mut In
 
 /// Parse the external assets of the pack and give their declarations identities.
 ///
+/// The assets are the builtins and the other assets that the pack lists, such as stub modules.
 /// The declarations join to references by anchor, like project declarations.
 /// The result maps each external symbol to its metadata.
 fn declare_external(
@@ -406,9 +409,24 @@ fn declare_external(
     index: &mut DeclarationIndex,
 ) -> BTreeMap<SymbolId, SymbolInfo> {
     let mut symbols = BTreeMap::new();
-    let Some(builtins) = analysis.binding_rules().builtins else {
-        return symbols;
-    };
+    for asset in analysis.binding_rules().external_assets() {
+        declare_asset(extractor, &asset, model, report, index, &mut symbols);
+    }
+    symbols
+}
+
+/// Give the declarations of one external asset their identities.
+fn declare_asset(
+    extractor: &Extractor,
+    asset: &ExternalAsset,
+    model: &dyn ProjectModel,
+    report: &mut IndexReport,
+    index: &mut DeclarationIndex,
+    symbols: &mut BTreeMap<SymbolId, SymbolInfo>,
+) {
+    if asset.source.trim().is_empty() {
+        return;
+    }
     let warn = |code, message: String| Diagnostic {
         severity: Severity::Warning,
         stage: Stage::Identity,
@@ -417,32 +435,44 @@ fn declare_external(
         code,
         message,
     };
-    let Ok(path) = ProjectRelativePath::new(BUILTINS_NAME) else {
-        return symbols;
+    let Ok(path) = ProjectRelativePath::new(&asset.name) else {
+        return;
     };
-    let tree = match extractor.parse(builtins.source) {
+    let tree = match extractor.parse(asset.source) {
         Ok(tree) => tree,
         Err(_) => {
             report.diagnostics.push(warn(
                 "external-asset-syntax-error",
                 format!(
                     "the asset {} has a syntax error. Its names stay unresolved",
-                    builtins.path
+                    asset.path
                 ),
             ));
-            return symbols;
+            return;
         }
     };
-    let facts = extractor.facts(&path, builtins.source, &tree);
+    let facts = extractor.facts(&path, asset.source, &tree);
     let declarations = &facts.declarations;
     let containers = container_indexes(declarations);
-    for (i, fact) in declarations.iter().enumerate() {
-        let scopes = scope_chain(declarations, &containers, i);
+    // The module of the asset is a declaration too. Its name is the stem of the file name.
+    let stem = asset.name.rsplit('/').next().unwrap_or(&asset.name);
+    let module = facts.module.iter().map(|fact| {
+        let name = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem);
+        let declaration = Scope {
+            kind: DeclKind::Module,
+            name: name.to_string(),
+        };
+        (fact, Vec::new(), declaration)
+    });
+    let members = declarations.iter().enumerate().map(|(i, fact)| {
         let declaration = Scope {
             kind: fact.kind,
             name: fact.name.clone(),
         };
-        let Some(identity) = model.external_identity(BUILTINS_NAME, &scopes, &declaration) else {
+        (fact, scope_chain(declarations, &containers, i), declaration)
+    });
+    for (fact, scopes, declaration) in module.chain(members) {
+        let Some(identity) = model.external_identity(&asset.name, &scopes, &declaration) else {
             continue;
         };
         match IdentityBuilder::new(SCHEME, identity.package).symbol(&identity.descriptors) {
@@ -465,7 +495,6 @@ fn declare_external(
                 .push(warn("external-symbol-invalid", error.to_string())),
         }
     }
-    symbols
 }
 
 /// Read a file. Return a diagnostic code and message on failure.
@@ -495,6 +524,18 @@ fn container_indexes(facts: &[DeclarationFact]) -> Vec<usize> {
     (0..facts.len())
         .filter(|&i| facts[i].kind.is_container())
         .collect()
+}
+
+/// The innermost container that holds declaration `i`, when there is one.
+fn innermost_container(facts: &[DeclarationFact], containers: &[usize], i: usize) -> Option<usize> {
+    let fact = &facts[i];
+    containers
+        .iter()
+        .copied()
+        .filter(|&j| {
+            j != i && facts[j].extent.0 <= fact.extent.0 && fact.extent.1 <= facts[j].extent.1
+        })
+        .min_by_key(|&j| facts[j].extent.1 - facts[j].extent.0)
 }
 
 /// The enclosing declarations of declaration `i`, from the outermost to the innermost.
@@ -544,13 +585,29 @@ fn assign_identities(
             });
         }
     }
+    // The declarations that each container holds directly, keyed by the extent of the container.
+    let holders: Vec<Option<(u32, u32)>> = (0..facts.len())
+        .map(|i| innermost_container(facts, &containers, i).map(|j| facts[j].extent))
+        .collect();
+    let mut held: HashMap<Option<(u32, u32)>, Vec<Scope>> = HashMap::new();
+    for (fact, holder) in facts.iter().zip(&holders) {
+        held.entry(*holder).or_default().push(Scope {
+            kind: fact.kind,
+            name: fact.name.clone(),
+        });
+    }
     for (i, fact) in facts.iter().enumerate() {
         let scopes = scope_chain(facts, &containers, i);
         let declaration = Scope {
             kind: fact.kind,
             name: fact.name.clone(),
         };
-        let identity = model.identity(&doc.path, &scopes, &declaration);
+        let siblings: Vec<Scope> = held[&holders[i]]
+            .iter()
+            .filter(|s| **s != declaration)
+            .cloned()
+            .collect();
+        let identity = model.identity(&doc.path, &scopes, &declaration, &siblings);
         let symbol = match identity.reach {
             Reach::Global => builder.define(&identity.descriptors, fact.anchor.clone())?,
             Reach::Document => {

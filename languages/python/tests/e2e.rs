@@ -197,19 +197,15 @@ fn a_shadowing_name_never_binds_to_the_outer_definition() {
     assert_eq!(
         indexed.symbols_of(
             "outer.py",
-            "return process\n#          ^^^^^^^ reference local 2",
+            "return process\n#          ^^^^^^^ reference local 0",
             "process"
         ),
-        ["local 2"]
+        ["local 0"]
     );
     // A parameter shadows the function through precedence. The outer function is never the target.
     assert_eq!(
-        indexed.symbols_of(
-            "outer.py",
-            "return process\n#          ^^^^^^^ reference local 1",
-            "process"
-        ),
-        ["local 1"]
+        indexed.symbols_of("outer.py", "(process)\n    return process", "process"),
+        [global("outer/local_shadow().(process)")]
     );
 }
 
@@ -250,15 +246,15 @@ fn a_plain_name_prefers_its_nearest_binding() {
     // `self` is the parameter. The class that the value comes from is not a second target.
     assert_eq!(
         indexed.symbols_of("flow.py", "self.v = v", "self"),
-        ["local 1"]
+        [global("flow/Child#__init__().(self)")]
     );
     // `v` is the parameter. The field that it feeds is not a second target.
     assert_eq!(
         indexed.symbols_of("flow.py", "self.v = v", "v"),
-        ["local 2"]
+        [global("flow/Child#__init__().(v)")]
     );
     // `x = make(); x` is the local `x`, not the function that made the value.
-    assert_eq!(indexed.symbols_of("flow.py", "return x", "x"), ["local 4"]);
+    assert_eq!(indexed.symbols_of("flow.py", "return x", "x"), ["local 0"]);
     // `self.v` is the field, not the parameter that the field takes its value from.
     assert_eq!(
         indexed.symbols_of("flow.py", "self.w = self.v", "v"),
@@ -292,18 +288,19 @@ fn a_real_ambiguity_survives_the_nearest_binding_rule() {
 fn a_plain_name_never_targets_an_instance_field() {
     let indexed = index("fields");
     let state_id = global("fields/State#id.");
+    let param_id = global("fields/State#__init__().(id)");
     // Without the policy, `id` reaches the parameter and the field `State#id`. It is the parameter.
     assert_eq!(
         indexed.symbols_of("fields.py", "print(id)", "id"),
-        ["local 1"]
+        [param_id.as_str()]
     );
     assert_eq!(
         indexed.symbols_of("fields.py", "assert id,", "id"),
-        ["local 1"]
+        [param_id.as_str()]
     );
     assert_eq!(
         indexed.symbols_of("fields.py", "id or \"main\"", "id"),
-        ["local 1"]
+        [param_id.as_str()]
     );
     // `self.id` is a member reference. It still resolves to the field.
     assert_eq!(
@@ -592,16 +589,212 @@ fn an_override_may_implement_a_method_of_a_later_document() {
     );
 }
 
+// ---- stub modules ----
+
+#[test]
+fn a_typing_name_resolves_to_the_symbol_of_the_stub() {
+    let indexed = index("stubs");
+    let at = |context, word| indexed.symbols_of("use.py", context, word);
+    // A stub class has a symbol in the module `typing`.
+    assert_eq!(at("import Any,", "Any"), [stdlib("typing/Any#")]);
+    assert_eq!(at("index: Dict[str, Any]", "Any"), [stdlib("typing/Any#")]);
+    // The import of a name without a class has the stub variable as its target.
+    assert_eq!(
+        at("List, Optional", "Optional"),
+        [stdlib("typing/Optional.")]
+    );
+    // The stub aliases `List` and `Dict` to the builtin classes. The symbol is the class.
+    assert_eq!(at("Dict, List,", "Dict"), [builtin("dict#")]);
+    assert_eq!(at("Dict, List,", "List"), [builtin("list#")]);
+    assert_eq!(at("rows: List[int]", "List"), [builtin("list#")]);
+    assert_eq!(at("index: Dict[str", "Dict"), [builtin("dict#")]);
+    // The import binding and the stub definition make one target, with the import role.
+    for (context, word) in [("Dict, List,", "List"), ("import Any,", "Any")] {
+        let found = indexed.find("use.py", context, word);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].symbol_roles & SymbolRole::Import as i32 != 0);
+    }
+    // A dotted use goes through the module of the stub.
+    assert_eq!(at("import typing", "typing"), [stdlib("typing/")]);
+    assert_eq!(at("-> typing.List", "typing"), [stdlib("typing/")]);
+    assert_eq!(at("-> typing.List", "List"), [builtin("list#")]);
+    assert_eq!(indexed.report.references_ambiguous, 0);
+    assert_eq!(indexed.report.references_unresolved, 0);
+
+    // The index lists the external symbols once each. A stub alias adds no `typing/List`.
+    let externals: Vec<&str> = indexed
+        .index
+        .external_symbols
+        .iter()
+        .map(|e| e.symbol.as_str())
+        .collect();
+    for wanted in [
+        stdlib("typing/"),
+        stdlib("typing/Any#"),
+        stdlib("typing/Optional."),
+        builtin("list#"),
+        builtin("dict#"),
+    ] {
+        assert_eq!(externals.iter().filter(|s| **s == wanted).count(), 1);
+    }
+    assert!(externals.iter().all(|s| !s.contains("typing/List")));
+    // No document holds the symbols of the standard library.
+    assert!(
+        indexed
+            .document("use.py")
+            .unwrap()
+            .symbols
+            .iter()
+            .all(|s| !s.symbol.contains("python-stdlib"))
+    );
+}
+
+#[test]
+fn a_project_module_named_typing_wins_over_the_stub() {
+    let scratch = tempfile::tempdir().unwrap();
+    fs::write(scratch.path().join("typing.py"), "class Any:\n    pass\n").unwrap();
+    fs::write(
+        scratch.path().join("use.py"),
+        "from typing import Any\n\nvalue: Any\n",
+    )
+    .unwrap();
+    let indexed = index_at(scratch.path());
+    assert_eq!(
+        indexed.symbols_of("use.py", "value: Any", "Any"),
+        [global("typing/Any#")]
+    );
+    assert!(indexed.index.external_symbols.is_empty());
+}
+
+// ---- parameters as global symbols ----
+
+#[test]
+fn a_parameter_of_a_global_function_has_a_global_symbol() {
+    let indexed = index("params");
+    let at = |context, word| indexed.symbols_of("lib.py", context, word);
+    let found = indexed.find("lib.py", "def make(width", "width");
+    assert_eq!(found.len(), 1);
+    assert!(is_definition(found[0]));
+    assert_eq!(found[0].symbol, global("lib/make().(width)"));
+    assert_eq!(at("Box(width)", "width"), [global("lib/make().(width)")]);
+    // `self` and `cls` are parameters too.
+    assert_eq!(
+        at("(self, size, label", "self"),
+        [global("lib/Box#__init__().(self)")]
+    );
+    assert_eq!(at("(cls, label)", "cls"), [global("lib/Box#unit().(cls)")]);
+    assert_eq!(at("cls(label)", "cls"), [global("lib/Box#unit().(cls)")]);
+    // A variable that rebinds a parameter is that parameter.
+    let rebound = global("lib/Box#resize().(size)");
+    assert_eq!(at("size = max", "size"), [rebound.as_str()]);
+    assert_eq!(at("max(size", "size"), [rebound.as_str()]);
+    assert_eq!(at("return size", "size"), [rebound.as_str()]);
+    assert!(is_definition(
+        indexed.find("lib.py", "size = max", "size")[0]
+    ));
+    // A function inside a function is out of reach of other documents. Its parameter is local.
+    let inner = at("def inner(b", "b");
+    assert!(inner[0].starts_with("local "), "{inner:?}");
+    assert_eq!(at("return b", "b"), inner);
+    // The parameter of the outer function stays global.
+    assert_eq!(at("inner(a)", "a"), [global("lib/outer().(a)")]);
+    // A parameter has the parameter kind.
+    use scip::types::symbol_information::Kind;
+    let info = indexed
+        .document("lib.py")
+        .unwrap()
+        .symbols
+        .iter()
+        .find(|s| s.symbol == global("lib/make().(width)"))
+        .unwrap();
+    assert_eq!(info.kind.enum_value().unwrap(), Kind::Parameter);
+    assert_eq!(info.display_name, "width");
+}
+
+#[test]
+fn a_keyword_argument_names_the_parameter_in_another_document() {
+    let indexed = index("params");
+    let at = |context, word| indexed.symbols_of("use.py", context, word);
+    assert_eq!(
+        at("Box(size=1", "size"),
+        [global("lib/Box#__init__().(size)")]
+    );
+    assert_eq!(
+        at("label=\"a\"", "label"),
+        [global("lib/Box#__init__().(label)")]
+    );
+    assert_eq!(
+        at("resize(size=2", "size"),
+        [global("lib/Box#resize().(size)")]
+    );
+    assert_eq!(
+        at("force=True", "force"),
+        [global("lib/Box#resize().(force)")]
+    );
+    assert_eq!(at("make(width", "width"), [global("lib/make().(width)")]);
+    assert_eq!(at("height=2", "height"), [global("lib/make().(height)")]);
+    assert_eq!(
+        at("unit(label", "label"),
+        [global("lib/Box#unit().(label)")]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
+// ---- attribute assignment targets ----
+
+#[test]
+fn an_assignment_to_a_self_attribute_is_one_definition() {
+    let indexed = index("assign");
+    // `self.size = 3` declares `Child#size`. The receiver also reaches `Base#size`.
+    // The token is the declaration, so the reference does not turn ambiguous.
+    let found = indexed.find("child.py", "self.size = 3", "size");
+    assert_eq!(found.len(), 1);
+    assert!(is_definition(found[0]));
+    assert_eq!(found[0].symbol, global("child/Child#size."));
+    // Two assignments in one class give one entity with two definitions.
+    let found = indexed.find("base.py", "self.size = 1", "size");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].symbol, global("base/Base#size."));
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
+#[test]
+fn an_assignment_to_an_attribute_of_another_value_is_a_reference() {
+    let indexed = index("assign");
+    let at = |context, word| indexed.find("child.py", context, word);
+    // The receiver decides the target: the field of the class of the value.
+    let child = at("item.size = 5", "size");
+    assert_eq!(child.len(), 1);
+    assert_eq!(child[0].symbol, global("child/Child#size."));
+    assert!(!is_definition(child[0]));
+    let base = at("other.size = 7", "size");
+    assert_eq!(base.len(), 1);
+    assert_eq!(base[0].symbol, global("base/Base#size."));
+    assert!(!is_definition(base[0]));
+    assert_eq!(
+        at("item.extra = 6", "extra")[0].symbol,
+        global("child/Child#extra.")
+    );
+    // An attribute that no class declares has no target.
+    assert!(at("item.fresh = 8", "fresh").is_empty());
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.
 fn builtin(rest: &str) -> String {
+    stdlib(&format!("builtins/{rest}"))
+}
+
+/// The symbol of a name in the standard library, such as `typing/Any#`.
+/// The version is the typeshed commit of the stub header. The builtins and the stubs share it.
+fn stdlib(rest: &str) -> String {
     let stub = tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE;
     let (_, tail) = stub.split_once("commit ").expect("a commit in the header");
     let hash: String = tail.chars().take_while(char::is_ascii_hexdigit).collect();
     assert_eq!(hash.len(), 40);
     format!(
-        "scippy python python-stdlib typeshed-{} builtins/{rest}",
+        "scippy python python-stdlib typeshed-{} {rest}",
         &hash[..12]
     )
 }
@@ -987,6 +1180,9 @@ fn run(scip: &Path, cwd: &Path, args: &[&str]) -> Output {
 
 const SCIP_FIXTURES: &[&str] = &[
     "alias",
+    "stubs",
+    "params",
+    "assign",
     "builtins",
     "flow",
     "fields",

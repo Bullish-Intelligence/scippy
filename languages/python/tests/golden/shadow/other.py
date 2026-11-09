@@ -5,12 +5,12 @@
 #    ^^^^^^^ definition scippy python workspace . other/process().
 #            kind Function
 #            display_name process
-#            ^^^^^ definition local 0
+#            ^^^^^ definition scippy python workspace . other/process().(value)
 #                  kind Parameter
 #                  display_name value
  #   ^^^^^^^ definition scippy python workspace . other/process().
      return value
-#           ^^^^^ reference local 0
+#           ^^^^^ reference scippy python workspace . other/process().(value)
  
  
  def unrelated():

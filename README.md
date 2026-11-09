@@ -38,7 +38,9 @@ The graph build used about 1.3 GB for each MB of Python source.
 
 Every symbol has the scheme `scippy`. Without a manifest, the Python pack uses the package
 `python workspace`. Pass `--package-name` and `--package-version` to change them.
-A declaration inside a function gets a document-local symbol.
+A local variable inside a function gets a document-local symbol.
+A parameter of a module-level function or of a method gets a global symbol with the parameter
+descriptor, such as `pkg/mod/f().(name)`. A keyword argument in another document can name it.
 
 ## External symbols
 
@@ -48,6 +50,11 @@ for example `builtins/len().`, `builtins/str#`, and `builtins/str#join().`.
 The version is the typeshed commit that the stub header names. The index lists each referenced
 external symbol in `Index.external_symbols`, with kind and display name.
 A definition in the project shadows the builtin of the same name.
+
+The Python rules also ship stub modules, such as `typing`. A name of a stub module has the same
+package and version, with the module in the descriptors: `typing/Any#`, `typing/`. A stub name
+that aliases a builtin class, such as `typing.List`, has the symbol of the class, `builtins/list#`.
+A project module of the same name, such as `typing.py`, wins over the stub.
 
 ## Resolution policy
 
@@ -67,6 +74,8 @@ The reconciler turns the engine paths of one reference into one target, or none.
   because Python needs `self.x`. It also refuses a name that a class body binds, for a plain name
   outside that body, because a method does not see class scope. A reference whose every end the
   pack refuses is unresolved with the reason `not-targetable`.
+- A reference at the span of a declaration of the same document names that declaration. The name
+  in `self.x = v` is the definition of the field, not a second reference.
 - A reference with no target gets no occurrence.
 
 ## Debugging an index

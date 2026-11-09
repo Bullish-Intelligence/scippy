@@ -1,5 +1,5 @@
 def process(value):
 #   ^^^^^^^ definition scippy python workspace . src/services/process().
-#           ^^^^^ definition local 0
+#           ^^^^^ definition scippy python workspace . src/services/process().(value)
     return value.upper()
-#          ^^^^^ reference local 0
+#          ^^^^^ reference scippy python workspace . src/services/process().(value)

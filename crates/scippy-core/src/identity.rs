@@ -47,7 +47,12 @@ pub enum Descriptor {
     Namespace(String),
     Type(String),
     Term(String),
-    Method { name: String, disambiguator: String },
+    Method {
+        name: String,
+        disambiguator: String,
+    },
+    /// A parameter of the method or function before it, written `(name)`.
+    Parameter(String),
 }
 
 impl Descriptor {
@@ -56,6 +61,7 @@ impl Descriptor {
             Self::Namespace(n) => (n, Suffix::Namespace, ""),
             Self::Type(n) => (n, Suffix::Type, ""),
             Self::Term(n) => (n, Suffix::Term, ""),
+            Self::Parameter(n) => (n, Suffix::Parameter, ""),
             Self::Method {
                 name,
                 disambiguator,

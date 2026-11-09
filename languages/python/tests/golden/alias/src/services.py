@@ -5,12 +5,12 @@
 #    ^^^^^^^ definition scippy python workspace . src/services/process().
 #            kind Function
 #            display_name process
-#            ^^^^^ definition local 0
+#            ^^^^^ definition scippy python workspace . src/services/process().(value)
 #                  kind Parameter
 #                  display_name value
  #   ^^^^^^^ definition scippy python workspace . src/services/process().
- #           ^^^^^ definition local 0
+ #           ^^^^^ definition scippy python workspace . src/services/process().(value)
      return value.upper()
-#           ^^^^^ reference local 0
- #          ^^^^^ reference local 0
+#           ^^^^^ reference scippy python workspace . src/services/process().(value)
+ #          ^^^^^ reference scippy python workspace . src/services/process().(value)
  

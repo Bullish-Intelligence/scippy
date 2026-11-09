@@ -26,7 +26,30 @@
 //! | module-level variable | `module/name.` | global |
 //! | method | `module/Class#name().` | global |
 //! | class variable, `self.x` attribute | `module/Class#x.` | global |
-//! | parameter, local variable, anything inside a function | none | document local |
+//! | parameter of a function that no function holds | `module/f().(name)`, `module/Class#m().(name)` | global |
+//! | local variable, anything else inside a function | none | document local |
+//!
+//! # Parameters
+//!
+//! A parameter of a module-level function or of a method has a global symbol with the parameter
+//! descriptor, as in `scip-python`. A keyword argument names it from another document:
+//! `f(name=1)` references `module/f().(name)`. `self` and `cls` are parameters like the others.
+//! A parameter of a function that another function holds is local. No other document can call
+//! that function. A parameter of a lambda gets the identity that the nearest function gives
+//! it, because the query does not see lambdas as containers.
+//!
+//! A variable that rebinds a parameter of its own function, as in `size = max(size, 1)`, is that
+//! parameter. It has the symbol of the parameter and a definition occurrence. This keeps the
+//! later uses of the name on one symbol.
+//!
+//! # Assignment targets
+//!
+//! A reference at the span of a declaration names that declaration. The name in `self.x = v`
+//! is a declaration of the field `x` of the class. It is a definition occurrence and no second
+//! reference occurrence. The receiver can reach the field of a base class, and that does not make
+//! the name ambiguous. The name in `other.x = v` declares nothing. It is a reference
+//! that resolves through the receiver, to the field of the class of the value. It has no write
+//! role. `scip-python` also marks a rebinding as a reference.
 //!
 //! A module is the file of a module, or the `__init__.py` of a package. Its symbol is the module
 //! path, as a namespace. A package file at the project root has no module path and no symbol.
@@ -80,16 +103,42 @@
 //! `scip-python` takes the version from the Python interpreter. Scippy runs no interpreter and
 //! the stub comes from typeshed, so the stub header is the only version source that is true.
 //! The version is empty when the header names no commit.
-//! A parameter or a local name of the stub has no symbol. Other code cannot address it.
+//! A local name of the stub has no symbol. Other code cannot address it. A parameter of a stub
+//! function is global like any parameter, and the stub names few parameters.
+//!
+//! # Stub modules
+//!
+//! The grammar crate ships stubs of standard library modules, listed in `STUB_MODULES`. The pack
+//! passes each one to the core as an external asset, next to the builtins. The asset name is the
+//! file name that the crate gives, `<stubs>/typing.py`, and the `ROOT_PATH` global is the root
+//! path of the stubs. The core declares the names of each stub as external symbols, with the
+//! package of the builtins:
+//!
+//! | Declaration | Symbol |
+//! |---|---|
+//! | the module | `typing/` |
+//! | a class, function, or variable of the stub | `typing/Any#`, `typing/final().`, `typing/Optional.` |
+//! | a name that the stub binds to a builtin class, as in `List = list` | `builtins/list#` |
+//!
+//! The version comes from the typeshed commit in the header of the stub. `scip-python` gives
+//! `builtins/list#` to `typing.List` too, because the type checker follows the alias. The pack
+//! finds the aliases in the stub source: a top-level line `Name = name`, where the builtins
+//! define `class name`.
+//!
+//! A reference to a typing name ends in the import binding and in the stub definition. This is
+//! the shape of a project-internal import. The binding has no declaration. The stub definition
+//! is an external declaration, so the reference resolves to its symbol. A project module that has
+//! the name of a stub, such as `typing.py`, wins over the stub.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use scippy_core::{
-    Analysis, BindingRules, Builtins, DeclKind, Descriptor, ExternalIdentity, ExtractionSpec,
-    Identity, LanguagePack, Package, ProjectModel, ProjectRelativePath, Reach, ReferenceKind,
-    Scope, SymbolKind,
+    Analysis, BindingRules, Builtins, DeclKind, Descriptor, ExternalAsset, ExternalIdentity,
+    ExtractionSpec, Identity, LanguagePack, Package, ProjectModel, ProjectRelativePath, Reach,
+    ReferenceKind, Scope, SymbolKind,
 };
+use tree_sitter_stack_graphs_python::{STUB_MODULES, STUB_ROOT_PATH, StubModule};
 
 pub struct PythonPack;
 
@@ -148,6 +197,15 @@ impl Analysis for PythonPack {
                 path: tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_PATH,
                 source: tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE,
             }),
+            assets: STUB_MODULES
+                .iter()
+                .map(|stub| ExternalAsset {
+                    name: stub.file_name(),
+                    path: stub.path,
+                    source: stub.source,
+                    globals: vec![("ROOT_PATH".to_string(), STUB_ROOT_PATH.to_string())],
+                })
+                .collect(),
         }
     }
 
@@ -174,6 +232,51 @@ struct PythonModel {
     packages: BTreeSet<String>,
     /// The version of the package that holds the builtins.
     stdlib_version: String,
+    /// The stub modules of the standard library, by the file name of the asset.
+    stubs: BTreeMap<String, Stub>,
+}
+
+/// A stub module as the project model sees it.
+struct Stub {
+    /// The path of the module, for example `["typing"]`.
+    module: Vec<String>,
+    version: String,
+    /// The names that the stub binds to a builtin class: `List = list`. The key is the name
+    /// and the value is the builtin class.
+    aliases: BTreeMap<String, String>,
+}
+
+impl Stub {
+    fn new(stub: &StubModule) -> Self {
+        Self {
+            module: stub.module.split('.').map(String::from).collect(),
+            version: stub_version(stub.source),
+            aliases: builtin_aliases(
+                stub.source,
+                tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE,
+            ),
+        }
+    }
+}
+
+/// The names that a stub binds to a builtin class, as in `List = list` at the top level.
+/// The stub names the class `list` and the builtins define `class list`.
+fn builtin_aliases(stub: &str, builtins: &str) -> BTreeMap<String, String> {
+    let is_name = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with(|c: char| c.is_ascii_digit())
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let classes: BTreeSet<&str> = builtins
+        .lines()
+        .filter_map(|line| line.strip_prefix("class "))
+        .filter_map(|rest| rest.split(['(', ':']).next())
+        .collect();
+    stub.lines()
+        .filter_map(|line| line.split_once(" = "))
+        .filter(|(name, class)| is_name(name) && is_name(class) && classes.contains(class))
+        .map(|(name, class)| (name.to_string(), class.to_string()))
+        .collect()
 }
 
 impl PythonModel {
@@ -194,6 +297,19 @@ impl PythonModel {
             stdlib_version: stub_version(
                 tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE,
             ),
+            stubs: STUB_MODULES
+                .iter()
+                .map(|stub| (stub.file_name(), Stub::new(stub)))
+                .collect(),
+        }
+    }
+
+    /// The package of the standard library, at the given version.
+    fn stdlib(version: &str) -> Package {
+        Package {
+            manager: STDLIB_MANAGER.to_string(),
+            name: STDLIB_PACKAGE.to_string(),
+            version: version.to_string(),
         }
     }
 
@@ -303,8 +419,9 @@ impl ProjectModel for PythonModel {
         path: &ProjectRelativePath,
         scopes: &[Scope],
         declaration: &Scope,
+        siblings: &[Scope],
     ) -> Identity {
-        describe(self.module_descriptors(path), scopes, declaration)
+        describe(self.module_descriptors(path), scopes, declaration, siblings)
     }
 
     fn accepts_target(
@@ -338,20 +455,57 @@ impl ProjectModel for PythonModel {
         scopes: &[Scope],
         declaration: &Scope,
     ) -> Option<ExternalIdentity> {
-        if asset != BUILTINS_ASSET {
-            return None;
+        if asset == BUILTINS_ASSET {
+            // No code names the module of the builtins.
+            if declaration.kind == DeclKind::Module {
+                return None;
+            }
+            let module = vec![Descriptor::Namespace(BUILTINS_MODULE.to_string())];
+            return self.external(&self.stdlib_version, module, scopes, declaration);
         }
-        let module = vec![Descriptor::Namespace(BUILTINS_MODULE.to_string())];
-        let identity = describe(module, scopes, declaration);
+        let stub = self.stubs.get(asset)?;
+        // The module of a stub is the module that `import typing` names.
+        if declaration.kind == DeclKind::Module {
+            let module = stub.module.iter().cloned().map(Descriptor::Namespace);
+            return Some(ExternalIdentity {
+                package: Self::stdlib(&stub.version),
+                descriptors: module.collect(),
+                kind: SymbolKind::Module,
+                display_name: declaration.name.clone(),
+            });
+        }
+        // A stub that binds a name to a builtin class, such as `List = list`, names that class.
+        // `scip-python` does the same, because the type checker follows the alias.
+        if scopes.is_empty() && declaration.kind == DeclKind::Variable {
+            if let Some(class) = stub.aliases.get(&declaration.name) {
+                let module = vec![Descriptor::Namespace(BUILTINS_MODULE.to_string())];
+                let target = Scope {
+                    kind: DeclKind::Class,
+                    name: class.clone(),
+                };
+                return self.external(&self.stdlib_version, module, &[], &target);
+            }
+        }
+        let module = stub.module.iter().cloned().map(Descriptor::Namespace);
+        self.external(&stub.version, module.collect(), scopes, declaration)
+    }
+}
+
+impl PythonModel {
+    /// The identity of a declaration of a module of the standard library.
+    fn external(
+        &self,
+        version: &str,
+        module: Vec<Descriptor>,
+        scopes: &[Scope],
+        declaration: &Scope,
+    ) -> Option<ExternalIdentity> {
+        let identity = describe(module, scopes, declaration, &[]);
         if identity.reach == Reach::Document {
             return None;
         }
         Some(ExternalIdentity {
-            package: Package {
-                manager: STDLIB_MANAGER.to_string(),
-                name: STDLIB_PACKAGE.to_string(),
-                version: self.stdlib_version.clone(),
-            },
+            package: Self::stdlib(version),
             descriptors: identity.descriptors,
             kind: identity.kind,
             display_name: identity.display_name,
@@ -364,8 +518,31 @@ fn describe(
     module_descriptors: Vec<Descriptor>,
     scopes: &[Scope],
     declaration: &Scope,
+    siblings: &[Scope],
 ) -> Identity {
     let mut descriptors = module_descriptors;
+
+    // A function that no other function holds can be called from another document.
+    // Its parameters get global symbols, so that a keyword argument can name one.
+    let function_is_global = scopes.last().is_some_and(|s| s.kind == DeclKind::Function)
+        && !scopes[..scopes.len() - 1]
+            .iter()
+            .any(|s| s.kind == DeclKind::Function);
+    // A variable that rebinds a parameter of its own function is that parameter.
+    let rebinds_parameter = declaration.kind == DeclKind::Variable
+        && scopes.last().is_some_and(|s| s.kind == DeclKind::Function)
+        && siblings
+            .iter()
+            .any(|s| s.kind == DeclKind::Parameter && s.name == declaration.name);
+    let parameter = Scope {
+        kind: DeclKind::Parameter,
+        name: declaration.name.clone(),
+    };
+    let declaration = if rebinds_parameter {
+        &parameter
+    } else {
+        declaration
+    };
 
     // The part of the chain that names the owner of the declaration.
     // A `self.x` attribute belongs to the nearest enclosing class.
@@ -409,6 +586,10 @@ fn describe(
             Descriptor::Term(declaration.name.clone()),
             SymbolKind::Variable,
         ),
+        DeclKind::Parameter if function_is_global => (
+            Descriptor::Parameter(declaration.name.clone()),
+            SymbolKind::Parameter,
+        ),
         DeclKind::Parameter => (
             Descriptor::Term(declaration.name.clone()),
             SymbolKind::Parameter,
@@ -424,7 +605,11 @@ fn describe(
     };
     descriptors.push(last);
 
-    let local = inside_function || declaration.kind == DeclKind::Parameter;
+    let local = if declaration.kind == DeclKind::Parameter {
+        !function_is_global
+    } else {
+        inside_function
+    };
     Identity {
         reach: if local {
             Reach::Document
@@ -642,6 +827,145 @@ mod tests {
         assert_eq!(names("x.py"), Some((vec!["x".into()], "x".into())));
         // A package file at the project root has no module name.
         assert!(identity("__init__.py").is_none());
+    }
+
+    fn names(identity: &Identity) -> Vec<String> {
+        identity
+            .descriptors
+            .iter()
+            .map(|d| match d {
+                Descriptor::Namespace(n) => format!("{n}/"),
+                Descriptor::Type(n) => format!("{n}#"),
+                Descriptor::Term(n) => format!("{n}."),
+                Descriptor::Method { name, .. } => format!("{name}()."),
+                Descriptor::Parameter(n) => format!("({n})"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_parameter_of_a_global_function_is_global() {
+        let model = PythonModel::new(&[]);
+        let path = ProjectRelativePath::new("m.py").unwrap();
+        let param = scope(DeclKind::Parameter, "x");
+        let id = |scopes: &[Scope], decl: &Scope, siblings: &[Scope]| {
+            model.identity(&path, scopes, decl, siblings)
+        };
+        let function = [scope(DeclKind::Function, "f")];
+        let found = id(&function, &param, &[]);
+        assert_eq!(found.reach, Reach::Global);
+        assert_eq!(found.kind, SymbolKind::Parameter);
+        assert_eq!(names(&found), ["m/", "f().", "(x)"]);
+        // A method gives its class to the path. `self` is a parameter like any other.
+        let method = [scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
+        let found = id(&method, &scope(DeclKind::Parameter, "self"), &[]);
+        assert_eq!(found.reach, Reach::Global);
+        assert_eq!(names(&found), ["m/", "C#", "m().", "(self)"]);
+        // A function that another function holds is out of reach. So are its parameters.
+        let inner = [
+            scope(DeclKind::Function, "f"),
+            scope(DeclKind::Function, "g"),
+        ];
+        assert_eq!(id(&inner, &param, &[]).reach, Reach::Document);
+        // A lambda in a class body has no function. Its parameter stays local.
+        let class = [scope(DeclKind::Class, "C")];
+        assert_eq!(id(&class, &param, &[]).reach, Reach::Document);
+        assert_eq!(id(&[], &param, &[]).reach, Reach::Document);
+    }
+
+    #[test]
+    fn a_variable_that_rebinds_a_parameter_is_the_parameter() {
+        let model = PythonModel::new(&[]);
+        let path = ProjectRelativePath::new("m.py").unwrap();
+        let function = [scope(DeclKind::Function, "f")];
+        let variable = scope(DeclKind::Variable, "x");
+        let siblings = [scope(DeclKind::Parameter, "x")];
+        let found = model.identity(&path, &function, &variable, &siblings);
+        assert_eq!(found.reach, Reach::Global);
+        assert_eq!(found.kind, SymbolKind::Parameter);
+        assert_eq!(names(&found), ["m/", "f().", "(x)"]);
+        // Another name stays a local variable.
+        let other = scope(DeclKind::Variable, "y");
+        assert_eq!(
+            model.identity(&path, &function, &other, &siblings).reach,
+            Reach::Document
+        );
+        // A class body variable never takes the parameter of a lambda.
+        let class = [scope(DeclKind::Class, "C")];
+        let found = model.identity(&path, &class, &variable, &siblings);
+        assert_eq!(found.reach, Reach::Global);
+        assert_eq!(names(&found), ["m/", "C#", "x."]);
+    }
+
+    #[test]
+    fn a_stub_alias_is_the_builtin_class() {
+        let stub = "class Any:\n    pass\nList = list\nText = str\nOther = missing\nx = 1\n    Deep = int\n";
+        let builtins = "class list(object):\n    pass\nclass str:\n    pass\n";
+        let aliases = builtin_aliases(stub, builtins);
+        assert_eq!(aliases.get("List").map(String::as_str), Some("list"));
+        assert_eq!(aliases.get("Text").map(String::as_str), Some("str"));
+        // A name of no builtin class, a plain value, and an indented line are no alias.
+        assert_eq!(aliases.len(), 2);
+    }
+
+    #[test]
+    fn a_stub_declaration_gets_an_external_symbol_in_the_standard_library() {
+        let model = PythonModel::new(&[]);
+        let asset = STUB_MODULES[0].file_name();
+        let external =
+            |scopes: &[Scope], decl: &Scope| model.external_identity(&asset, scopes, decl);
+        let any = external(&[], &scope(DeclKind::Class, "Any")).unwrap();
+        assert_eq!(names_of(&any), ["typing/", "Any#"]);
+        assert_eq!(any.package.name, "python-stdlib");
+        assert!(any.package.version.starts_with("typeshed-"));
+        // An alias of a builtin class is that class.
+        let list = external(&[], &scope(DeclKind::Variable, "List")).unwrap();
+        assert_eq!(names_of(&list), ["builtins/", "list#"]);
+        assert_eq!(list.kind, SymbolKind::Class);
+        // The same name inside a class is no alias.
+        let inner = external(
+            &[scope(DeclKind::Class, "IO")],
+            &scope(DeclKind::Variable, "List"),
+        )
+        .unwrap();
+        assert_eq!(names_of(&inner), ["typing/", "IO#", "List."]);
+        // The module has a symbol. The builtins module has none.
+        let module = external(&[], &scope(DeclKind::Module, "typing")).unwrap();
+        assert_eq!(names_of(&module), ["typing/"]);
+        assert_eq!(module.kind, SymbolKind::Module);
+        assert!(
+            model
+                .external_identity(BUILTINS_ASSET, &[], &scope(DeclKind::Module, "x"))
+                .is_none()
+        );
+        // An unknown asset gives nothing.
+        assert!(
+            model
+                .external_identity("<other>", &[], &scope(DeclKind::Class, "Any"))
+                .is_none()
+        );
+        // A local name inside a stub function gives nothing.
+        assert!(
+            external(
+                &[scope(DeclKind::Function, "f")],
+                &scope(DeclKind::Variable, "x")
+            )
+            .is_none()
+        );
+    }
+
+    fn names_of(identity: &ExternalIdentity) -> Vec<String> {
+        identity
+            .descriptors
+            .iter()
+            .map(|d| match d {
+                Descriptor::Namespace(n) => format!("{n}/"),
+                Descriptor::Type(n) => format!("{n}#"),
+                Descriptor::Term(n) => format!("{n}."),
+                Descriptor::Method { name, .. } => format!("{name}()."),
+                Descriptor::Parameter(n) => format!("({n})"),
+            })
+            .collect()
     }
 
     #[test]
