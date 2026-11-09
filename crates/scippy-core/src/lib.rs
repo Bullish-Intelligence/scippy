@@ -1,34 +1,70 @@
 //! Language-neutral Scippy indexing API.
 //!
-//! Gate 1 holds the SCIP producer: identity checking, positions, and the emitter.
-//! The project walker routes files to language packs.
-//! No stage yet extracts declarations or resolves references,
-//! so [`index_project`] writes documents without occurrences.
+//! [`index_project`] runs the whole pipeline: it walks the project, routes each file to a
+//! language pack, extracts declarations, resolves references with a private binding engine,
+//! reconciles the engine results with the declarations by source span, assigns symbol
+//! identities, and writes a SCIP index.
+//!
+//! The public surface has three parts:
+//! - the operation and its request and report: [`index_project`], [`IndexRequest`], [`IndexReport`];
+//! - the language-pack contract: [`LanguagePack`] and the types that a pack returns;
+//! - the error and diagnostic types.
+//!
+//! The binding engine, the parse trees, and the SCIP protobuf types stay private.
 
-pub mod emit;
+mod bindings;
+mod emit;
 mod error;
 mod extract;
-pub mod identity;
+mod identity;
 mod language;
-pub mod positions;
+mod pipeline;
+mod positions;
 mod project;
+mod reconcile;
 mod report;
 
+pub use emit::SymbolKind;
 pub use error::ScippyError;
-pub use extract::SourceAnchor;
-pub use language::LanguagePack;
-pub use project::ProjectRelativePath;
-pub use report::{Diagnostic, IndexReport, Severity, Stage};
+pub use identity::{Descriptor, Package};
+pub use language::{
+    Analysis, BindingRules, Builtins, DeclKind, ExtractionSpec, Identity, LanguagePack,
+    ProjectModel, Reach, Scope,
+};
+pub use project::{InputLimits, ProjectRelativePath};
+pub use report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
 
 use std::path::PathBuf;
 
-use emit::{Document, IndexData};
-
+/// What to index and where to write the result.
+#[derive(Clone, Debug)]
 pub struct IndexRequest {
     pub root: PathBuf,
     pub output: PathBuf,
     /// Fail when the run raises an error diagnostic.
     pub strict: bool,
+    pub limits: InputLimits,
+    /// Replace the package name that the language pack chooses for a project without a manifest.
+    pub package_name: Option<String>,
+    /// Replace the package version that the language pack chooses.
+    pub package_version: Option<String>,
+    /// Write one line for each reference location to this file. It is a debugging report.
+    /// The file is not part of the index.
+    pub trace: Option<PathBuf>,
+}
+
+impl IndexRequest {
+    pub fn new(root: impl Into<PathBuf>, output: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            output: output.into(),
+            strict: false,
+            limits: InputLimits::default(),
+            package_name: None,
+            package_version: None,
+            trace: None,
+        }
+    }
 }
 
 /// Index the project at `request.root` and write the SCIP file to `request.output`.
@@ -36,44 +72,5 @@ pub fn index_project(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<IndexReport, ScippyError> {
-    let found = project::discover(&request.root, &request.output, languages)?;
-
-    let documents: Vec<Document> = found
-        .files
-        .iter()
-        .map(|(path, pack)| Document {
-            path: path.clone(),
-            language: languages[*pack].scip_language().to_string(),
-            source: String::new(),
-            occurrences: Vec::new(),
-            symbols: Vec::new(),
-        })
-        .collect();
-
-    let report = IndexReport {
-        files_discovered: found.files_discovered,
-        files_indexed: documents.len(),
-        diagnostics: found.diagnostics,
-        ..Default::default()
-    };
-
-    if request.strict {
-        let errors = report
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .count();
-        if errors > 0 {
-            return Err(ScippyError::Strict { errors });
-        }
-    }
-
-    emit::write_index(
-        IndexData {
-            project_root: found.root,
-            documents,
-        },
-        &request.output,
-    )?;
-    Ok(report)
+    pipeline::run(request, languages)
 }
