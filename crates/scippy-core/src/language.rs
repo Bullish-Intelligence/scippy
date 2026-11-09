@@ -1,10 +1,124 @@
 //! The contract between the core and a language pack.
 //!
-//! Gate 1 needs only file routing and the SCIP language name.
-//! Later gates add the grammar, the binding rules, and the extraction spec.
+//! A pack supplies file routing and the SCIP language name.
+//! A pack that supports indexing also supplies an [`Analysis`]:
+//! - the grammar, the binding rules, and the optional builtins source of the resolver;
+//! - one Tree-sitter query that marks declarations and import sites;
+//! - a project model that maps a file to resolver globals and a declaration to a symbol identity.
+//!
+//! The core never reads the syntax of a language. It runs the query, reads the capture names,
+//! and asks the project model for every language decision.
 
 use std::path::Path;
 
+use crate::identity::{Descriptor, Package};
+use crate::project::ProjectRelativePath;
+
+/// What a declaration is, in terms that every language shares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DeclKind {
+    Class,
+    Function,
+    Variable,
+    Parameter,
+    Field,
+}
+
+impl DeclKind {
+    /// Parse the part after `definition.` in a capture name.
+    pub(crate) fn from_capture(name: &str) -> Option<Self> {
+        Some(match name {
+            "class" => Self::Class,
+            "function" => Self::Function,
+            "variable" => Self::Variable,
+            "parameter" => Self::Parameter,
+            "field" => Self::Field,
+            _ => return None,
+        })
+    }
+
+    /// A container can hold other declarations.
+    pub(crate) fn is_container(self) -> bool {
+        matches!(self, Self::Class | Self::Function)
+    }
+}
+
+/// One step of the declaration chain: the kind and the name of a declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Scope {
+    pub kind: DeclKind,
+    pub name: String,
+}
+
+/// How far a symbol is visible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// Other documents can address the symbol. It becomes a global SCIP symbol.
+    Global,
+    /// Only the document that declares it can address the symbol.
+    /// It becomes a `local` SCIP symbol.
+    Document,
+}
+
+/// The identity that a pack assigns to a declaration.
+///
+/// Two declarations with the same `reach` and the same `descriptors` in one document
+/// declare one entity. Python rebinding is an example. They share one symbol.
+#[derive(Clone, Debug)]
+pub struct Identity {
+    pub reach: Reach,
+    /// The full descriptor path. For a `Document` reach it is only a key.
+    pub descriptors: Vec<Descriptor>,
+    pub kind: crate::emit::SymbolKind,
+    pub display_name: String,
+}
+
+/// The pack's view of one project. The core builds it once for each indexing run.
+pub trait ProjectModel: Send + Sync {
+    /// Global variables for the binding rules of one file, for example the import root.
+    fn resolver_globals(&self, path: &ProjectRelativePath) -> Vec<(String, String)>;
+
+    /// Assign an identity to a declaration.
+    ///
+    /// `scopes` lists the enclosing declarations from the outermost to the innermost.
+    fn identity(
+        &self,
+        path: &ProjectRelativePath,
+        scopes: &[Scope],
+        declaration: &Scope,
+    ) -> Identity;
+}
+
+/// The assets that the resolver needs to compile a language.
+pub struct BindingRules {
+    /// Where the rules come from. It appears in messages only.
+    pub tsg_path: &'static str,
+    /// The `.tsg` stack graph rules.
+    pub tsg_source: &'static str,
+    /// The builtins source, when the language has one.
+    pub builtins: Option<Builtins>,
+}
+
+/// A source file that defines the names every file can see.
+pub struct Builtins {
+    pub path: &'static str,
+    pub source: &'static str,
+}
+
+/// The Tree-sitter query of a pack.
+///
+/// A match with `@name` and `@definition.<kind>` is a declaration. `@name` marks the identifier.
+/// `@definition.<kind>` marks the whole declaration. A match with `@import` marks an identifier
+/// that names an imported symbol. Other captures are ignored.
+pub struct ExtractionSpec {
+    pub query: &'static str,
+}
+
+/// A language pack. The CLI registers packs in a static list.
+///
+/// Every pack routes files. A pack that also gives an [`Analysis`] gets real indexing.
+/// A pack without analysis is a stub. The core skips its files and says so in a diagnostic.
+/// A grammar alone does not make a language supported.
 pub trait LanguagePack: Send + Sync {
     /// Short stable identifier, for example `python`.
     fn id(&self) -> &'static str;
@@ -12,4 +126,22 @@ pub trait LanguagePack: Send + Sync {
     fn scip_language(&self) -> &'static str;
     /// Return true when this pack owns the file.
     fn accepts(&self, path: &Path) -> bool;
+    /// The analysis assets. `None` when the pack does not support indexing yet.
+    fn analysis(&self) -> Option<&dyn Analysis> {
+        None
+    }
+}
+
+/// What a pack supplies so that the core can extract, resolve, and identify.
+pub trait Analysis: Send + Sync {
+    /// The Tree-sitter grammar.
+    fn grammar(&self) -> tree_sitter::Language;
+    /// The rules of the resolver.
+    fn binding_rules(&self) -> BindingRules;
+    /// The query that finds declarations and import sites.
+    fn extraction_spec(&self) -> ExtractionSpec;
+    /// The package identity that a project without a manifest uses.
+    fn default_package(&self) -> Package;
+    /// Build the project model from all files that the pack owns.
+    fn project_model(&self, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel>;
 }
