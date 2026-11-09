@@ -649,7 +649,8 @@ impl ProjectModel for TypeScriptModel {
                 Descriptor::Namespace(declaration.name.clone()),
                 SymbolKind::Namespace,
             ),
-            DeclKind::Variable => (
+            // The kinds of documents that this pack never extracts.
+            DeclKind::Variable | DeclKind::Section | DeclKind::Anchor | DeclKind::Alias => (
                 Descriptor::Term(declaration.name.clone()),
                 SymbolKind::Variable,
             ),

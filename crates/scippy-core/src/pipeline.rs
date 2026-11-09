@@ -6,14 +6,16 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::IndexRequest;
-use crate::bindings::{BindingEngine, Bound, RawBinding, ResolveLimits};
+use crate::bindings::{BindingEngine, Bound, Place, RawBinding, RawEnd, ResolveLimits};
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts, SourceAnchor};
 use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
 use crate::inherit::Inheritance;
 use crate::language::{
-    Analysis, DeclKind, ExternalAsset, LanguagePack, ProjectModel, Reach, Scope,
+    Analysis, DeclKind, Engine, ExternalAsset, LanguagePack, NativeAnalysis, NativeDocument,
+    NativeInput, NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceRole,
+    Scope, WalkRules,
 };
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
@@ -26,14 +28,23 @@ use crate::report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
 pub(crate) const SCHEME: &str = "scippy";
 
-struct PackRoute<'a>(&'a dyn LanguagePack);
+struct PackRoute<'a> {
+    pack: &'a dyn LanguagePack,
+    rules: WalkRules,
+}
 
 impl Router for PackRoute<'_> {
     fn id(&self) -> &'static str {
-        self.0.id()
+        self.pack.id()
     }
     fn accepts(&self, path: &Path) -> bool {
-        self.0.accepts(path)
+        self.pack.accepts(path)
+    }
+    fn enter_ignored(&self, relative_dir: &str) -> bool {
+        self.rules
+            .enter_ignored
+            .as_ref()
+            .is_some_and(|enter| enter(relative_dir))
     }
 }
 
@@ -60,7 +71,20 @@ pub(crate) fn run(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<IndexReport, ScippyError> {
-    let routes: Vec<PackRoute> = languages.iter().map(|p| PackRoute(*p)).collect();
+    // A pack that is not enabled for this project takes no part in the run.
+    let languages: Vec<&dyn LanguagePack> = languages
+        .iter()
+        .copied()
+        .filter(|p| p.enabled(&request.root))
+        .collect();
+    let languages = &languages[..];
+    let routes: Vec<PackRoute> = languages
+        .iter()
+        .map(|p| PackRoute {
+            pack: *p,
+            rules: p.walk_rules(&request.root),
+        })
+        .collect();
     let routers: Vec<&dyn Router> = routes.iter().map(|r| r as &dyn Router).collect();
     let found = project::discover(&request.root, &request.output, &routers, request.limits)?;
 
@@ -69,7 +93,8 @@ pub(crate) fn run(
         diagnostics: found.diagnostics,
         ..Default::default()
     };
-    let mut documents = Vec::new();
+    let mut documents: Vec<Document> = Vec::new();
+    let mut stubs: Vec<Document> = Vec::new();
     let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut trace = Vec::new();
 
@@ -78,7 +103,7 @@ pub(crate) fn run(
         if files.is_empty() {
             continue;
         }
-        let Some(analysis) = pack.analysis() else {
+        let Some(engine) = pack.engine() else {
             report.files_skipped += files.len();
             report.diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
@@ -94,17 +119,43 @@ pub(crate) fn run(
             });
             continue;
         };
-        let indexed = index_pack(
-            *pack,
-            analysis,
-            &found.root,
-            &files,
-            request,
-            &mut report,
-            &mut trace,
-        )?;
+        let indexed = match engine {
+            Engine::StackGraphs(analysis) => index_pack(
+                *pack,
+                analysis,
+                &found.root,
+                &files,
+                request,
+                &mut report,
+                &mut trace,
+            )?,
+            Engine::Native(native) => index_native_pack(
+                *pack,
+                native,
+                &found.root,
+                &files,
+                &found.all_files,
+                request,
+                &mut report,
+                &mut trace,
+            )?,
+        };
         documents.extend(indexed.documents);
+        stubs.extend(indexed.stubs);
         external_symbols.extend(indexed.external_symbols);
+    }
+    // A stub defines a symbol in a file that another pack may own. Merge it into that document.
+    for stub in stubs {
+        match documents
+            .iter_mut()
+            .find(|d: &&mut Document| d.path == stub.path)
+        {
+            Some(own) => {
+                own.occurrences.extend(stub.occurrences);
+                own.symbols.extend(stub.symbols);
+            }
+            None => documents.push(stub),
+        }
     }
 
     report.files_indexed = documents.len();
@@ -147,6 +198,8 @@ pub(crate) fn run(
 /// What one pack gives back: its documents and the external symbols that they reference.
 struct PackIndex {
     documents: Vec<Document>,
+    /// Documents of a native pack that only define symbols. See [`NativeDocument::stub`].
+    stubs: Vec<Document>,
     external_symbols: BTreeMap<SymbolId, SymbolInfo>,
 }
 
@@ -452,6 +505,253 @@ fn index_pack(
     }
     Ok(PackIndex {
         documents: out,
+        stubs: Vec::new(),
+        external_symbols: referenced,
+    })
+}
+
+/// Index the files of a native pack: the pack declares and resolves, the core finishes.
+///
+/// The pack gives declarations and the targets of each reference. The core joins each target to a
+/// declaration by document and span, applies the policy of the project model, assigns the symbol
+/// identities, and builds the documents. The shadow, bounded, and nearest-binding rules of the
+/// reconciler have nothing to act on, because a native reference has no paths.
+#[allow(clippy::too_many_arguments)]
+fn index_native_pack(
+    pack: &dyn LanguagePack,
+    native: &dyn NativeAnalysis,
+    root: &Path,
+    files: &[&FoundFile],
+    all_files: &[ProjectFile],
+    request: &IndexRequest,
+    report: &mut IndexReport,
+    trace: &mut Vec<String>,
+) -> Result<PackIndex, ScippyError> {
+    // Read the files that the pack accepts.
+    let mut sources: Vec<NativeSource> = Vec::with_capacity(files.len());
+    for file in files {
+        match read_source(root, &file.path, request.limits.max_file_bytes) {
+            Ok(text) => sources.push(NativeSource {
+                path: file.path.clone(),
+                text,
+            }),
+            Err((code, message)) => {
+                report.files_skipped += 1;
+                report.diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    stage: Stage::Discover,
+                    file: Some(file.path.as_str().to_string()),
+                    range: None,
+                    code,
+                    message,
+                });
+            }
+        }
+    }
+    let output = native.analyze(&NativeInput {
+        root,
+        files: all_files,
+        sources: &sources,
+    });
+    report.diagnostics.extend(output.diagnostics);
+    let model = native.project_model(root);
+
+    let mut package = model.package().unwrap_or_else(|| native.default_package());
+    if let Some(name) = &request.package_name {
+        package.name = name.clone();
+    }
+    if let Some(version) = &request.package_version {
+        package.version = version.clone();
+    }
+    let mut builder = IdentityBuilder::new(SCHEME, package);
+    let mut texts: HashMap<ProjectRelativePath, String> =
+        sources.into_iter().map(|s| (s.path, s.text)).collect();
+
+    // Stage F: assign identities. Each document gets its facts from the declarations of the pack.
+    let mut index = DeclarationIndex::default();
+    let mut docs: Vec<(Doc, &NativeDocument)> = Vec::with_capacity(output.documents.len());
+    for native_doc in &output.documents {
+        let source = if native_doc.stub {
+            String::new()
+        } else {
+            texts.remove(&native_doc.path).unwrap_or_default()
+        };
+        let anchor = |span: (u32, u32)| SourceAnchor {
+            path: native_doc.path.clone(),
+            start_byte: span.0,
+            end_byte: span.1,
+        };
+        let mut facts = Facts::default();
+        if native_doc.module {
+            facts.module = Some(DeclarationFact {
+                anchor: anchor((0, 0)),
+                name: String::new(),
+                kind: DeclKind::Module,
+                extent: (0, source.len() as u32),
+                extra_anchors: Vec::new(),
+            });
+        }
+        for d in &native_doc.declarations {
+            facts.declarations.push(DeclarationFact {
+                anchor: anchor(d.span),
+                name: d.name.clone(),
+                kind: d.kind,
+                extent: d.span,
+                extra_anchors: Vec::new(),
+            });
+            if d.of_module {
+                facts.module_aliases.push(d.span);
+            }
+        }
+        facts.reads = native_doc
+            .references
+            .iter()
+            .filter(|r| r.role == ReferenceRole::Read)
+            .map(|r| r.span)
+            .collect();
+        facts.reads.sort_unstable();
+        let mut doc = Doc {
+            path: native_doc.path.clone(),
+            source,
+            facts,
+            declared: Vec::new(),
+        };
+        doc.declared = assign_identities(&*model, &mut builder, &doc)?;
+        report.declarations += doc.declared.len();
+        for d in &doc.declared {
+            index.insert_scoped(
+                d.fact.anchor.clone(),
+                d.symbol.clone(),
+                d.scopes.clone(),
+                d.declaration.clone(),
+            );
+        }
+        docs.push((doc, native_doc));
+    }
+
+    // The symbols that no document declares. A reference to one of them is external.
+    let mut externals: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
+    let mut virtual_anchors: HashMap<&str, SourceAnchor> = HashMap::new();
+    for (n, virtual_symbol) in output.virtual_symbols.iter().enumerate() {
+        let identity = &virtual_symbol.identity;
+        match IdentityBuilder::new(SCHEME, identity.package.clone()).symbol(&identity.descriptors) {
+            Ok(symbol) => {
+                let anchor = SourceAnchor {
+                    path: ProjectRelativePath::new("<virtual>")?,
+                    start_byte: n as u32,
+                    end_byte: n as u32 + 1,
+                };
+                index.insert_external_scoped(
+                    anchor.clone(),
+                    symbol.clone(),
+                    Vec::new(),
+                    Scope {
+                        kind: DeclKind::Variable,
+                        name: identity.display_name.clone(),
+                    },
+                );
+                virtual_anchors.insert(&virtual_symbol.key, anchor);
+                externals.entry(symbol.clone()).or_insert(SymbolInfo {
+                    symbol,
+                    kind: identity.kind,
+                    display_name: identity.display_name.clone(),
+                    implements: Vec::new(),
+                    references: Vec::new(),
+                });
+            }
+            Err(error) => report.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                stage: Stage::Identity,
+                file: None,
+                range: None,
+                code: "external-symbol-invalid",
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    // Stage D replaced: the targets of the pack are the ends of the bindings.
+    let place = |anchor: SourceAnchor, external: bool| Place { anchor, external };
+    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
+    for (_, native_doc) in &docs {
+        let bindings = native_doc.references.iter().map(|r| {
+            let ends = r
+                .targets
+                .iter()
+                .filter_map(|target| match target {
+                    NativeTarget::Declaration(path, span) => Some(place(
+                        SourceAnchor {
+                            path: path.clone(),
+                            start_byte: span.0,
+                            end_byte: span.1,
+                        },
+                        false,
+                    )),
+                    NativeTarget::Virtual(key) => virtual_anchors
+                        .get(key.as_str())
+                        .map(|anchor| place(anchor.clone(), true)),
+                })
+                .map(|place| RawEnd {
+                    place: Some(place),
+                    syntax_type: None,
+                    through: Vec::new(),
+                })
+                .collect();
+            RawBinding {
+                reference: SourceAnchor {
+                    path: native_doc.path.clone(),
+                    start_byte: r.span.0,
+                    end_byte: r.span.1,
+                },
+                ends,
+                shadowed_ends: Vec::new(),
+                bound: None,
+            }
+        });
+        by_document.insert(native_doc.path.clone(), bindings.collect());
+    }
+
+    // Stage E: reconcile. Stage G: build the documents.
+    let language = pack.scip_language().to_string();
+    let mut out = Vec::new();
+    let mut stubs = Vec::new();
+    let mut referenced: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
+    for (doc, native_doc) in docs {
+        let bindings = by_document.remove(&doc.path).unwrap_or_default();
+        let targeting = Targeting::new(&*model, Vec::new());
+        let reconciled = reconcile(
+            &index,
+            bindings,
+            &HashSet::new(),
+            &HashSet::new(),
+            &targeting,
+        );
+        for r in &reconciled {
+            count(report, r);
+            if let BindingOutcome::Resolved(symbol) = &r.outcome {
+                if let Some(info) = externals.get(symbol) {
+                    report.references_external += 1;
+                    referenced
+                        .entry(symbol.clone())
+                        .or_insert_with(|| info.clone());
+                }
+            }
+        }
+        if request.trace.is_some() {
+            let lines = LineIndex::new(&doc.source);
+            trace.extend(reconciled.iter().map(|r| trace_line(&lines, r)));
+        }
+        let document_language = if native_doc.stub { "" } else { &language };
+        let built = build_document(document_language, doc, &reconciled);
+        if native_doc.stub {
+            stubs.push(built);
+        } else {
+            out.push(built);
+        }
+    }
+    Ok(PackIndex {
+        documents: out,
+        stubs,
         external_symbols: referenced,
     })
 }
@@ -626,6 +926,7 @@ fn declare_asset(
                     kind: identity.kind,
                     display_name: identity.display_name,
                     implements: Vec::new(),
+                    references: Vec::new(),
                 });
             }
             Err(error) => report
@@ -898,8 +1199,27 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
                 kind: d.kind,
                 display_name: d.display_name.clone(),
                 implements: Vec::new(),
+                references: Vec::new(),
             });
     }
+    // A second name of the module refers to the module.
+    let module_symbol = doc
+        .declared
+        .iter()
+        .find(|d| d.fact.kind == DeclKind::Module)
+        .map(|d| d.symbol.clone());
+    if let Some(module) = &module_symbol {
+        for d in doc.declared.iter().filter(|d| {
+            doc.facts
+                .module_aliases
+                .contains(&(d.fact.anchor.start_byte, d.fact.anchor.end_byte))
+        }) {
+            if let Some(info) = symbols.get_mut(&d.symbol) {
+                info.references = vec![module.clone()];
+            }
+        }
+    }
+    let reads: BTreeSet<(u32, u32)> = doc.facts.reads.iter().copied().collect();
     let imports: BTreeSet<(u32, u32)> = doc.facts.imports.iter().copied().collect();
     let hidden: BTreeSet<(u32, u32)> = doc.facts.hidden.iter().copied().collect();
     for r in reconciled {
@@ -918,6 +1238,8 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
             symbol: symbol.clone(),
             role: if imports.contains(&span) {
                 Role::Import
+            } else if reads.contains(&span) {
+                Role::ReadAccess
             } else {
                 Role::Reference
             },

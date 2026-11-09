@@ -27,6 +27,8 @@ pub(crate) enum Role {
     Reference,
     Definition,
     Import,
+    /// The occurrence reads the content of the symbol, as an embed does.
+    ReadAccess,
 }
 
 /// A symbol occurrence. The span is in bytes of the document source.
@@ -57,6 +59,8 @@ pub enum SymbolKind {
     Namespace,
     TypeParameter,
     Property,
+    File,
+    Key,
 }
 
 /// Metadata of a symbol that the document defines.
@@ -68,6 +72,8 @@ pub(crate) struct SymbolInfo {
     /// The symbols that this symbol implements, sorted. An override method implements the
     /// method of the base class that it shadows.
     pub implements: Vec<SymbolId>,
+    /// The symbols that this symbol refers to, sorted. An alias refers to its document.
+    pub references: Vec<SymbolId>,
 }
 
 /// One source file.
@@ -313,6 +319,7 @@ fn scip_occurrence(range: Range, symbol: SymbolId, role: Role) -> ScipOccurrence
         Role::Reference => 0,
         Role::Definition => SymbolRole::Definition as i32,
         Role::Import => SymbolRole::Import as i32,
+        Role::ReadAccess => SymbolRole::ReadAccess as i32,
     };
     ScipOccurrence {
         symbol: symbol.as_str().to_string(),
@@ -340,6 +347,8 @@ fn scip_symbol(info: SymbolInfo) -> SymbolInformation {
         SymbolKind::Namespace => Kind::Namespace,
         SymbolKind::TypeParameter => Kind::TypeParameter,
         SymbolKind::Property => Kind::Property,
+        SymbolKind::File => Kind::File,
+        SymbolKind::Key => Kind::Key,
     };
     SymbolInformation {
         symbol: info.symbol.as_str().to_string(),
@@ -353,6 +362,11 @@ fn scip_symbol(info: SymbolInfo) -> SymbolInformation {
                 is_implementation: true,
                 ..Default::default()
             })
+            .chain(info.references.into_iter().map(|target| Relationship {
+                symbol: target.as_str().to_string(),
+                is_reference: true,
+                ..Default::default()
+            }))
             .collect(),
         ..Default::default()
     }
@@ -421,6 +435,7 @@ mod tests {
             symbol,
             kind: SymbolKind::Function,
             implements: Vec::new(),
+            references: Vec::new(),
         }
     }
 

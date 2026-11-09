@@ -4,12 +4,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::ScippyError;
+use crate::language::ProjectFile;
 use crate::report::{Diagnostic, Severity, Stage};
 
 /// What the walker needs from a language pack: the name and the file test.
 pub(crate) trait Router {
     fn id(&self) -> &'static str;
     fn accepts(&self, path: &Path) -> bool;
+    /// Say whether the pack wants to enter a directory that the walker ignores by default.
+    fn enter_ignored(&self, relative_dir: &str) -> bool {
+        let _ = relative_dir;
+        false
+    }
 }
 
 /// Limits on the input of one indexing run.
@@ -100,6 +106,8 @@ pub(crate) struct Discovery {
     /// The canonical project root.
     pub root: PathBuf,
     pub files: Vec<FoundFile>,
+    /// Every regular file that the walker saw, whether a pack accepted it or not.
+    pub all_files: Vec<ProjectFile>,
     /// Count of all regular files that the walker saw.
     pub files_discovered: usize,
     pub diagnostics: Vec<Diagnostic>,
@@ -134,11 +142,12 @@ pub(crate) fn discover(
         found: Discovery {
             root: root.clone(),
             files: Vec::new(),
+            all_files: Vec::new(),
             files_discovered: 0,
             diagnostics: Vec::new(),
         },
     };
-    walk.directory(&root, "");
+    walk.directory(&root, "", None);
     Ok(walk.found)
 }
 
@@ -168,7 +177,9 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    fn directory(&mut self, dir: &Path, prefix: &str) {
+    /// `only` names the one pack that owns the files of this directory. The walker entered the
+    /// directory for that pack, although it ignores such a directory by default.
+    fn directory(&mut self, dir: &Path, prefix: &str, only: Option<usize>) {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(e) => {
@@ -189,11 +200,19 @@ impl Walk<'_> {
             let utf8 = name.to_str();
 
             if kind.is_dir() {
-                if utf8.is_some_and(|n| IGNORED_DIRS.contains(&n)) {
-                    continue;
+                let mut owner = only;
+                if let Some(n) = utf8.filter(|n| IGNORED_DIRS.contains(n)) {
+                    let relative = format!("{prefix}{n}");
+                    let wanting = (0..self.languages.len()).find(|&i| {
+                        only.is_none_or(|o| o == i) && self.languages[i].enter_ignored(&relative)
+                    });
+                    if wanting.is_none() {
+                        continue;
+                    }
+                    owner = wanting;
                 }
                 match utf8 {
-                    Some(n) => self.directory(&path, &format!("{prefix}{n}/")),
+                    Some(n) => self.directory(&path, &format!("{prefix}{n}/"), owner),
                     None => self.warn(
                         Severity::Warning,
                         "non-utf8-path",
@@ -205,6 +224,7 @@ impl Walk<'_> {
             }
 
             let accepting: Vec<usize> = (0..self.languages.len())
+                .filter(|&i| only.is_none_or(|o| o == i))
                 .filter(|&i| self.languages[i].accepts(Path::new(&name)))
                 .collect();
 
@@ -223,7 +243,19 @@ impl Walk<'_> {
                 continue;
             }
             self.found.files_discovered += 1;
-            if path == self.output || accepting.is_empty() {
+            if path == self.output {
+                continue;
+            }
+            if let Some(relative) =
+                utf8.and_then(|n| ProjectRelativePath::new(&format!("{prefix}{n}")).ok())
+            {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                self.found.all_files.push(ProjectFile {
+                    path: relative,
+                    size,
+                });
+            }
+            if accepting.is_empty() {
                 continue;
             }
             let Some(n) = utf8 else {
@@ -406,6 +438,62 @@ mod tests {
         .unwrap();
         assert!(found.files.is_empty());
         assert_eq!(found.diagnostics[0].code, "ambiguous-language");
+    }
+
+    #[test]
+    fn lists_every_regular_file_for_native_packs() {
+        let dir = tempfile::tempdir().unwrap();
+        for f in ["a.py", "b.png", "sub/c.txt", "node_modules/x.js"] {
+            touch(dir.path(), f);
+        }
+        let py = Ext("python", "py");
+        let found = discover(
+            dir.path(),
+            &dir.path().join("o.scip"),
+            &[&py],
+            InputLimits::default(),
+        )
+        .unwrap();
+        let all: Vec<_> = found.all_files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(all, ["a.py", "b.png", "sub/c.txt"]);
+        assert_eq!(found.files.len(), 1);
+    }
+
+    struct Enter(&'static str, &'static str, bool);
+    impl Router for Enter {
+        fn id(&self) -> &'static str {
+            self.0
+        }
+        fn accepts(&self, path: &Path) -> bool {
+            path.extension().is_some_and(|e| e == self.1)
+        }
+        fn enter_ignored(&self, relative_dir: &str) -> bool {
+            self.2 && relative_dir.ends_with("target")
+        }
+    }
+
+    #[test]
+    fn a_pack_can_enter_an_ignored_folder_for_its_own_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for f in [
+            "target/n.md",
+            "target/x.py",
+            "a/target/m.md",
+            "node_modules/q.md",
+        ] {
+            touch(dir.path(), f);
+        }
+        let (md, py) = (Enter("md", "md", true), Enter("py", "py", false));
+        let found = discover(
+            dir.path(),
+            &dir.path().join("o.scip"),
+            &[&md, &py],
+            InputLimits::default(),
+        )
+        .unwrap();
+        let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
+        // The other pack gets no file below the folder. `node_modules` stays closed.
+        assert_eq!(paths, ["a/target/m.md", "target/n.md"]);
     }
 
     #[cfg(unix)]

@@ -55,6 +55,10 @@ pub(crate) struct Facts {
     pub aliases: Vec<((u32, u32), (u32, u32))>,
     /// Spans whose references get no occurrence in the output.
     pub hidden: Vec<(u32, u32)>,
+    /// Spans of the declarations that are second names of the module. A native pack gives them.
+    pub module_aliases: Vec<(u32, u32)>,
+    /// Spans of the references that read the content of their target. A native pack gives them.
+    pub reads: Vec<(u32, u32)>,
     /// Declarations that two captures claimed with different kinds. The extractor drops them.
     pub conflicts: Vec<(u32, u32)>,
 }

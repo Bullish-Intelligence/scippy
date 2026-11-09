@@ -13,6 +13,7 @@ use std::path::Path;
 
 use crate::identity::{Descriptor, Package};
 use crate::project::ProjectRelativePath;
+use crate::report::Diagnostic;
 
 /// What a declaration is, in terms that every language shares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -34,6 +35,12 @@ pub enum DeclKind {
     TypeParameter,
     /// The module of a document. The core gives it an empty anchor at the start of the module node.
     Module,
+    /// A titled part of a document, such as a heading.
+    Section,
+    /// A named point inside a document, such as a block marker.
+    Anchor,
+    /// A second name of a document or an entity.
+    Alias,
 }
 
 impl DeclKind {
@@ -337,20 +344,167 @@ pub struct ExtractionSpec {
 
 /// A language pack. The CLI registers packs in a static list.
 ///
-/// Every pack routes files. A pack that also gives an [`Analysis`] gets real indexing.
-/// A pack without analysis is a stub. The core skips its files and says so in a diagnostic.
+/// Every pack routes files. A pack that also gives an [`Engine`] gets real indexing.
+/// A pack without an engine is a stub. The core skips its files and says so in a diagnostic.
 /// A grammar alone does not make a language supported.
 pub trait LanguagePack: Send + Sync {
     /// Short stable identifier, for example `python`.
     fn id(&self) -> &'static str;
     /// The SCIP language name written to `Document.language`, for example `Python`.
     fn scip_language(&self) -> &'static str;
-    /// Return true when this pack owns the file.
+    /// Return true when this pack owns the file. `path` is the file name only.
     fn accepts(&self, path: &Path) -> bool;
-    /// The analysis assets. `None` when the pack does not support indexing yet.
+    /// The Stack Graphs analysis assets. `None` when the pack does not use that engine.
     fn analysis(&self) -> Option<&dyn Analysis> {
         None
     }
+    /// The engine that indexes the files of this pack. `None` when the pack does not support
+    /// indexing yet. The default is the Stack Graphs engine, when [`LanguagePack::analysis`]
+    /// gives assets.
+    fn engine(&self) -> Option<Engine<'_>> {
+        self.analysis().map(Engine::StackGraphs)
+    }
+    /// Say whether the pack takes part in an indexing run for the project at `root`.
+    /// A pack that is not enabled claims no file. The default is yes.
+    fn enabled(&self, root: &Path) -> bool {
+        let _ = root;
+        true
+    }
+    /// Rules for the walk of the project at `root`. The default changes nothing.
+    fn walk_rules(&self, root: &Path) -> WalkRules {
+        let _ = root;
+        WalkRules::default()
+    }
+}
+
+/// How a pack changes the walk of the project.
+///
+/// The walker never enters some directories, such as `node_modules`.
+/// A pack can ask to enter such a directory, for its own files only.
+#[derive(Default)]
+pub struct WalkRules {
+    /// Called with the project-relative path of a directory that the walker ignores by default.
+    /// Return true to enter it. The pack then owns the files below it, and no other pack does.
+    #[allow(clippy::type_complexity)]
+    pub enter_ignored: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
+}
+
+/// The engine that turns the files of a pack into bindings.
+pub enum Engine<'a> {
+    /// A Tree-sitter grammar, Stack Graphs rules, and a query. The resolver is a graph search.
+    StackGraphs(&'a dyn Analysis),
+    /// The pack reads its own files and resolves its own references.
+    /// It returns declarations and the targets of each reference. The core still joins the
+    /// targets to declarations, assigns identities, and writes the index.
+    Native(&'a dyn NativeAnalysis),
+}
+
+/// A regular file that the walker saw. A native pack sees all of them, not only its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectFile {
+    pub path: ProjectRelativePath,
+    pub size: u64,
+}
+
+/// A file that the core read for a native pack.
+#[derive(Clone, Debug)]
+pub struct NativeSource {
+    pub path: ProjectRelativePath,
+    pub text: String,
+}
+
+/// What the core gives a native pack.
+pub struct NativeInput<'a> {
+    pub root: &'a Path,
+    /// Every regular file of the project that the walker saw, in walk order.
+    pub files: &'a [ProjectFile],
+    /// The files that the pack accepts and that the core could read, in walk order.
+    pub sources: &'a [NativeSource],
+}
+
+/// How a reference occurrence reads its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReferenceRole {
+    Reference,
+    /// The occurrence reads the content of the target, as an embed does.
+    Read,
+}
+
+/// A declaration that a native pack found.
+#[derive(Clone, Debug)]
+pub struct NativeDeclaration {
+    /// The span of the declared name, in bytes. It is the definition occurrence and the join key.
+    pub span: (u32, u32),
+    /// The name that the project model sees. The pack makes it unique inside its document.
+    pub name: String,
+    pub kind: DeclKind,
+    /// The declaration is a second name of the module of its document, such as an alias.
+    /// The symbol records a reference to the module.
+    pub of_module: bool,
+}
+
+/// The target of a native reference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NativeTarget {
+    /// A declaration in a document of the project: the document and the span of the name.
+    /// The module of a document has the span `(0, 0)`.
+    Declaration(ProjectRelativePath, (u32, u32)),
+    /// A symbol that the pack declares in [`NativeOutput::virtual_symbols`], by its key.
+    Virtual(String),
+}
+
+/// A reference that a native pack found, with every target that it can name.
+///
+/// One target is a resolved reference. Two or more targets are an ambiguous reference.
+/// No target is an unresolved reference.
+#[derive(Clone, Debug)]
+pub struct NativeReference {
+    pub span: (u32, u32),
+    pub role: ReferenceRole,
+    pub targets: Vec<NativeTarget>,
+}
+
+/// A document of a native pack.
+#[derive(Clone, Debug)]
+pub struct NativeDocument {
+    pub path: ProjectRelativePath,
+    /// A stub has no text of its own. It exists to define a symbol, for example for a file
+    /// that is not source code. The core gives it empty text, no language, and a definition
+    /// at the start, and it merges the stub into a document of another pack at the same path.
+    pub stub: bool,
+    /// The document has a module. The module has the empty span `(0, 0)`.
+    pub module: bool,
+    pub declarations: Vec<NativeDeclaration>,
+    pub references: Vec<NativeReference>,
+}
+
+/// A symbol that no document of the project declares, such as a tag.
+#[derive(Clone, Debug)]
+pub struct VirtualSymbol {
+    pub key: String,
+    pub identity: ExternalIdentity,
+}
+
+/// What a native pack gives back.
+#[derive(Debug, Default)]
+pub struct NativeOutput {
+    pub documents: Vec<NativeDocument>,
+    pub virtual_symbols: Vec<VirtualSymbol>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// A pack that reads its own files and resolves its own references.
+///
+/// The pack sees the whole project at once, so a reference can name a file of any kind.
+/// The core runs the shared stages after it: the join of targets to declarations, the policy
+/// of the project model, the symbol identities, and the writer.
+pub trait NativeAnalysis: Send + Sync {
+    /// The package identity that a project without a manifest uses.
+    fn default_package(&self) -> Package;
+    /// Build the project model for one run. `root` is the project root.
+    fn project_model(&self, root: &Path) -> Box<dyn ProjectModel>;
+    /// Analyze the project: find the declarations and resolve the references.
+    fn analyze(&self, input: &NativeInput) -> NativeOutput;
 }
 
 /// What a pack supplies so that the core can extract, resolve, and identify.
