@@ -17,6 +17,7 @@ mod emit;
 mod error;
 mod extract;
 mod identity;
+mod inherit;
 mod language;
 mod pipeline;
 mod positions;

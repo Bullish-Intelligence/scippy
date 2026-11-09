@@ -41,6 +41,8 @@ pub(crate) struct Facts {
     pub imports: Vec<(u32, u32)>,
     /// Spans of identifiers that name a member of a value, such as the `x` in `a.x`.
     pub members: Vec<(u32, u32)>,
+    /// Spans of identifiers that name a supertype in the header of a class.
+    pub supertypes: Vec<(u32, u32)>,
     /// Declarations that two captures claimed with different kinds. The extractor drops them.
     pub conflicts: Vec<(u32, u32)>,
 }
@@ -60,6 +62,7 @@ pub(crate) struct Extractor {
     import: Option<u32>,
     member: Option<u32>,
     module: Option<u32>,
+    supertype: Option<u32>,
     definitions: Vec<(u32, DeclKind)>,
 }
 
@@ -73,6 +76,7 @@ impl Extractor {
         let mut import = None;
         let mut member = None;
         let mut module = None;
+        let mut supertype = None;
         let mut definitions = Vec::new();
         for (index, capture) in query.capture_names().iter().enumerate() {
             let index = index as u32;
@@ -81,6 +85,7 @@ impl Extractor {
                 "import" => import = Some(index),
                 "member" => member = Some(index),
                 "module" => module = Some(index),
+                "supertype" => supertype = Some(index),
                 other => {
                     if let Some(kind) = other.strip_prefix("definition.") {
                         let kind = DeclKind::from_capture(kind)
@@ -98,6 +103,7 @@ impl Extractor {
             import,
             member,
             module,
+            supertype,
             definitions,
         })
     }
@@ -125,6 +131,7 @@ impl Extractor {
         let mut by_anchor: BTreeMap<(u32, u32), Vec<DeclarationFact>> = BTreeMap::new();
         let mut imports = Vec::new();
         let mut members = Vec::new();
+        let mut supertypes = Vec::new();
         let mut module = None;
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&self.query, tree.root_node(), source.as_bytes());
@@ -145,6 +152,9 @@ impl Extractor {
                     kind: DeclKind::Module,
                     extent: (start, whole.end_byte() as u32),
                 });
+            }
+            if let Some(supertype) = self.supertype.and_then(node) {
+                supertypes.push((supertype.start_byte() as u32, supertype.end_byte() as u32));
             }
             if let Some(member) = self.member.and_then(node) {
                 members.push((member.start_byte() as u32, member.end_byte() as u32));
@@ -193,6 +203,9 @@ impl Extractor {
         members.sort_unstable();
         members.dedup();
         facts.members = members;
+        supertypes.sort_unstable();
+        supertypes.dedup();
+        facts.supertypes = supertypes;
         facts
     }
 }

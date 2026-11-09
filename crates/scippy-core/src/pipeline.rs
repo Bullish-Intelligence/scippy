@@ -1,6 +1,6 @@
 //! The indexing pipeline: discover, parse, extract, bind, reconcile, identify, emit.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -11,6 +11,7 @@ use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts};
 use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
+use crate::inherit::Inheritance;
 use crate::language::{Analysis, DeclKind, LanguagePack, ProjectModel, Reach, Scope};
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
@@ -285,6 +286,9 @@ fn index_pack(
 
     let language = pack.scip_language().to_string();
     let mut out = Vec::with_capacity(docs.len());
+    let mut inheritance = Inheritance::default();
+    // The document that defines each method that can override another.
+    let mut method_documents: BTreeMap<SymbolId, usize> = BTreeMap::new();
     let mut referenced: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
@@ -319,12 +323,75 @@ fn index_pack(
             let lines = LineIndex::new(&doc.source);
             trace.extend(reconciled.iter().map(|r| trace_line(&lines, r)));
         }
+        record_inheritance(&doc, &reconciled, &mut inheritance);
+        for d in doc.declared.iter().filter(|d| is_method(d)) {
+            method_documents.insert(d.symbol.clone(), out.len());
+        }
         out.push(build_document(&language, doc, &reconciled));
+    }
+    // Stage G: an override method implements the method that it shadows.
+    for (method, bases) in inheritance.overrides() {
+        let Some(&at) = method_documents.get(&method) else {
+            continue;
+        };
+        let symbols = &mut out[at].symbols;
+        if let Ok(i) = symbols.binary_search_by(|s| s.symbol.cmp(&method)) {
+            symbols[i].implements = bases.into_iter().collect();
+        }
     }
     Ok(PackIndex {
         documents: out,
         external_symbols: referenced,
     })
+}
+
+/// A method that can override or be overridden: a function that a class directly holds,
+/// with a symbol that other documents can address.
+fn is_method(d: &Declared) -> bool {
+    d.fact.kind == DeclKind::Function
+        && !d.symbol.is_local()
+        && d.scopes.last().is_some_and(|s| s.kind == DeclKind::Class)
+}
+
+/// The innermost class declaration whose extent holds the span.
+fn enclosing_class(declared: &[Declared], start: u32, end: u32) -> Option<&Declared> {
+    declared
+        .iter()
+        .filter(|d| d.fact.kind == DeclKind::Class)
+        .filter(|d| d.fact.extent.0 <= start && end <= d.fact.extent.1)
+        .min_by_key(|d| d.fact.extent.1 - d.fact.extent.0)
+}
+
+/// Add the supertypes and the methods of the classes of one document.
+fn record_inheritance(doc: &Doc, reconciled: &[Reconciled], inheritance: &mut Inheritance) {
+    for method in doc.declared.iter().filter(|d| is_method(d)) {
+        let (start, end) = method.fact.extent;
+        if let Some(class) = enclosing_class(&doc.declared, start, end) {
+            if !class.symbol.is_local() {
+                inheritance.add_method(&class.symbol, &method.display_name, method.symbol.clone());
+            }
+        }
+    }
+    let resolved: HashMap<(u32, u32), &SymbolId> = reconciled
+        .iter()
+        .filter_map(|r| match &r.outcome {
+            BindingOutcome::Resolved(symbol) => {
+                Some(((r.reference.start_byte, r.reference.end_byte), symbol))
+            }
+            _ => None,
+        })
+        .collect();
+    for &(start, end) in &doc.facts.supertypes {
+        let (Some(class), Some(supertype)) = (
+            enclosing_class(&doc.declared, start, end),
+            resolved.get(&(start, end)),
+        ) else {
+            continue;
+        };
+        if !class.symbol.is_local() {
+            inheritance.add_supertype(&class.symbol, (*supertype).clone());
+        }
+    }
 }
 
 /// Parse the external assets of the pack and give their declarations identities.
@@ -390,6 +457,7 @@ fn declare_external(
                     symbol,
                     kind: identity.kind,
                     display_name: identity.display_name,
+                    implements: Vec::new(),
                 });
             }
             Err(error) => report
@@ -630,6 +698,7 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
                 symbol: d.symbol.clone(),
                 kind: d.kind,
                 display_name: d.display_name.clone(),
+                implements: Vec::new(),
             });
     }
     let imports: BTreeSet<(u32, u32)> = doc.facts.imports.iter().copied().collect();

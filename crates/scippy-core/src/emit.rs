@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use protobuf::Message;
 use scip::types::{
     Document as ScipDocument, Index, Metadata, MultiLineRange, Occurrence as ScipOccurrence,
-    PositionEncoding, ProtocolVersion, SingleLineRange, SymbolInformation, SymbolRole,
-    TextEncoding, ToolInfo, occurrence::Typed_range, symbol_information::Kind,
+    PositionEncoding, ProtocolVersion, Relationship, SingleLineRange, SymbolInformation,
+    SymbolRole, TextEncoding, ToolInfo, occurrence::Typed_range, symbol_information::Kind,
 };
 
 use crate::error::ScippyError;
@@ -58,6 +58,9 @@ pub(crate) struct SymbolInfo {
     pub symbol: SymbolId,
     pub kind: SymbolKind,
     pub display_name: String,
+    /// The symbols that this symbol implements, sorted. An override method implements the
+    /// method of the base class that it shadows.
+    pub implements: Vec<SymbolId>,
 }
 
 /// One source file.
@@ -328,6 +331,15 @@ fn scip_symbol(info: SymbolInfo) -> SymbolInformation {
         symbol: info.symbol.as_str().to_string(),
         kind: kind.into(),
         display_name: info.display_name,
+        relationships: info
+            .implements
+            .into_iter()
+            .map(|target| Relationship {
+                symbol: target.as_str().to_string(),
+                is_implementation: true,
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     }
 }
@@ -394,6 +406,7 @@ mod tests {
             display_name: "x".into(),
             symbol,
             kind: SymbolKind::Function,
+            implements: Vec::new(),
         }
     }
 

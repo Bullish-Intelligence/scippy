@@ -518,6 +518,56 @@ fn a_module_does_not_make_a_name_ambiguous() {
     assert_eq!(indexed.report.references_ambiguous, 0);
 }
 
+// ---- override relationships ----
+
+/// The `is_implementation` targets of a symbol, from its symbol information.
+fn implements(indexed: &Indexed, path: &str, symbol: &str) -> Vec<String> {
+    let info = indexed
+        .document(path)
+        .unwrap()
+        .symbols
+        .iter()
+        .find(|s| s.symbol == symbol)
+        .unwrap_or_else(|| panic!("no symbol information for {symbol}"));
+    for relationship in &info.relationships {
+        assert!(relationship.is_implementation);
+        assert!(!relationship.is_reference);
+        assert!(!relationship.is_type_definition);
+        assert!(!relationship.is_definition);
+    }
+    info.relationships
+        .iter()
+        .map(|r| r.symbol.clone())
+        .collect()
+}
+
+#[test]
+fn an_override_implements_the_method_that_it_shadows() {
+    let indexed = index("overrides");
+    let at = |symbol: &str| implements(&indexed, "child.py", &global(symbol));
+    // The base class comes through an alias in the import: `Child(Root)`.
+    assert_eq!(at("child/Child#run()."), [global("base/Base#run().")]);
+    // The nearest class that has the method wins. `Grand.run` shadows `Child.run`.
+    assert_eq!(at("child/Grand#run()."), [global("child/Child#run().")]);
+    // `Child` has no `stop`, so `Grand.stop` shadows the method of `Base`, two levels up.
+    assert_eq!(at("child/Grand#stop()."), [global("base/Base#stop().")]);
+    // A qualified base class: `Qualified(base.Base)`.
+    assert_eq!(at("child/Qualified#keep()."), [global("base/Base#keep().")]);
+    // Two base classes give one relationship on each branch, in symbol order.
+    assert_eq!(
+        at("child/Several#spin()."),
+        [global("base/Left#spin()."), global("base/Right#spin().")]
+    );
+    // A method that no base class has gets none.
+    assert!(at("child/Child#extra().").is_empty());
+    // The same name in an unrelated class, in a builtin base class, and in an unresolved base.
+    assert!(at("child/Unrelated#run().").is_empty());
+    assert!(at("child/Failure#__str__().").is_empty());
+    assert!(at("child/Missing#run().").is_empty());
+    // The base methods carry no relationship.
+    assert!(implements(&indexed, "base.py", &global("base/Base#run().")).is_empty());
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.
@@ -920,6 +970,7 @@ const SCIP_FIXTURES: &[&str] = &[
     "packages",
     "members",
     "modules",
+    "overrides",
     "ambiguous",
     "shadow",
     "unresolved",

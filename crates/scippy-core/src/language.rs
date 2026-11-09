@@ -203,8 +203,18 @@ pub struct Builtins {
 /// `@definition.<kind>` marks the whole declaration. A match with `@import` marks an identifier
 /// that names an imported symbol. A match with `@member` marks an identifier that names a member
 /// of a value, such as the `x` in `a.x`. The path of such a reference passes the definition of the
-/// object, so the reconciler uses a weaker nearest-binding rule for it. Other captures are
-/// ignored.
+/// object, so the reconciler uses a weaker nearest-binding rule for it.
+///
+/// A match with `@module` marks the root node of a document. The binding rules define the module
+/// at the start of that node, with an empty span. The core joins the module declaration to that
+/// span.
+///
+/// A match with `@supertype` marks an identifier that names a supertype in the header of a
+/// class, such as a base class. The core resolves it like a reference. When it names a class of
+/// the project, a method of the subclass that has the name of a method of the supertype overrides
+/// that method.
+///
+/// Other captures are ignored.
 pub struct ExtractionSpec {
     pub query: &'static str,
 }

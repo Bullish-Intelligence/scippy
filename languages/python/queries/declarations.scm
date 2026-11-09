@@ -71,3 +71,12 @@
 ; nearest-binding rule to a plain name.
 (attribute
   attribute: (identifier) @member)
+
+; Base classes in the header of a class: `Base`, `pkg.Base`, `Base[T]`, and `pkg.Base[T]`.
+; The identifier is also a plain reference or a member, so the reconciler resolves it.
+(class_definition
+  superclasses: (argument_list
+    [(identifier) @supertype
+     (attribute attribute: (identifier) @supertype)
+     (subscript value: (identifier) @supertype)
+     (subscript value: (attribute attribute: (identifier) @supertype))]))
