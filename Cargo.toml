@@ -23,3 +23,12 @@ clap = { version = "4", features = ["derive"] }
 protobuf = "3"
 scip = "0.10.0"
 tempfile = "3"
+
+# The resolver engine is our fork of Stack Graphs. All three crates use one pin.
+# To bump the pin, change the `rev` of the three lines below to the same commit.
+stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "135d7b8095ab48bb54103ce6ce141ea9f8a908d5" }
+tree-sitter-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "135d7b8095ab48bb54103ce6ce141ea9f8a908d5" }
+tree-sitter-stack-graphs-python = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "135d7b8095ab48bb54103ce6ce141ea9f8a908d5" }
+# Keep the same minor version as the fork.
+tree-sitter = "0.24"
+tree-sitter-python = "=0.23.5"

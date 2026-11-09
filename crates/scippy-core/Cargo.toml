@@ -9,6 +9,10 @@ name = "scippy_core"
 path = "src/lib.rs"
 
 [dependencies]
+stack-graphs.workspace = true
+tree-sitter-stack-graphs.workspace = true
+tree-sitter.workspace = true
+streaming-iterator = "0.1"
 protobuf.workspace = true
 scip.workspace = true
 
