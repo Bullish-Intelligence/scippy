@@ -1,6 +1,6 @@
 //! Run the `scippy` binary end to end.
 //!
-//! The binary indexes Python files. The TypeScript pack only routes files at this stage.
+//! The binary indexes Python and TypeScript files.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,13 +75,11 @@ fn indexes_a_tree_into_sorted_documents() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // The TypeScript pack does not support indexing yet. The run skips its two files.
+    // Both packs index their files. The text file is discovered and routed to no pack.
     assert!(
-        stdout.contains("files discovered: 5\nfiles indexed: 2\nfiles skipped: 2\n"),
+        stdout.contains("files discovered: 5\nfiles indexed: 4\nfiles skipped: 0\n"),
         "{stdout}"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unsupported-language"), "{stderr}");
 
     let index = parse(&out);
     let documents: Vec<_> = index
@@ -89,9 +87,26 @@ fn indexes_a_tree_into_sorted_documents() {
         .iter()
         .map(|d| (d.relative_path.as_str(), d.language.as_str()))
         .collect();
-    assert_eq!(documents, [("a.py", "Python"), ("b.py", "Python")]);
-    // The module and the variable `x`: one definition each.
-    assert!(index.documents.iter().all(|d| d.occurrences.len() == 2));
+    assert_eq!(
+        documents,
+        [
+            ("a.py", "Python"),
+            ("b.py", "Python"),
+            ("pkg/a.tsx", "TypeScript"),
+            ("pkg/z.ts", "TypeScript")
+        ]
+    );
+    // Python: the module and the variable `x`, one definition each.
+    // TypeScript: the module only. `x = 1` assigns an undeclared name.
+    for document in &index.documents {
+        let expected = if document.language == "Python" { 2 } else { 1 };
+        assert_eq!(
+            document.occurrences.len(),
+            expected,
+            "{}",
+            document.relative_path
+        );
+    }
     let root_uri = &index.metadata.as_ref().unwrap().project_root;
     assert!(
         root_uri.starts_with("file:///") && root_uri.ends_with("/project"),

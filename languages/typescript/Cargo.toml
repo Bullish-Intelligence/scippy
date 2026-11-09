@@ -8,4 +8,15 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+tree-sitter-stack-graphs-typescript.workspace = true
+tree-sitter-stack-graphs.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter.workspace = true
+serde_json.workspace = true
+regex.workspace = true
 scippy-core = { path = "../../crates/scippy-core" }
+
+[dev-dependencies]
+protobuf.workspace = true
+scip.workspace = true
+tempfile.workspace = true

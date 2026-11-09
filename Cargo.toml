@@ -23,12 +23,20 @@ clap = { version = "4", features = ["derive"] }
 protobuf = "3"
 scip = "0.10.0"
 tempfile = "3"
+serde_json = "1"
+regex = "1"
 
-# The resolver engine is our fork of Stack Graphs. All three crates use one pin.
-# To bump the pin, change the `rev` of the three lines below to the same commit.
+# The resolver engine is our fork of Stack Graphs. All four crates use one pin.
+# To bump the pin, change the `rev` of the four lines below to the same commit.
 stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
 tree-sitter-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
 tree-sitter-stack-graphs-python = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
+tree-sitter-stack-graphs-typescript = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
 # Keep the same minor version as the fork.
 tree-sitter = "0.24"
 tree-sitter-python = "=0.23.5"
+tree-sitter-typescript = "=0.23.2"
+
+# The resolver and the grammars are slow without optimization. The tests index real projects.
+[profile.dev.package."*"]
+opt-level = 2
