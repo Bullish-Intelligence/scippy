@@ -313,12 +313,13 @@ fn a_plain_name_never_targets_an_instance_field() {
     assert_eq!(indexed.report.references_ambiguous, 0);
     // The engine now ranks the parameter above the field. The shadow filter takes these.
     assert!(indexed.report.multi_target.shadow_filtered >= 3);
-    // A method does not see the class body. The pack refuses `State#limit` and keeps the module name.
+    // A method does not see the class body. The module name `limit` comes after the class.
+    // The engine now lets that module-level name shadow the class variable on its own,
+    // so the pack has nothing to refuse here.
     assert_eq!(
         indexed.symbols_of("fields.py", "print(limit)", "limit"),
         [global("fields/limit.")]
     );
-    assert!(indexed.report.multi_target.pack_refused >= 1);
 }
 
 #[test]

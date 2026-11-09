@@ -26,9 +26,9 @@ tempfile = "3"
 
 # The resolver engine is our fork of Stack Graphs. All three crates use one pin.
 # To bump the pin, change the `rev` of the three lines below to the same commit.
-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "4738172750364ce8426624a3abbbe65db95ac88e" }
-tree-sitter-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "4738172750364ce8426624a3abbbe65db95ac88e" }
-tree-sitter-stack-graphs-python = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "4738172750364ce8426624a3abbbe65db95ac88e" }
+stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
+tree-sitter-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
+tree-sitter-stack-graphs-python = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "6c047f93198f133471d0c345110786885543685d" }
 # Keep the same minor version as the fork.
 tree-sitter = "0.24"
 tree-sitter-python = "=0.23.5"

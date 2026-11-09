@@ -606,7 +606,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "lsp-positions"
 version = "0.3.4"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=4738172750364ce8426624a3abbbe65db95ac88e#4738172750364ce8426624a3abbbe65db95ac88e"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c047f93198f133471d0c345110786885543685d#6c047f93198f133471d0c345110786885543685d"
 dependencies = [
  "memchr",
  "tree-sitter",
@@ -931,7 +931,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stack-graphs"
 version = "0.14.1"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=4738172750364ce8426624a3abbbe65db95ac88e#4738172750364ce8426624a3abbbe65db95ac88e"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c047f93198f133471d0c345110786885543685d#6c047f93198f133471d0c345110786885543685d"
 dependencies = [
  "bitvec",
  "controlled-option",
@@ -1137,7 +1137,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-stack-graphs"
 version = "0.10.0"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=4738172750364ce8426624a3abbbe65db95ac88e#4738172750364ce8426624a3abbbe65db95ac88e"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c047f93198f133471d0c345110786885543685d#6c047f93198f133471d0c345110786885543685d"
 dependencies = [
  "anyhow",
  "controlled-option",
@@ -1157,8 +1157,9 @@ dependencies = [
 [[package]]
 name = "tree-sitter-stack-graphs-python"
 version = "0.3.0"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=4738172750364ce8426624a3abbbe65db95ac88e#4738172750364ce8426624a3abbbe65db95ac88e"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c047f93198f133471d0c345110786885543685d#6c047f93198f133471d0c345110786885543685d"
 dependencies = [
+ "stack-graphs",
  "tree-sitter-python",
  "tree-sitter-stack-graphs",
 ]
