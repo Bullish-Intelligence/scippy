@@ -47,14 +47,16 @@ impl DeclKind {
 
 /// How a reference names its target, in terms that every language shares.
 ///
-/// The pack marks a reference as a member with the `@member` capture.
-/// Every other reference is plain.
+/// The pack marks a reference as a member with the `@member` capture, and a reference as a
+/// keyword with the `@keyword` capture. Every other reference is plain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReferenceKind {
     /// A name that stands alone, such as the `x` in `f(x)`.
     Plain,
     /// A name that selects a member of a value, such as the `x` in `a.x`.
     Member,
+    /// A name that selects a parameter of a callee, such as the `x` in `f(x=1)`.
+    Keyword,
 }
 
 /// One step of the declaration chain: the kind and the name of a declaration.

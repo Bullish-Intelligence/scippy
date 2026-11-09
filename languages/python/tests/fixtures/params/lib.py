@@ -21,3 +21,11 @@ def outer(a):
         return b
 
     return inner(a)
+
+
+DEFAULT = object()
+
+
+class Spec:
+    def build(self, width=DEFAULT, *, depth: int = DEFAULT):
+        return width

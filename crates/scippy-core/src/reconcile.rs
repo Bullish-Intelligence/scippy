@@ -20,11 +20,19 @@
 //!      The path to every end passes it. Only a definition that is itself an end of the
 //!      reference counts: the end of a path that passes the field `x` is a value-flow end.
 //!      The pack marks member references. The core never reads syntax.
+//!    - A keyword argument name, such as `f(name=v)`, starts at the callee. The path to every end
+//!      passes the definitions of the callee: a class, its `__init__`, a function. They are no
+//!      value flow, so they never make an end a value-flow end. A definition that is itself an
+//!      end counts, as for a member. The default value of the parameter is such an end.
+//!      The pack marks keyword names with the `@keyword` capture.
 //! 5. A definition in a project file wins over a definition in an external asset, such as the
 //!    builtins. A project definition shadows the builtin of the same name.
 //! 6. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
 //!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved.
 //! 7. A reference never takes a document-local symbol of another document.
+//!    A path that passes the definition node at the span of the reference itself is a value-flow
+//!    path too. The assignment `x.a = x.b` defines the name `a`, and the value of `b` flows into
+//!    that definition. A reference to `a` that the rules also let reach `b` drops the end `b`.
 //! 8. A reference at the span of a declaration of the same document names that declaration.
 //!    It is the same token. An attribute assignment target, such as `self.x = v`, is a
 //!    declaration and a reference at once. The receiver can reach the field of a base class
@@ -245,12 +253,16 @@ fn group_ends(ends: &BTreeSet<RawEnd>) -> Vec<EndGroup<'_>> {
 /// Merge the raw bindings of one document by reference span and reconcile each location.
 ///
 /// `members` holds the spans of the references that name a member of a value.
+/// `keywords` holds the spans of the references that name a parameter of a callee, as the
+/// `name` in `f(name=v)`. A path to such a name passes the definitions of the callee,
+/// like the path to a member passes the definition of its object.
 /// `targeting` asks the language pack whether a reference can name a declaration.
 /// The result is sorted by span.
 pub(crate) fn reconcile(
     declarations: &DeclarationIndex,
     bindings: Vec<RawBinding>,
     members: &HashSet<(u32, u32)>,
+    keywords: &HashSet<(u32, u32)>,
     targeting: &Targeting,
 ) -> Vec<Reconciled> {
     type Merged = (BTreeSet<RawEnd>, BTreeSet<RawEnd>, Option<Bound>);
@@ -275,12 +287,18 @@ pub(crate) fn reconcile(
                         .any(|g| g.place == s.place && g.syntax_type == s.syntax_type)
                 })
                 .count();
-            let is_member = members.contains(&(reference.start_byte, reference.end_byte));
+            let span = (reference.start_byte, reference.end_byte);
+            let is_member = members.contains(&span);
+            let is_keyword = keywords.contains(&span);
             let kind = if is_member {
                 ReferenceKind::Member
+            } else if is_keyword {
+                ReferenceKind::Keyword
             } else {
                 ReferenceKind::Plain
             };
+            // The path to the end of such a reference starts at a value: an object or a callee.
+            let through_value = is_member || is_keyword;
 
             let mut unjoined = Vec::new();
             let mut joined: Vec<(&EndGroup, &Place, &SymbolId)> = Vec::new();
@@ -319,12 +337,17 @@ pub(crate) fn reconcile(
             let direct = |(group, _, symbol): &(&EndGroup, &Place, &SymbolId)| {
                 group.routes.iter().any(|route| {
                     route.iter().all(|through| {
+                        // An assignment target is a definition node at the span of the
+                        // reference itself. A path through it carries the assigned value on.
+                        if through.anchor == reference {
+                            return false;
+                        }
                         declarations.entry(through).is_none_or(|e| {
                             // A path enters a module to reach a name in it. No value flows
                             // through a module.
                             e.declaration.kind == DeclKind::Module
                                 || e.symbol == **symbol
-                                || (is_member && !end_places.contains(through))
+                                || (through_value && !end_places.contains(through))
                         })
                     })
                 })
@@ -471,6 +494,7 @@ mod tests {
             &index(),
             bindings,
             &HashSet::new(),
+            &HashSet::new(),
             &Targeting::accept_all(),
         )
         .remove(0)
@@ -500,6 +524,7 @@ mod tests {
             &index(),
             vec![one, two],
             &HashSet::new(),
+            &HashSet::new(),
             &Targeting::accept_all(),
         );
         assert_eq!(all.len(), 1);
@@ -515,6 +540,58 @@ mod tests {
         assert_eq!(
             outcome(vec![binding(reference, ends, None)]),
             BindingOutcome::Ambiguous(vec![sym(0), sym(1)])
+        );
+    }
+
+    #[test]
+    fn a_keyword_name_passes_the_callee_and_stops_at_the_parameter() {
+        // `f(x=1)`, with `def f(x=DEFAULT)`. `a.py:10` is `f`, `a.py:0` is the parameter `x`,
+        // and `m.py:0` is `DEFAULT`. The path to each end passes `f`. The path to `DEFAULT`
+        // also passes the parameter.
+        let mut index = index();
+        index.insert(anchor("m.py", 0), sym(2));
+        let reference = anchor("app.py", 50);
+        let ends = || {
+            vec![
+                end_through("a.py", 0, &[("a.py", 10)]),
+                end_through("m.py", 0, &[("a.py", 10), ("a.py", 0)]),
+            ]
+        };
+        let run = |keywords: &HashSet<(u32, u32)>| {
+            reconcile(
+                &index,
+                vec![binding(reference.clone(), ends(), None)],
+                &HashSet::new(),
+                keywords,
+                &Targeting::accept_all(),
+            )
+            .remove(0)
+            .outcome
+        };
+        // A plain reference sees two definitions of other symbols on each path.
+        assert_eq!(
+            run(&HashSet::new()),
+            BindingOutcome::Ambiguous(vec![sym(0), sym(2)])
+        );
+        // A keyword name passes the callee. Only the default value is a value-flow end.
+        assert_eq!(
+            run(&HashSet::from([(50, 53)])),
+            BindingOutcome::Resolved(sym(0))
+        );
+    }
+
+    #[test]
+    fn a_path_through_the_own_definition_node_is_value_flow() {
+        // `x.a = x.b`: the name `a` is a definition node that no declaration claims.
+        // The value of `b` flows into it, so the end `b` is a value-flow end.
+        let reference = anchor("app.py", 50);
+        let ends = vec![
+            end("a.py", 0, None),
+            end_through("a.py", 10, &[("app.py", 50)]),
+        ];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Resolved(sym(0))
         );
     }
 
@@ -630,9 +707,15 @@ mod tests {
         bindings: Vec<RawBinding>,
         members: &HashSet<(u32, u32)>,
     ) -> BindingOutcome {
-        reconcile(index, bindings, members, &Targeting::accept_all())
-            .remove(0)
-            .outcome
+        reconcile(
+            index,
+            bindings,
+            members,
+            &HashSet::new(),
+            &Targeting::accept_all(),
+        )
+        .remove(0)
+        .outcome
     }
 
     #[test]
@@ -778,6 +861,7 @@ mod tests {
             &external_index(),
             vec![binding(reference, ends, None)],
             &HashSet::new(),
+            &HashSet::new(),
             &Targeting::accept_all(),
         );
         assert_eq!(all[0].outcome, BindingOutcome::Resolved(sym(0)));
@@ -871,6 +955,7 @@ mod tests {
             &refusing_index(),
             vec![binding(reference, ends, None)],
             members,
+            &HashSet::new(),
             &targeting,
         )
         .remove(0)

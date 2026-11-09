@@ -295,6 +295,7 @@ fn index_pack(
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let members: HashSet<(u32, u32)> = doc.facts.members.iter().copied().collect();
+        let keywords: HashSet<(u32, u32)> = doc.facts.keywords.iter().copied().collect();
         let containers = doc
             .facts
             .declarations
@@ -309,7 +310,7 @@ fn index_pack(
             })
             .collect();
         let targeting = Targeting::new(&*model, containers);
-        let reconciled = reconcile(&index, bindings, &members, &targeting);
+        let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
         for r in &reconciled {
             count(report, r);
             if let BindingOutcome::Resolved(symbol) = &r.outcome {

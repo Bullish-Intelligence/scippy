@@ -72,6 +72,13 @@
 (attribute
   attribute: (identifier) @member)
 
+; Keyword argument names: the `x` in `f(x=1)`. The name is a reference to a parameter of the
+; callee. The path of the reference starts at the callee, so the reconciler treats it like a member.
+(call
+  arguments: (argument_list
+    (keyword_argument
+      name: (identifier) @keyword)))
+
 ; Base classes in the header of a class: `Base`, `pkg.Base`, `Base[T]`, and `pkg.Base[T]`.
 ; The identifier is also a plain reference or a member, so the reconciler resolves it.
 (class_definition

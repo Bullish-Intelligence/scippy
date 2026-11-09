@@ -431,6 +431,11 @@ impl ProjectModel for PythonModel {
         scopes: &[Scope],
         declaration: &Scope,
     ) -> bool {
+        if reference == ReferenceKind::Keyword {
+            // The name in `f(name=v)` names a parameter. The default value of the parameter,
+            // or any value that the callee holds, is no target.
+            return declaration.kind == DeclKind::Parameter;
+        }
         if reference == ReferenceKind::Member {
             // A name that a function body binds is not an attribute of any value.
             // Only value flow reaches it: `old = self.x` makes `old` a second end of `x`.
@@ -756,6 +761,20 @@ mod tests {
             &method,
             &scope(DeclKind::Variable, "x")
         ));
+    }
+
+    #[test]
+    fn a_keyword_argument_names_a_parameter_only() {
+        let model = PythonModel::new(&[]);
+        let method = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
+        let keyword = ReferenceKind::Keyword;
+        let accepts = |kind| model.accepts_target(keyword, &[], &method, &scope(kind, "x"));
+        assert!(accepts(DeclKind::Parameter));
+        // The default value of a parameter, a field, and a method are no targets.
+        assert!(!accepts(DeclKind::Variable));
+        assert!(!accepts(DeclKind::Field));
+        assert!(!accepts(DeclKind::Function));
+        assert!(!accepts(DeclKind::Class));
     }
 
     #[test]

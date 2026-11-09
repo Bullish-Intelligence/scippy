@@ -1,6 +1,7 @@
-from lib import Box, make
+from lib import Box, Spec, make
 
 box = Box(size=1, label="a")
 box.resize(size=2, force=True)
 make(width=1, height=2)
 Box.unit(label="b")
+Spec().build(width=1, depth=2)

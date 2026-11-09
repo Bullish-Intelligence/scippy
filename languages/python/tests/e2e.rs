@@ -737,6 +737,12 @@ fn a_keyword_argument_names_the_parameter_in_another_document() {
         at("unit(label", "label"),
         [global("lib/Box#unit().(label)")]
     );
+    // The default value of the parameter is a name that the callee holds. It is not a target.
+    assert_eq!(
+        at("build(width", "width"),
+        [global("lib/Spec#build().(width)")]
+    );
+    assert_eq!(at("depth=2", "depth"), [global("lib/Spec#build().(depth)")]);
     assert_eq!(indexed.report.references_ambiguous, 0);
 }
 

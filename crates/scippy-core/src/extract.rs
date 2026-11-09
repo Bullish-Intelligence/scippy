@@ -41,6 +41,8 @@ pub(crate) struct Facts {
     pub imports: Vec<(u32, u32)>,
     /// Spans of identifiers that name a member of a value, such as the `x` in `a.x`.
     pub members: Vec<(u32, u32)>,
+    /// Spans of identifiers that name a parameter of a callee, such as the `x` in `f(x=1)`.
+    pub keywords: Vec<(u32, u32)>,
     /// Spans of identifiers that name a supertype in the header of a class.
     pub supertypes: Vec<(u32, u32)>,
     /// Declarations that two captures claimed with different kinds. The extractor drops them.
@@ -61,6 +63,7 @@ pub(crate) struct Extractor {
     name: u32,
     import: Option<u32>,
     member: Option<u32>,
+    keyword: Option<u32>,
     module: Option<u32>,
     supertype: Option<u32>,
     definitions: Vec<(u32, DeclKind)>,
@@ -75,6 +78,7 @@ impl Extractor {
         let mut name = None;
         let mut import = None;
         let mut member = None;
+        let mut keyword = None;
         let mut module = None;
         let mut supertype = None;
         let mut definitions = Vec::new();
@@ -84,6 +88,7 @@ impl Extractor {
                 "name" => name = Some(index),
                 "import" => import = Some(index),
                 "member" => member = Some(index),
+                "keyword" => keyword = Some(index),
                 "module" => module = Some(index),
                 "supertype" => supertype = Some(index),
                 other => {
@@ -102,6 +107,7 @@ impl Extractor {
             name,
             import,
             member,
+            keyword,
             module,
             supertype,
             definitions,
@@ -131,6 +137,7 @@ impl Extractor {
         let mut by_anchor: BTreeMap<(u32, u32), Vec<DeclarationFact>> = BTreeMap::new();
         let mut imports = Vec::new();
         let mut members = Vec::new();
+        let mut keywords = Vec::new();
         let mut supertypes = Vec::new();
         let mut module = None;
         let mut cursor = QueryCursor::new();
@@ -158,6 +165,9 @@ impl Extractor {
             }
             if let Some(member) = self.member.and_then(node) {
                 members.push((member.start_byte() as u32, member.end_byte() as u32));
+            }
+            if let Some(keyword) = self.keyword.and_then(node) {
+                keywords.push((keyword.start_byte() as u32, keyword.end_byte() as u32));
             }
             let definition = self
                 .definitions
@@ -203,6 +213,9 @@ impl Extractor {
         members.sort_unstable();
         members.dedup();
         facts.members = members;
+        keywords.sort_unstable();
+        keywords.dedup();
+        facts.keywords = keywords;
         supertypes.sort_unstable();
         supertypes.dedup();
         facts.supertypes = supertypes;
