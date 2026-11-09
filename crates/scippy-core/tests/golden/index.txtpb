@@ -1,0 +1,69 @@
+metadata {
+  tool_info {
+    name: "scippy"
+    version: "VERSION"
+  }
+  project_root: "file:///ROOT"
+  text_document_encoding: UTF8
+}
+documents {
+  language: "Python"
+  relative_path: "src/app.py"
+  occurrences {
+    single_line_range {
+      start_character: 21
+      end_character: 28
+    }
+    symbol: "scippy pip proj 0.1 services/process()."
+    symbol_roles: 2
+  }
+  occurrences {
+    single_line_range {
+      line: 2
+      start_character: 9
+      end_character: 16
+    }
+    symbol: "scippy pip proj 0.1 services/process()."
+  }
+  position_encoding: UTF8CodeUnitOffsetFromLineStart
+}
+documents {
+  language: "Python"
+  relative_path: "src/services.py"
+  occurrences {
+    single_line_range {
+      start_character: 4
+      end_character: 11
+    }
+    symbol: "scippy pip proj 0.1 services/process()."
+    symbol_roles: 1
+  }
+  occurrences {
+    single_line_range {
+      line: 2
+      start_character: 8
+      end_character: 12
+    }
+    symbol: "local 0"
+    symbol_roles: 1
+  }
+  occurrences {
+    single_line_range {
+      line: 4
+      start_character: 14
+      end_character: 18
+    }
+    symbol: "local 0"
+  }
+  symbols {
+    symbol: "local 0"
+    kind: Variable
+    display_name: "item"
+  }
+  symbols {
+    symbol: "scippy pip proj 0.1 services/process()."
+    kind: Function
+    display_name: "process"
+  }
+  position_encoding: UTF8CodeUnitOffsetFromLineStart
+}
