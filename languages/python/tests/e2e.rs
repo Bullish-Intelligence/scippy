@@ -570,6 +570,70 @@ fn packages_resolve_across_roots_and_cycles_end() {
     );
 }
 
+// ---- a module and a package of one name ----
+
+#[test]
+fn a_package_shadows_a_module_of_the_same_name() {
+    let indexed = index("collision");
+    // `a/__init__.py` wins, as in the Python import system. `a.py` is skipped. The run succeeds.
+    assert!(indexed.document("a.py").is_none());
+    assert!(indexed.document("a/__init__.py").is_some());
+    assert_eq!(indexed.report.files_skipped, 1);
+    assert_eq!(indexed.report.files_indexed, 2);
+    let warning = indexed
+        .report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "shadowed-file")
+        .expect("a shadowed-file diagnostic");
+    assert_eq!(warning.severity, Severity::Warning);
+    assert_eq!(warning.file.as_deref(), Some("a.py"));
+    assert!(warning.message.contains("a/__init__.py"), "{warning}");
+    // The import reaches the package.
+    assert_eq!(
+        indexed.symbols_of("use.py", "from a import f", "f"),
+        [global("a/f().")]
+    );
+    assert_eq!(
+        indexed.symbols_of("use.py", "value = f()", "f"),
+        [global("a/f().")]
+    );
+    // No symbol of the shadowed module exists.
+    assert!(!indexed.has_symbol("use.py", &global("a/only_in_module().")));
+}
+
+#[test]
+fn a_shadowed_module_below_an_import_root_gets_the_same_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, text) in [
+        ("src/util.py", "def helper():\n    return 1\n"),
+        ("src/util/__init__.py", "def helper():\n    return 2\n"),
+        ("src/util/extra.py", "def more():\n    return 3\n"),
+        (
+            "src/main.py",
+            "from util import helper\nfrom util.extra import more\n",
+        ),
+        // No package of this name. The module stays.
+        ("src/solo.py", "def one():\n    return 4\n"),
+    ] {
+        let full = dir.path().join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(full, text).unwrap();
+    }
+    let indexed = index_at(dir.path());
+    assert!(indexed.document("src/util.py").is_none());
+    assert!(indexed.document("src/solo.py").is_some());
+    assert_eq!(indexed.report.files_skipped, 1);
+    assert_eq!(
+        indexed.symbols_of("src/main.py", "import helper", "helper"),
+        [global("src/util/helper().")]
+    );
+    assert_eq!(
+        indexed.symbols_of("src/main.py", "import more", "more"),
+        [global("src/util/extra/more().")]
+    );
+}
+
 // ---- input limits ----
 
 #[test]

@@ -30,6 +30,13 @@
 //! Declarations that share one descriptor path in one document are one entity.
 //! A variable that the code rebinds, and an overloaded function, each get one symbol.
 //!
+//! # Modules that share a name
+//!
+//! A package wins over a module of the same name, as in the Python import system.
+//! When `a/__init__.py` and `a.py` both exist, no `import a` reaches `a.py`.
+//! The pack names `a/__init__.py` as the file that shadows `a.py`.
+//! The core skips `a.py` and raises the warning `shadowed-file`. The run does not fail.
+//!
 //! # Plain names and class scope
 //!
 //! A bare name in Python follows two scope rules that the binding rules do not enforce.
@@ -250,6 +257,24 @@ impl ProjectModel for PythonModel {
             anchored_pattern(root)
         };
         vec![("ROOT_PATH".to_string(), value)]
+    }
+
+    /// A package wins over a module of the same name, as in the Python import system.
+    /// `a/__init__.py` shadows `a.py` in the same directory.
+    fn shadowed_by(&self, path: &ProjectRelativePath) -> Option<ProjectRelativePath> {
+        let (dir, name) = path
+            .as_str()
+            .rsplit_once('/')
+            .unwrap_or(("", path.as_str()));
+        let stem = name.strip_suffix(".py").filter(|s| *s != "__init__")?;
+        let package = if dir.is_empty() {
+            stem.to_string()
+        } else {
+            format!("{dir}/{stem}")
+        };
+        self.packages
+            .contains(&package)
+            .then(|| ProjectRelativePath::new(&format!("{package}/__init__.py")).ok())?
     }
 
     fn identity(
@@ -521,6 +546,40 @@ mod tests {
             &method,
             &scope(DeclKind::Variable, "x")
         ));
+    }
+
+    #[test]
+    fn a_package_shadows_a_module_of_the_same_name() {
+        let model = PythonModel::new(&paths(&[
+            "a.py",
+            "a/__init__.py",
+            "src/util.py",
+            "src/util/__init__.py",
+            "src/util/extra.py",
+            "solo.py",
+            "pkg/__init__.py",
+            "pkg/mod.py",
+            "pkg/sub.py",
+            "pkg/sub/leaf.py",
+        ]));
+        let shadowed = |p: &str| {
+            model
+                .shadowed_by(&ProjectRelativePath::new(p).unwrap())
+                .map(|w| w.as_str().to_string())
+        };
+        assert_eq!(shadowed("a.py").as_deref(), Some("a/__init__.py"));
+        assert_eq!(
+            shadowed("src/util.py").as_deref(),
+            Some("src/util/__init__.py")
+        );
+        // Another module of the package stays. So does a module with no package of its name.
+        assert_eq!(shadowed("src/util/extra.py"), None);
+        assert_eq!(shadowed("solo.py"), None);
+        assert_eq!(shadowed("pkg/mod.py"), None);
+        // A directory without `__init__.py` is not a package. It does not shadow a module.
+        assert_eq!(shadowed("pkg/sub.py"), None);
+        // A package file never shadows itself.
+        assert_eq!(shadowed("a/__init__.py"), None);
     }
 
     #[test]

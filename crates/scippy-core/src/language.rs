@@ -104,6 +104,16 @@ pub trait ProjectModel: Send + Sync {
     /// Global variables for the binding rules of one file, for example the import root.
     fn resolver_globals(&self, path: &ProjectRelativePath) -> Vec<(String, String)>;
 
+    /// Name the file that shadows this file, when the language lets another file win.
+    ///
+    /// The core skips a shadowed file, because no import can reach it and its symbols would
+    /// collide with the symbols of the winner. It raises a warning that names the winner.
+    /// The default shadows nothing.
+    fn shadowed_by(&self, path: &ProjectRelativePath) -> Option<ProjectRelativePath> {
+        let _ = path;
+        None
+    }
+
     /// Assign an identity to a declaration.
     ///
     /// `scopes` lists the enclosing declarations from the outermost to the innermost.

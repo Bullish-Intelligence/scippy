@@ -172,6 +172,20 @@ fn index_pack(
             code,
             message,
         };
+        if let Some(winner) = model.shadowed_by(&file.path) {
+            report.files_skipped += 1;
+            report.diagnostics.push(diagnostic(
+                Stage::Identity,
+                Severity::Warning,
+                "shadowed-file",
+                None,
+                format!(
+                    "skipped: {} shadows this file, so no import reaches it",
+                    winner.as_str()
+                ),
+            ));
+            continue;
+        }
         let source = match read_source(root, &file.path, request.limits.max_file_bytes) {
             Ok(source) => source,
             Err((code, message)) => {
