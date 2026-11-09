@@ -11,6 +11,11 @@ names across files with the Stack Graphs engine, and writes definition, import, 
 occurrences. A reference that the engine cannot resolve to one declaration gets no target.
 `scippy languages` lists the built-in language packs.
 
+The Loci pack (Gate 5) indexes a notes vault: a project root that has `.loci/vault.toml`.
+Without that file, the pack is off and `.md` files belong to no pack. The pack follows
+`loci-core`: the same scanner, the same resolution order, and the same states. A tie is
+`ambiguous` and gets no occurrence. The test oracle is `loci --json graph/relations`.
+
 ## Workspace
 
 - `crates/scippy-core` holds the language-neutral pipeline: the project walker with its
@@ -24,8 +29,11 @@ occurrences. A reference that the engine cannot resolve to one declaration gets 
   and `.tsx`), the module and symbol policy, `package.json` and `tsconfig.json` support, and
   local fixes of the binding rules. The header of `languages/typescript/src/lib.rs` documents
   the symbol scheme, the supported layouts, and the known gaps.
+- `languages/loci` holds the Loci pack. It is a native engine: it reads its files and resolves
+  its links itself, and the core joins, names, and writes the result. The header of
+  `languages/loci/src/lib.rs` documents the selection rule and the symbol scheme.
 
-The resolver is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
+The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
 
@@ -35,6 +43,7 @@ The walker skips a file larger than 1 MiB (`--max-file-bytes`) with a `file-too-
 It stops to accept files when the accepted files would exceed 32 MiB in total
 (`--max-total-bytes`). It then raises an `input-limit-reached` error diagnostic.
 The graph build used about 1.3 GB for each MB of Python source.
+The Loci pack needs far less memory. A vault of more than 32 MiB needs a higher `--max-total-bytes`.
 
 ## Symbols
 
@@ -98,7 +107,8 @@ devenv shell -- scripts/verify.sh
 ```
 
 The script runs `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test`.
-The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python and TypeScript fixtures.
+The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python, TypeScript, and Loci fixtures.
+The Loci expectations come from `loci-core`. To make them again, run `scripts/loci-oracle.sh`.
 Set `SCIP_BIN_DIR` when `scip` is not on `PATH`.
 Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots in `languages/python/tests/golden` and
-`languages/typescript/tests/golden`.
+`languages/typescript/tests/golden`, and `languages/loci/tests/golden`.

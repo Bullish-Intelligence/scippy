@@ -1,0 +1,4 @@
+---
+aliases: [Bob, Robert]
+---
+# Person
