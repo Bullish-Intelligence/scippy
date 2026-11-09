@@ -11,7 +11,7 @@ use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts};
 use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
-use crate::language::{Analysis, LanguagePack, ProjectModel, Reach, Scope};
+use crate::language::{Analysis, DeclKind, LanguagePack, ProjectModel, Reach, Scope};
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
 use crate::reconcile::{
@@ -458,7 +458,24 @@ fn assign_identities(
     let facts = &doc.facts.declarations;
     let containers = container_indexes(facts);
     let mut locals: BTreeMap<Vec<Descriptor>, u32> = BTreeMap::new();
-    let mut out = Vec::with_capacity(facts.len());
+    let mut out = Vec::with_capacity(facts.len() + 1);
+    // The module of the document. The pack decides whether it has a symbol.
+    if let (Some(fact), Some(identity)) = (&doc.facts.module, model.module_identity(&doc.path)) {
+        if identity.reach == Reach::Global {
+            let symbol = builder.define(&identity.descriptors, fact.anchor.clone())?;
+            out.push(Declared {
+                fact: fact.clone(),
+                symbol,
+                kind: identity.kind,
+                scopes: Vec::new(),
+                declaration: Scope {
+                    kind: DeclKind::Module,
+                    name: identity.display_name.clone(),
+                },
+                display_name: identity.display_name,
+            });
+        }
+    }
     for (i, fact) in facts.iter().enumerate() {
         let scopes = scope_chain(facts, &containers, i);
         let declaration = Scope {
@@ -593,10 +610,17 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
     let mut symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut defined: HashSet<(u32, u32)> = HashSet::new();
     for d in &doc.declared {
-        defined.insert((d.fact.anchor.start_byte, d.fact.anchor.end_byte));
+        // A module has no name token. Its definition is the empty range at the start of the
+        // document, as in `scip-python`. The anchor that the engine uses can lie further on.
+        let (start_byte, end_byte) = if d.fact.kind == DeclKind::Module {
+            (0, 0)
+        } else {
+            defined.insert((d.fact.anchor.start_byte, d.fact.anchor.end_byte));
+            (d.fact.anchor.start_byte, d.fact.anchor.end_byte)
+        };
         occurrences.push(Occurrence {
-            start_byte: d.fact.anchor.start_byte,
-            end_byte: d.fact.anchor.end_byte,
+            start_byte,
+            end_byte,
             symbol: d.symbol.clone(),
             role: Role::Definition,
         });

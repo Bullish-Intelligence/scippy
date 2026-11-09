@@ -22,6 +22,8 @@ pub enum DeclKind {
     Variable,
     Parameter,
     Field,
+    /// The module of a document. The core gives it an empty anchor at the start of the module node.
+    Module,
 }
 
 impl DeclKind {
@@ -110,6 +112,17 @@ pub trait ProjectModel: Send + Sync {
     /// collide with the symbols of the winner. It raises a warning that names the winner.
     /// The default shadows nothing.
     fn shadowed_by(&self, path: &ProjectRelativePath) -> Option<ProjectRelativePath> {
+        let _ = path;
+        None
+    }
+
+    /// Assign an identity to the module that a document defines.
+    ///
+    /// The core asks once for each document that has a `@module` match. The identity needs a
+    /// global reach and at least one descriptor. Return `None` when the document has no module
+    /// name, for example a package file at the project root. The module then has no symbol.
+    /// The default gives no module a symbol.
+    fn module_identity(&self, path: &ProjectRelativePath) -> Option<Identity> {
         let _ = path;
         None
     }

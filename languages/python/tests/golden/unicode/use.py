@@ -1,4 +1,8 @@
  from lib import grüße, 日本
+#^ definition scippy python workspace . use/
+#  kind Module
+#  display_name use
+#     ^^^ reference scippy python workspace . lib/
 #                ^^^^^^^ reference scippy python workspace . lib/`grüße`().
 #                         ^^^^^^ reference scippy python workspace . lib/`日本`.
  #               ^^^^^^^ reference scippy python workspace . lib/`grüße`().

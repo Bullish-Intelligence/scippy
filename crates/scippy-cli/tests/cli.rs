@@ -90,8 +90,8 @@ fn indexes_a_tree_into_sorted_documents() {
         .map(|d| (d.relative_path.as_str(), d.language.as_str()))
         .collect();
     assert_eq!(documents, [("a.py", "Python"), ("b.py", "Python")]);
-    // `x = 1` is one definition of `x`.
-    assert!(index.documents.iter().all(|d| d.occurrences.len() == 1));
+    // The module and the variable `x`: one definition each.
+    assert!(index.documents.iter().all(|d| d.occurrences.len() == 2));
     let root_uri = &index.metadata.as_ref().unwrap().project_root;
     assert!(
         root_uri.starts_with("file:///") && root_uri.ends_with("/project"),
@@ -162,7 +162,8 @@ fn indexes_the_aliased_import_across_files_and_reports_the_counts() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("references ambiguous: 0\n"), "{stdout}");
-    assert!(stdout.contains("references resolved: 3\n"), "{stdout}");
+    // The module `services`, the name `process`, the call `run`, and `value` in `process`.
+    assert!(stdout.contains("references resolved: 4\n"), "{stdout}");
     let index = parse(&out);
     let symbols: Vec<_> = index
         .documents

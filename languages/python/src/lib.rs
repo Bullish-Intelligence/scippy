@@ -20,12 +20,20 @@
 //!
 //! | Declaration | Descriptor | Reach |
 //! |---|---|---|
+//! | module | `module/` | global |
 //! | module-level function | `module/name().` | global |
 //! | class | `module/Name#` | global |
 //! | module-level variable | `module/name.` | global |
 //! | method | `module/Class#name().` | global |
 //! | class variable, `self.x` attribute | `module/Class#x.` | global |
 //! | parameter, local variable, anything inside a function | none | document local |
+//!
+//! A module is the file of a module, or the `__init__.py` of a package. Its symbol is the module
+//! path, as a namespace. A package file at the project root has no module path and no symbol.
+//! The binding rules define a module with an empty span at the start of the root node.
+//! The query marks that node with `@module`. The definition occurrence of a module is the empty
+//! range at line 0, column 0 of the document, as in `scip-python`. A name in an import statement
+//! that names a module has the import role. Another reference to a module is a plain reference.
 //!
 //! Declarations that share one descriptor path in one document are one entity.
 //! A variable that the code rebinds, and an overloaded function, each get one symbol.
@@ -277,6 +285,19 @@ impl ProjectModel for PythonModel {
             .then(|| ProjectRelativePath::new(&format!("{package}/__init__.py")).ok())?
     }
 
+    fn module_identity(&self, path: &ProjectRelativePath) -> Option<Identity> {
+        let descriptors = self.module_descriptors(path);
+        let Some(Descriptor::Namespace(name)) = descriptors.last() else {
+            return None;
+        };
+        Some(Identity {
+            reach: Reach::Global,
+            display_name: name.clone(),
+            descriptors,
+            kind: SymbolKind::Module,
+        })
+    }
+
     fn identity(
         &self,
         path: &ProjectRelativePath,
@@ -395,6 +416,10 @@ fn describe(
         DeclKind::Field => (
             Descriptor::Term(declaration.name.clone()),
             SymbolKind::Field,
+        ),
+        DeclKind::Module => (
+            Descriptor::Namespace(declaration.name.clone()),
+            SymbolKind::Module,
         ),
     };
     descriptors.push(last);
@@ -580,6 +605,43 @@ mod tests {
         assert_eq!(shadowed("pkg/sub.py"), None);
         // A package file never shadows itself.
         assert_eq!(shadowed("a/__init__.py"), None);
+    }
+
+    #[test]
+    fn a_module_gets_a_namespace_symbol_from_its_import_root() {
+        let model = PythonModel::new(&paths(&[
+            "lib/pkg/__init__.py",
+            "lib/pkg/mod.py",
+            "__init__.py",
+        ]));
+        let identity = |p: &str| model.module_identity(&ProjectRelativePath::new(p).unwrap());
+        let names = |p: &str| -> Option<(Vec<String>, String)> {
+            identity(p).map(|i| {
+                assert_eq!(i.reach, Reach::Global);
+                assert_eq!(i.kind, SymbolKind::Module);
+                let names = i
+                    .descriptors
+                    .iter()
+                    .map(|d| match d {
+                        Descriptor::Namespace(n) => n.clone(),
+                        other => panic!("{other:?}"),
+                    })
+                    .collect();
+                (names, i.display_name)
+            })
+        };
+        assert_eq!(
+            names("lib/pkg/mod.py"),
+            Some((vec!["lib".into(), "pkg".into(), "mod".into()], "mod".into()))
+        );
+        // A package file names the package.
+        assert_eq!(
+            names("lib/pkg/__init__.py"),
+            Some((vec!["lib".into(), "pkg".into()], "pkg".into()))
+        );
+        assert_eq!(names("x.py"), Some((vec!["x".into()], "x".into())));
+        // A package file at the project root has no module name.
+        assert!(identity("__init__.py").is_none());
     }
 
     #[test]

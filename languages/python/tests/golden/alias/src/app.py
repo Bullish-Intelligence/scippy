@@ -1,4 +1,8 @@
  from services import process as run
+#^ definition scippy python workspace . src/app/
+#  kind Module
+#  display_name app
+#     ^^^^^^^^ reference scippy python workspace . src/services/
 #                     ^^^^^^^ reference scippy python workspace . src/services/process().
  #                    ^^^^^^^ reference scippy python workspace . src/services/process().
  result = run("hello")

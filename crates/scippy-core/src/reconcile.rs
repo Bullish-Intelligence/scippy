@@ -14,7 +14,8 @@
 //!    A value-flow end is an end whose path passes the definition of another symbol.
 //!    The reconciler drops value-flow ends when a nearest end exists.
 //!    - A plain name has no reason to pass a definition. Any definition of another symbol on the
-//!      path makes the end a value-flow end.
+//!      path makes the end a value-flow end. A module is not a value: a path that enters a
+//!      module to reach a name in it does not count.
 //!    - A member reference, such as `a.x`, must pass the definition of its object, `a`.
 //!      The path to every end passes it. Only a definition that is itself an end of the
 //!      reference counts: the end of a path that passes the field `x` is a value-flow end.
@@ -34,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::bindings::{Bound, Place, RawBinding, RawEnd};
 use crate::extract::SourceAnchor;
 use crate::identity::SymbolId;
-use crate::language::{ProjectModel, ReferenceKind, Scope};
+use crate::language::{DeclKind, ProjectModel, ReferenceKind, Scope};
 
 /// Why a reference has no target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -313,8 +314,12 @@ pub(crate) fn reconcile(
             let direct = |(group, _, symbol): &(&EndGroup, &Place, &SymbolId)| {
                 group.routes.iter().any(|route| {
                     route.iter().all(|through| {
-                        declarations.get(through).is_none_or(|s| {
-                            s == *symbol || (is_member && !end_places.contains(through))
+                        declarations.entry(through).is_none_or(|e| {
+                            // A path enters a module to reach a name in it. No value flows
+                            // through a module.
+                            e.declaration.kind == DeclKind::Module
+                                || e.symbol == **symbol
+                                || (is_member && !end_places.contains(through))
                         })
                     })
                 })
@@ -632,6 +637,33 @@ mod tests {
             outcome(vec![binding(reference, ends, None)]),
             BindingOutcome::Ambiguous(vec![sym(0), sym(1)])
         );
+    }
+
+    #[test]
+    fn a_module_on_the_path_is_not_a_value_flow() {
+        use crate::language::DeclKind;
+        let module = |name: &str| Scope {
+            kind: DeclKind::Module,
+            name: name.to_string(),
+        };
+        let mut index = DeclarationIndex::default();
+        // `m.py:0` is a module. `a.py:0` and `a.py:10` are the two names that the path reaches.
+        index.insert_scoped(anchor("m.py", 0), sym(2), vec![], module("m"));
+        index.insert(anchor("a.py", 0), sym(0));
+        index.insert(anchor("a.py", 10), sym(1));
+        let reference = anchor("app.py", 50);
+        // Both paths enter the module. The path to `a.py:10` also passes the name `a.py:0`.
+        let ends = vec![
+            end_through("a.py", 0, &[("m.py", 0)]),
+            end_through("a.py", 10, &[("m.py", 0), ("a.py", 0)]),
+        ];
+        let reconciled = outcome_with(
+            &index,
+            vec![binding(reference, ends, None)],
+            &HashSet::new(),
+        );
+        // The module does not make the first end indirect. The name does make the second one.
+        assert_eq!(reconciled, BindingOutcome::Resolved(sym(0)));
     }
 
     #[test]

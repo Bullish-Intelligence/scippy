@@ -46,6 +46,20 @@
 (parameter/dictionary_splat_pattern
   (identifier) @name @definition.parameter)
 
+; The module of the document. The binding rules define it at the start of the root node.
+(module) @module
+
+; Module names in an import statement: `a` and `b` in `import a.b`, `import a.b as c`,
+; and `from a.b import x`. Each one names a module.
+(import_statement
+  name: (dotted_name (identifier) @import))
+(import_statement
+  name: (aliased_import name: (dotted_name (identifier) @import)))
+(import_from_statement
+  module_name: (dotted_name (identifier) @import))
+(import_from_statement
+  module_name: (relative_import (dotted_name (identifier) @import)))
+
 ; Imported names: `from m import a` and `from m import a as b`.
 (import_from_statement
   name: (dotted_name (identifier) @import))

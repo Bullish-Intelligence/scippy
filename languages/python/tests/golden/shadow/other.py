@@ -1,4 +1,7 @@
  def process(value):
+#^ definition scippy python workspace . other/
+#  kind Module
+#  display_name other
 #    ^^^^^^^ definition scippy python workspace . other/process().
 #            kind Function
 #            display_name process

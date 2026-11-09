@@ -1,4 +1,7 @@
  def grüße(名前):
+#^ definition scippy python workspace . lib/
+#  kind Module
+#  display_name lib
 #    ^^^^^^^ definition scippy python workspace . lib/`grüße`().
 #            kind Function
 #            display_name grüße

@@ -369,6 +369,155 @@ fn a_member_reference_never_names_a_local_variable() {
     assert!(cache[0].starts_with("local "), "{cache:?}");
 }
 
+// ---- modules ----
+
+/// The occurrences of a document that carry `symbol`, as `(line, start, end, roles)`.
+fn module_sites(indexed: &Indexed, path: &str, symbol: &str) -> Vec<(i32, i32, i32, i32)> {
+    indexed
+        .document(path)
+        .unwrap()
+        .occurrences
+        .iter()
+        .filter(|o| o.symbol == symbol)
+        .map(|o| match &o.typed_range {
+            Some(scip::types::occurrence::Typed_range::SingleLineRange(r)) => {
+                (r.line, r.start_character, r.end_character, o.symbol_roles)
+            }
+            other => panic!("unexpected range {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn every_document_defines_its_module_at_the_start() {
+    let indexed = index("modules");
+    let definition = SymbolRole::Definition as i32;
+    for (path, module) in [
+        ("app.py", "app/"),
+        ("lib/__init__.py", "lib/"),
+        ("lib/util.py", "lib/util/"),
+        ("lib/sub/__init__.py", "lib/sub/"),
+        ("lib/sub/leaf.py", "lib/sub/leaf/"),
+    ] {
+        // An empty range at line 0, column 0, with the definition role.
+        let sites = module_sites(&indexed, path, &global(module));
+        assert!(sites.contains(&(0, 0, 0, definition)), "{path}: {sites:?}");
+        let info = indexed
+            .document(path)
+            .unwrap()
+            .symbols
+            .iter()
+            .find(|s| s.symbol == global(module))
+            .unwrap_or_else(|| panic!("{path}: no symbol information"));
+        assert_eq!(
+            info.kind.enum_value().unwrap(),
+            scip::types::symbol_information::Kind::Module
+        );
+        assert_eq!(
+            info.display_name,
+            module.trim_end_matches('/').rsplit('/').next().unwrap()
+        );
+    }
+    // An empty module file has a definition too.
+    assert_eq!(
+        indexed
+            .document("lib/sub/__init__.py")
+            .unwrap()
+            .occurrences
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn module_names_in_imports_and_in_attribute_chains_get_occurrences() {
+    let indexed = index("modules");
+    let (import, none) = (SymbolRole::Import as i32, 0);
+    // The site of `word` in the first `context` of a file, as `(line, start, end)` with 0-based lines.
+    let site = |path: &str, context: &str, word: &str| {
+        let (line, column) = indexed.locate(path, context, word);
+        (line - 1, column, column + word.len() as i32)
+    };
+    let with = |(line, start, end): (i32, i32, i32), role| (line, start, end, role);
+    let util = module_sites(&indexed, "app.py", &global("lib/util/"));
+    // `import lib.util as u`: both names are import occurrences. The alias gets none.
+    assert!(util.contains(&with(
+        site("app.py", "import lib.util as u", "util"),
+        import
+    )));
+    assert!(indexed.find("app.py", "as u", "u").is_empty());
+    // `from lib import util`: the name `util` is a module.
+    assert!(util.contains(&with(
+        site("app.py", "from lib import util", "util"),
+        import
+    )));
+    // `lib.util.VALUE`: the module name is a plain reference, and so is the alias in `u.VALUE`.
+    assert!(util.contains(&with(site("app.py", "a = lib.util.VALUE", "util"), none)));
+    assert!(util.contains(&with(site("app.py", "b = u.VALUE", "u"), none)));
+    // The relative import `from . import util` in the package file.
+    assert_eq!(
+        module_sites(&indexed, "lib/__init__.py", &global("lib/util/")),
+        [with(
+            site("lib/__init__.py", "from . import util", "util"),
+            import
+        )]
+    );
+    // Each name of a dotted import path names its own module.
+    for (module, word) in [("lib/sub/", "sub"), ("lib/sub/leaf/", "leaf")] {
+        let sites = module_sites(&indexed, "deep.py", &global(module));
+        assert_eq!(
+            sites[0],
+            with(site("deep.py", "import lib.sub.leaf", word), import)
+        );
+    }
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
+#[test]
+fn a_module_with_leading_blank_lines_still_defines_at_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    // The module node of the first file starts after the blank lines. The definition does not.
+    fs::write(dir.path().join("m.py"), "\n\n\nx = 1\n").unwrap();
+    fs::write(dir.path().join("n.py"), "\n\nimport m\ny = m.x\n").unwrap();
+    fs::write(dir.path().join("empty.py"), "").unwrap();
+    let indexed = index_at(dir.path());
+    let definition = SymbolRole::Definition as i32;
+    assert!(module_sites(&indexed, "m.py", &global("m/")).contains(&(0, 0, 0, definition)));
+    assert!(module_sites(&indexed, "empty.py", &global("empty/")).contains(&(0, 0, 0, definition)));
+    assert_eq!(indexed.symbols_of("n.py", "import m", "m"), [global("m/")]);
+    assert_eq!(indexed.symbols_of("n.py", "y = m.x", "m"), [global("m/")]);
+    assert_eq!(indexed.symbols_of("n.py", "y = m.x", "x"), [global("m/x.")]);
+}
+
+#[test]
+fn a_package_file_at_the_project_root_has_no_module_symbol() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("__init__.py"), "x = 1\n").unwrap();
+    let indexed = index_at(dir.path());
+    let document = indexed.document("__init__.py").unwrap();
+    assert_eq!(document.occurrences.len(), 1, "only the variable `x`");
+    assert_eq!(document.symbols.len(), 1);
+}
+
+#[test]
+fn a_module_does_not_make_a_name_ambiguous() {
+    // `from pkg import helper` crosses the module `pkg`. The module is not a value.
+    let indexed = index("packages");
+    assert_eq!(
+        indexed.symbols_of("lib/main.py", "x = helper()", "helper"),
+        [global("lib/pkg/core/helper().")]
+    );
+    assert_eq!(
+        indexed.symbols_of("lib/main.py", "from pkg import", "pkg"),
+        [global("lib/pkg/")]
+    );
+    assert_eq!(
+        indexed.symbols_of("lib/main.py", "from pkg.core import", "core"),
+        [global("lib/pkg/core/")]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.
@@ -770,6 +919,7 @@ const SCIP_FIXTURES: &[&str] = &[
     "unicode",
     "packages",
     "members",
+    "modules",
     "ambiguous",
     "shadow",
     "unresolved",

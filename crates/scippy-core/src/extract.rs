@@ -35,6 +35,8 @@ pub(crate) struct DeclarationFact {
 #[derive(Debug, Default)]
 pub(crate) struct Facts {
     pub declarations: Vec<DeclarationFact>,
+    /// The module of the document. Its anchor is an empty span at the start of the module node.
+    pub module: Option<DeclarationFact>,
     /// Spans of identifiers that name an imported symbol.
     pub imports: Vec<(u32, u32)>,
     /// Spans of identifiers that name a member of a value, such as the `x` in `a.x`.
@@ -57,6 +59,7 @@ pub(crate) struct Extractor {
     name: u32,
     import: Option<u32>,
     member: Option<u32>,
+    module: Option<u32>,
     definitions: Vec<(u32, DeclKind)>,
 }
 
@@ -69,6 +72,7 @@ impl Extractor {
         let mut name = None;
         let mut import = None;
         let mut member = None;
+        let mut module = None;
         let mut definitions = Vec::new();
         for (index, capture) in query.capture_names().iter().enumerate() {
             let index = index as u32;
@@ -76,6 +80,7 @@ impl Extractor {
                 "name" => name = Some(index),
                 "import" => import = Some(index),
                 "member" => member = Some(index),
+                "module" => module = Some(index),
                 other => {
                     if let Some(kind) = other.strip_prefix("definition.") {
                         let kind = DeclKind::from_capture(kind)
@@ -92,6 +97,7 @@ impl Extractor {
             name,
             import,
             member,
+            module,
             definitions,
         })
     }
@@ -119,12 +125,26 @@ impl Extractor {
         let mut by_anchor: BTreeMap<(u32, u32), Vec<DeclarationFact>> = BTreeMap::new();
         let mut imports = Vec::new();
         let mut members = Vec::new();
+        let mut module = None;
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&self.query, tree.root_node(), source.as_bytes());
         while let Some(m) = matches.next() {
             let node = |index: u32| m.captures.iter().find(|c| c.index == index).map(|c| c.node);
             if let Some(import) = self.import.and_then(node) {
                 imports.push((import.start_byte() as u32, import.end_byte() as u32));
+            }
+            if let Some(whole) = self.module.and_then(node) {
+                let start = whole.start_byte() as u32;
+                module = Some(DeclarationFact {
+                    anchor: SourceAnchor {
+                        path: path.clone(),
+                        start_byte: start,
+                        end_byte: start,
+                    },
+                    name: String::new(),
+                    kind: DeclKind::Module,
+                    extent: (start, whole.end_byte() as u32),
+                });
             }
             if let Some(member) = self.member.and_then(node) {
                 members.push((member.start_byte() as u32, member.end_byte() as u32));
@@ -152,7 +172,10 @@ impl Extractor {
             }
         }
 
-        let mut facts = Facts::default();
+        let mut facts = Facts {
+            module,
+            ..Facts::default()
+        };
         for (span, mut found) in by_anchor {
             found.sort_by_key(|f| (f.kind, f.extent));
             found.dedup();

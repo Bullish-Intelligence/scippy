@@ -206,15 +206,18 @@ fn build_document(document: Document, check: &mut Collisions) -> Result<ScipDocu
 
     let mut occurrences = Vec::with_capacity(document.occurrences.len());
     for o in document.occurrences {
-        let range =
-            lines
-                .range(o.start_byte, o.end_byte)
-                .map_err(|reason| ScippyError::InvalidRange {
-                    path: path.to_string(),
-                    start_byte: o.start_byte,
-                    end_byte: o.end_byte,
-                    reason,
-                })?;
+        // A definition may have an empty span, such as the module of a document.
+        let range = if o.role == Role::Definition && o.start_byte == o.end_byte {
+            lines.point(o.start_byte)
+        } else {
+            lines.range(o.start_byte, o.end_byte)
+        }
+        .map_err(|reason| ScippyError::InvalidRange {
+            path: path.to_string(),
+            start_byte: o.start_byte,
+            end_byte: o.end_byte,
+            reason,
+        })?;
         occurrences.push((range, o.symbol, o.role));
     }
     occurrences.sort();
@@ -730,6 +733,43 @@ mod tests {
             "empty"
         );
         assert!(bad(0, 2).is_ok());
+    }
+
+    #[test]
+    fn only_a_definition_may_have_an_empty_range() {
+        let a = sym("a");
+        let at = |start, role| {
+            let o = Occurrence {
+                start_byte: start,
+                end_byte: start,
+                symbol: a.clone(),
+                role,
+            };
+            encode(data(vec![doc("a.py", "é\n", vec![o], vec![])]))
+        };
+        // A module has no name token. Its definition is an empty range.
+        let bytes = at(0, Role::Definition).unwrap();
+        let index = parse(&bytes);
+        let occurrence = &index.documents[0].occurrences[0];
+        assert_eq!(occurrence.symbol_roles, SymbolRole::Definition as i32);
+        assert!(matches!(
+            occurrence.typed_range,
+            Some(Typed_range::SingleLineRange(ref r))
+                if r.line == 0 && r.start_character == 0 && r.end_character == 0
+        ));
+        // An empty range must sit on a character boundary of the source text.
+        assert!(matches!(
+            at(1, Role::Definition),
+            Err(ScippyError::InvalidRange { .. })
+        ));
+        assert!(matches!(
+            at(0, Role::Reference),
+            Err(ScippyError::InvalidRange { .. })
+        ));
+        assert!(matches!(
+            at(0, Role::Import),
+            Err(ScippyError::InvalidRange { .. })
+        ));
     }
 
     #[test]

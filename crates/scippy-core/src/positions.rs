@@ -51,6 +51,24 @@ impl<'a> LineIndex<'a> {
         })
     }
 
+    /// Convert a byte offset to an empty range at that offset.
+    pub fn point(&self, byte: u32) -> Result<Range, &'static str> {
+        let at = byte as usize;
+        if at > self.text.len() {
+            return Err("offset is after the source text");
+        }
+        if !self.text.is_char_boundary(at) {
+            return Err("offset is not on a UTF-8 character boundary");
+        }
+        let (line, character) = self.position(at);
+        Ok(Range {
+            start_line: line,
+            start_character: character,
+            end_line: line,
+            end_character: character,
+        })
+    }
+
     fn position(&self, byte: usize) -> (u32, u32) {
         let line = self.line_starts.partition_point(|&start| start <= byte) - 1;
         (line as u32, (byte - self.line_starts[line]) as u32)
