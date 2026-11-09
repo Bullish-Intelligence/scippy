@@ -568,6 +568,29 @@ fn an_override_implements_the_method_that_it_shadows() {
     assert!(implements(&indexed, "base.py", &global("base/Base#run().")).is_empty());
 }
 
+#[test]
+fn an_override_may_implement_a_method_of_a_later_document() {
+    // `a_child.py` sorts before `z_base.py`, and the base class lives in `z_base.py`.
+    let indexed = index("overrides_later");
+    let paths: Vec<&str> = indexed
+        .index
+        .documents
+        .iter()
+        .map(|d| d.relative_path.as_str())
+        .collect();
+    assert_eq!(paths, ["a_child.py", "z_base.py"]);
+    assert_eq!(
+        implements(&indexed, "a_child.py", &global("a_child/Child#run().")),
+        [global("z_base/Base#run().")]
+    );
+    let base = indexed.document("z_base.py").unwrap();
+    assert!(
+        base.symbols
+            .iter()
+            .any(|s| s.symbol == global("z_base/Base#run()."))
+    );
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.
@@ -971,11 +994,112 @@ const SCIP_FIXTURES: &[&str] = &[
     "members",
     "modules",
     "overrides",
+    "overrides_later",
     "ambiguous",
     "shadow",
     "unresolved",
     "syntax_error",
 ];
+
+/// Every symbol that the index defines: in a document or in the external symbols.
+fn defined_symbols(index: &Index) -> std::collections::HashSet<&str> {
+    index
+        .documents
+        .iter()
+        .flat_map(|d| d.symbols.iter())
+        .chain(index.external_symbols.iter())
+        .map(|info| info.symbol.as_str())
+        .collect()
+}
+
+/// The target of a relationship that `scip lint` 0.10.0 reports as missing.
+///
+/// Returns `None` for any other line.
+///
+/// The CLI reports this message for a target that a later document defines.
+/// It checks the relationships of each document in the same loop that fills its
+/// symbol table, and it visits the documents in the random order of a Go map.
+/// The count of these lines changes from run to run. The `scip-python` index gets them too:
+/// 548, 775 and 1172 lines in three runs on the mypy corpus.
+/// See https://github.com/scip-code/scip/blob/v0.10.0/cmd/scip/lint.go#L71-L86
+/// The comment at line 79 asks for a second pass, but the code makes none.
+fn lint_missing_relationship_target(line: &str) -> Option<&str> {
+    // The CLI writes a log timestamp before the message: `2026/11/09 10:06:05 `.
+    let at = line.find("error: symbol '")?;
+    let stamp = &line[..at];
+    if !stamp.is_empty()
+        && !(stamp.len() == 20
+            && stamp
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '/' | ':' | ' ')))
+    {
+        return None;
+    }
+    let rest = &line[at + "error: symbol '".len()..];
+    let rest = rest.split_once("' (#1) (in symbols for file ")?.1;
+    let rest = rest.split_once(") has a relationship to '")?.1;
+    let (target, tail) = rest.split_once("' (#2), ")?;
+    (tail == "but couldn't find #2 in external symbols or some other document").then_some(target)
+}
+
+/// The lines of `scip lint` output that matter.
+///
+/// Tolerates only the message above, and only when this index does define the target.
+fn lint_problems(text: &str, index: &Index) -> Vec<String> {
+    let defined = defined_symbols(index);
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter(|line| {
+            !lint_missing_relationship_target(line).is_some_and(|target| defined.contains(target))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn the_lint_tolerance_accepts_only_a_defined_relationship_target() {
+    let indexed = index("overrides_later");
+    let target = global("z_base/Base#run().");
+    let line = |target: &str| {
+        format!(
+            "error: symbol 'x' (#1) (in symbols for file a_child.py) has a relationship to '{target}' (#2), \
+             but couldn't find #2 in external symbols or some other document"
+        )
+    };
+    assert!(lint_problems(&line(&target), &indexed.index).is_empty());
+    // A target that the index does not define stays a problem.
+    assert_eq!(lint_problems(&line("nowhere"), &indexed.index).len(), 1);
+    // Any other message stays a problem.
+    assert_eq!(
+        lint_problems("error: found empty symbol in index", &indexed.index).len(),
+        1
+    );
+    // The CLI log timestamp is allowed. Other text before the message is not.
+    let stamped = format!("2026/11/09 10:06:05 {}", line(&target));
+    assert!(lint_problems(&stamped, &indexed.index).is_empty());
+    let other = format!("warning: {}", line(&target));
+    assert_eq!(lint_problems(&other, &indexed.index).len(), 1);
+}
+
+#[test]
+fn every_relationship_target_has_symbol_information() {
+    for name in SCIP_FIXTURES {
+        let indexed = index(name);
+        let defined = defined_symbols(&indexed.index);
+        for document in &indexed.index.documents {
+            for info in &document.symbols {
+                for relationship in &info.relationships {
+                    assert!(
+                        defined.contains(relationship.symbol.as_str()),
+                        "{name}: {} has a relationship to {}, which no document defines",
+                        info.symbol,
+                        relationship.symbol
+                    );
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn scip_lint_accepts_every_fixture_index() {
@@ -987,10 +1111,10 @@ fn scip_lint_accepts_every_fixture_index() {
             &fixture(name),
             &["lint", indexed.path.to_str().unwrap()],
         );
-        assert!(output.status.success(), "{name}");
         let text = String::from_utf8_lossy(&output.stdout).to_string()
             + &String::from_utf8_lossy(&output.stderr);
-        assert!(!text.to_lowercase().contains("error"), "{name}: {text}");
+        let problems = lint_problems(&text, &indexed.index);
+        assert!(problems.is_empty(), "{name}: {problems:?}");
     }
 }
 
