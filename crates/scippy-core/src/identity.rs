@@ -16,7 +16,7 @@ use crate::extract::SourceAnchor;
 
 /// A valid SCIP symbol string. Only this module creates one.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymbolId(String);
+pub(crate) struct SymbolId(String);
 
 impl SymbolId {
     /// A symbol that is visible in one document only.
@@ -34,7 +34,7 @@ impl SymbolId {
 }
 
 /// The package part of a global symbol. An empty field means "not set".
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Package {
     pub manager: String,
     pub name: String,
@@ -42,7 +42,7 @@ pub struct Package {
 }
 
 /// One descriptor of a global symbol, from the outer scope to the inner scope.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Descriptor {
     Namespace(String),
     Type(String),
@@ -73,7 +73,7 @@ impl Descriptor {
 /// Build global symbols for one scheme and one package.
 ///
 /// The builder also records which declaration owns each symbol it defines.
-pub struct IdentityBuilder {
+pub(crate) struct IdentityBuilder {
     scheme: String,
     package: Package,
     owners: BTreeMap<SymbolId, SourceAnchor>,
@@ -154,8 +154,9 @@ impl IdentityBuilder {
 
     /// Build the symbol and record `owner` as its declaration.
     ///
-    /// Defining one symbol for the same declaration twice returns the same symbol.
-    /// Defining it for a different declaration is a collision.
+    /// Defining one symbol again in the same document returns the same symbol.
+    /// The sites are one entity, for example a Python variable that the code rebinds.
+    /// Defining it in a different document is a collision.
     pub fn define(
         &mut self,
         descriptors: &[Descriptor],
@@ -163,7 +164,7 @@ impl IdentityBuilder {
     ) -> Result<SymbolId, ScippyError> {
         let symbol = self.symbol(descriptors)?;
         match self.owners.get(&symbol) {
-            Some(first) if *first != owner => Err(ScippyError::SymbolCollision {
+            Some(first) if first.path != owner.path => Err(ScippyError::SymbolCollision {
                 symbol: symbol.0,
                 detail: format!(
                     "declared at {}:{}..{} and at {}:{}..{}",
@@ -339,6 +340,14 @@ mod tests {
         let mut b = builder();
         let one = b.define(&method("f"), anchor("a.py", 0)).unwrap();
         let two = b.define(&method("f"), anchor("a.py", 0)).unwrap();
+        assert_eq!(one, two);
+    }
+
+    #[test]
+    fn a_second_site_in_one_document_is_one_entity() {
+        let mut b = builder();
+        let one = b.define(&method("f"), anchor("a.py", 0)).unwrap();
+        let two = b.define(&method("f"), anchor("a.py", 40)).unwrap();
         assert_eq!(one, two);
     }
 

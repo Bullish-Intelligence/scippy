@@ -23,7 +23,7 @@ use crate::project::ProjectRelativePath;
 
 /// Why an occurrence exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Role {
+pub(crate) enum Role {
     Reference,
     Definition,
     Import,
@@ -31,7 +31,7 @@ pub enum Role {
 
 /// A symbol occurrence. The span is in bytes of the document source.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Occurrence {
+pub(crate) struct Occurrence {
     pub start_byte: u32,
     pub end_byte: u32,
     pub symbol: SymbolId,
@@ -49,11 +49,12 @@ pub enum SymbolKind {
     Variable,
     Constant,
     Field,
+    Parameter,
 }
 
 /// Metadata of a symbol that the document defines.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SymbolInfo {
+pub(crate) struct SymbolInfo {
     pub symbol: SymbolId,
     pub kind: SymbolKind,
     pub display_name: String,
@@ -61,7 +62,7 @@ pub struct SymbolInfo {
 
 /// One source file.
 #[derive(Clone, Debug)]
-pub struct Document {
+pub(crate) struct Document {
     pub path: ProjectRelativePath,
     /// The SCIP language name, for example `Python`.
     pub language: String,
@@ -74,14 +75,14 @@ pub struct Document {
 
 /// Everything the emitter writes.
 #[derive(Clone, Debug)]
-pub struct IndexData {
+pub(crate) struct IndexData {
     /// The absolute project root. The emitter writes it as a `file://` URI.
     pub project_root: PathBuf,
     pub documents: Vec<Document>,
 }
 
 /// Check, sort, and serialize the index.
-pub fn encode(index: IndexData) -> Result<Vec<u8>, ScippyError> {
+pub(crate) fn encode(index: IndexData) -> Result<Vec<u8>, ScippyError> {
     build(index)?
         .write_to_bytes()
         .map_err(|e| ScippyError::Serialize(e.to_string()))
@@ -89,7 +90,7 @@ pub fn encode(index: IndexData) -> Result<Vec<u8>, ScippyError> {
 
 /// Serialize the index and write it to `output` through a temporary file and a rename.
 /// A failure leaves no truncated file at `output`.
-pub fn write_index(index: IndexData, output: &Path) -> Result<(), ScippyError> {
+pub(crate) fn write_index(index: IndexData, output: &Path) -> Result<(), ScippyError> {
     let bytes = encode(index)?;
     write_atomic(output, &bytes)
 }
@@ -159,12 +160,10 @@ fn build(mut index: IndexData) -> Result<Index, ScippyError> {
 /// Facts that must hold across documents.
 #[derive(Default)]
 struct Collisions {
-    /// Where each global symbol has its definition.
-    definitions: BTreeMap<SymbolId, (String, Range)>,
+    /// Which document defines each global symbol.
+    definitions: BTreeMap<SymbolId, String>,
     /// Which document holds the symbol information of each global symbol.
     infos: BTreeMap<SymbolId, String>,
-    /// Which document uses each local symbol.
-    locals: BTreeMap<SymbolId, String>,
 }
 
 fn collision(symbol: &SymbolId, detail: String) -> ScippyError {
@@ -202,35 +201,20 @@ fn build_document(document: Document, check: &mut Collisions) -> Result<ScipDocu
     occurrences.sort();
     occurrences.dedup();
 
-    for (range, symbol, role) in &occurrences {
-        if symbol.is_local() {
+    // A document may define one symbol at several sites, for example a rebound variable.
+    // Two documents may not define one global symbol.
+    // A local symbol belongs to its document, so two documents may use the same local id.
+    for (_, symbol, role) in &occurrences {
+        if *role == Role::Definition && !symbol.is_local() {
             let first = check
-                .locals
+                .definitions
                 .entry(symbol.clone())
                 .or_insert_with(|| path.to_string());
             if first != path {
                 return Err(collision(
                     symbol,
-                    format!("local symbol used in {first} and in {path}"),
+                    format!("defined in {first} and in {path}"),
                 ));
-            }
-        } else if *role == Role::Definition {
-            let here = (path.to_string(), *range);
-            let first = check
-                .definitions
-                .entry(symbol.clone())
-                .or_insert_with(|| here.clone());
-            if *first != here {
-                let detail = format!(
-                    "defined at {}:{}:{} and at {}:{}:{}",
-                    first.0,
-                    first.1.start_line,
-                    first.1.start_character,
-                    here.0,
-                    here.1.start_line,
-                    here.1.start_character
-                );
-                return Err(collision(symbol, detail));
             }
         }
     }
@@ -316,6 +300,7 @@ fn scip_symbol(info: SymbolInfo) -> SymbolInformation {
         SymbolKind::Variable => Kind::Variable,
         SymbolKind::Constant => Kind::Constant,
         SymbolKind::Field => Kind::Field,
+        SymbolKind::Parameter => Kind::Parameter,
     };
     SymbolInformation {
         symbol: info.symbol.as_str().to_string(),
@@ -607,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_two_definitions_of_one_symbol() {
+    fn allows_two_definition_sites_in_one_document_but_not_in_two() {
         let source = "a a\n";
         let a = sym("a");
         let same_doc = doc(
@@ -619,10 +604,12 @@ mod tests {
             ],
             vec![],
         );
-        assert!(matches!(
-            encode(data(vec![same_doc])),
-            Err(ScippyError::SymbolCollision { .. })
-        ));
+        assert_eq!(
+            parse(&encode(data(vec![same_doc])).unwrap()).documents[0]
+                .occurrences
+                .len(),
+            2
+        );
 
         let one = doc(
             "a.py",
@@ -676,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_symbol_stays_in_one_document() {
+    fn two_documents_may_use_the_same_local_id() {
         let source = "x\n";
         let local = |path| {
             doc(
@@ -686,12 +673,7 @@ mod tests {
                 vec![],
             )
         };
-        // The same local id in two documents is two symbols, but one document may not share it.
-        assert!(matches!(
-            encode(data(vec![local("a.py"), local("b.py")])),
-            Err(ScippyError::SymbolCollision { .. })
-        ));
-        assert!(encode(data(vec![local("a.py")])).is_ok());
+        assert!(encode(data(vec![local("a.py"), local("b.py")])).is_ok());
     }
 
     #[test]
@@ -759,18 +741,23 @@ mod tests {
         let out = dir.path().join("index.scip");
         fs::write(&out, b"old").unwrap();
         // A collision stops the run before any file operation.
-        let source = "a a\n";
-        let a = sym("a");
-        let bad = doc(
-            "a.py",
-            source,
-            vec![
-                occ(source, "a", 0, a.clone(), Role::Definition),
-                occ(source, "a", 1, a, Role::Definition),
-            ],
-            vec![],
+        let source = "a\n";
+        let (a, b) = (sym("a"), sym("a"));
+        let (one, two) = (
+            doc(
+                "a.py",
+                source,
+                vec![occ(source, "a", 0, a, Role::Definition)],
+                vec![],
+            ),
+            doc(
+                "b.py",
+                source,
+                vec![occ(source, "a", 0, b, Role::Definition)],
+                vec![],
+            ),
         );
-        assert!(write_index(data(vec![bad]), &out).is_err());
+        assert!(write_index(data(vec![one, two]), &out).is_err());
         assert_eq!(fs::read(&out).unwrap(), b"old");
         // A missing directory fails without a temporary file.
         let missing = dir.path().join("none").join("index.scip");

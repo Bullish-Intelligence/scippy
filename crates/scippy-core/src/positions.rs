@@ -6,7 +6,7 @@
 
 /// A range with line numbers and UTF-8 byte columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Range {
+pub(crate) struct Range {
     pub start_line: u32,
     pub start_character: u32,
     pub end_line: u32,
@@ -14,7 +14,7 @@ pub struct Range {
 }
 
 /// Line start offsets of one source text.
-pub struct LineIndex<'a> {
+pub(crate) struct LineIndex<'a> {
     text: &'a str,
     line_starts: Vec<usize>,
 }
