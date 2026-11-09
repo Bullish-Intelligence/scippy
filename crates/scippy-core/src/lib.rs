@@ -28,8 +28,8 @@ pub use emit::SymbolKind;
 pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
 pub use language::{
-    Analysis, BindingRules, Builtins, DeclKind, ExtractionSpec, Identity, LanguagePack,
-    ProjectModel, Reach, Scope,
+    Analysis, BindingRules, Builtins, DeclKind, ExternalIdentity, ExtractionSpec, Identity,
+    LanguagePack, ProjectModel, Reach, Scope,
 };
 pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};

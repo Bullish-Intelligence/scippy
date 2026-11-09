@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::IndexRequest;
-use crate::bindings::{BindingEngine, Bound, RawBinding, ResolveLimits};
+use crate::bindings::{BUILTINS_NAME, BindingEngine, Bound, RawBinding, ResolveLimits};
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts};
@@ -62,6 +62,7 @@ pub(crate) fn run(
         ..Default::default()
     };
     let mut documents = Vec::new();
+    let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut trace = Vec::new();
 
     for (index, pack) in languages.iter().enumerate() {
@@ -85,7 +86,7 @@ pub(crate) fn run(
             });
             continue;
         };
-        let pack_documents = index_pack(
+        let indexed = index_pack(
             *pack,
             analysis,
             &found.root,
@@ -94,7 +95,8 @@ pub(crate) fn run(
             &mut report,
             &mut trace,
         )?;
-        documents.extend(pack_documents);
+        documents.extend(indexed.documents);
+        external_symbols.extend(indexed.external_symbols);
     }
 
     report.files_indexed = documents.len();
@@ -127,10 +129,17 @@ pub(crate) fn run(
         IndexData {
             project_root: found.root,
             documents,
+            external_symbols: external_symbols.into_values().collect(),
         },
         &request.output,
     )?;
     Ok(report)
+}
+
+/// What one pack gives back: its documents and the external symbols that they reference.
+struct PackIndex {
+    documents: Vec<Document>,
+    external_symbols: BTreeMap<SymbolId, SymbolInfo>,
 }
 
 fn index_pack(
@@ -141,7 +150,7 @@ fn index_pack(
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
-) -> Result<Vec<Document>, ScippyError> {
+) -> Result<PackIndex, ScippyError> {
     let paths: Vec<ProjectRelativePath> = files.iter().map(|f| f.path.clone()).collect();
     let model = analysis.project_model(&paths);
     let extractor = Extractor::new(pack.id(), analysis)?;
@@ -237,6 +246,9 @@ fn index_pack(
         }
     }
 
+    // The declarations of external assets, such as the builtins.
+    let externals = declare_external(&extractor, analysis, &*model, report, &mut index);
+
     // Stage D: resolve. Stage E: reconcile.
     let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
     for binding in engine.resolve(ResolveLimits::default()) {
@@ -249,12 +261,21 @@ fn index_pack(
 
     let language = pack.scip_language().to_string();
     let mut out = Vec::with_capacity(docs.len());
+    let mut referenced: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let members: HashSet<(u32, u32)> = doc.facts.members.iter().copied().collect();
         let reconciled = reconcile(&index, bindings, &members);
         for r in &reconciled {
             count(report, r);
+            if let BindingOutcome::Resolved(symbol) = &r.outcome {
+                if let Some(info) = externals.get(symbol) {
+                    report.references_external += 1;
+                    referenced
+                        .entry(symbol.clone())
+                        .or_insert_with(|| info.clone());
+                }
+            }
         }
         if request.trace.is_some() {
             let lines = LineIndex::new(&doc.source);
@@ -262,7 +283,78 @@ fn index_pack(
         }
         out.push(build_document(&language, doc, &reconciled));
     }
-    Ok(out)
+    Ok(PackIndex {
+        documents: out,
+        external_symbols: referenced,
+    })
+}
+
+/// Parse the external assets of the pack and give their declarations identities.
+///
+/// The declarations join to references by anchor, like project declarations.
+/// The result maps each external symbol to its metadata.
+fn declare_external(
+    extractor: &Extractor,
+    analysis: &dyn Analysis,
+    model: &dyn ProjectModel,
+    report: &mut IndexReport,
+    index: &mut DeclarationIndex,
+) -> BTreeMap<SymbolId, SymbolInfo> {
+    let mut symbols = BTreeMap::new();
+    let Some(builtins) = analysis.binding_rules().builtins else {
+        return symbols;
+    };
+    let warn = |code, message: String| Diagnostic {
+        severity: Severity::Warning,
+        stage: Stage::Identity,
+        file: None,
+        range: None,
+        code,
+        message,
+    };
+    let Ok(path) = ProjectRelativePath::new(BUILTINS_NAME) else {
+        return symbols;
+    };
+    let tree = match extractor.parse(builtins.source) {
+        Ok(tree) => tree,
+        Err(_) => {
+            report.diagnostics.push(warn(
+                "external-asset-syntax-error",
+                format!(
+                    "the asset {} has a syntax error. Its names stay unresolved",
+                    builtins.path
+                ),
+            ));
+            return symbols;
+        }
+    };
+    let facts = extractor.facts(&path, builtins.source, &tree);
+    let declarations = &facts.declarations;
+    let containers = container_indexes(declarations);
+    for (i, fact) in declarations.iter().enumerate() {
+        let scopes = scope_chain(declarations, &containers, i);
+        let declaration = Scope {
+            kind: fact.kind,
+            name: fact.name.clone(),
+        };
+        let Some(identity) = model.external_identity(BUILTINS_NAME, &scopes, &declaration) else {
+            continue;
+        };
+        match IdentityBuilder::new(SCHEME, identity.package).symbol(&identity.descriptors) {
+            Ok(symbol) => {
+                index.insert_external(fact.anchor.clone(), symbol.clone());
+                symbols.entry(symbol.clone()).or_insert(SymbolInfo {
+                    symbol,
+                    kind: identity.kind,
+                    display_name: identity.display_name,
+                });
+            }
+            Err(error) => report
+                .diagnostics
+                .push(warn("external-symbol-invalid", error.to_string())),
+        }
+    }
+    symbols
 }
 
 /// Read a file. Return a diagnostic code and message on failure.
@@ -287,6 +379,33 @@ fn read_source(
         .map_err(|_| ("invalid-utf8", "skipped: the file is not UTF-8".to_string()))
 }
 
+/// The indexes of the declarations that can hold other declarations.
+fn container_indexes(facts: &[DeclarationFact]) -> Vec<usize> {
+    (0..facts.len())
+        .filter(|&i| facts[i].kind.is_container())
+        .collect()
+}
+
+/// The enclosing declarations of declaration `i`, from the outermost to the innermost.
+fn scope_chain(facts: &[DeclarationFact], containers: &[usize], i: usize) -> Vec<Scope> {
+    let fact = &facts[i];
+    let mut ancestors: Vec<&DeclarationFact> = containers
+        .iter()
+        .filter(|&&j| {
+            j != i && facts[j].extent.0 <= fact.extent.0 && fact.extent.1 <= facts[j].extent.1
+        })
+        .map(|&j| &facts[j])
+        .collect();
+    ancestors.sort_by_key(|a| (a.extent.0, std::cmp::Reverse(a.extent.1)));
+    ancestors
+        .iter()
+        .map(|a| Scope {
+            kind: a.kind,
+            name: a.name.clone(),
+        })
+        .collect()
+}
+
 /// Give each declaration of a document its symbol.
 fn assign_identities(
     model: &dyn ProjectModel,
@@ -294,27 +413,11 @@ fn assign_identities(
     doc: &Doc,
 ) -> Result<Vec<Declared>, ScippyError> {
     let facts = &doc.facts.declarations;
-    let containers: Vec<usize> = (0..facts.len())
-        .filter(|&i| facts[i].kind.is_container())
-        .collect();
+    let containers = container_indexes(facts);
     let mut locals: BTreeMap<Vec<Descriptor>, u32> = BTreeMap::new();
     let mut out = Vec::with_capacity(facts.len());
     for (i, fact) in facts.iter().enumerate() {
-        let mut ancestors: Vec<&DeclarationFact> = containers
-            .iter()
-            .filter(|&&j| {
-                j != i && facts[j].extent.0 <= fact.extent.0 && fact.extent.1 <= facts[j].extent.1
-            })
-            .map(|&j| &facts[j])
-            .collect();
-        ancestors.sort_by_key(|a| (a.extent.0, std::cmp::Reverse(a.extent.1)));
-        let scopes: Vec<Scope> = ancestors
-            .iter()
-            .map(|a| Scope {
-                kind: a.kind,
-                name: a.name.clone(),
-            })
-            .collect();
+        let scopes = scope_chain(facts, &containers, i);
         let identity = model.identity(
             &doc.path,
             &scopes,

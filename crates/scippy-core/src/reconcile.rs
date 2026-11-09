@@ -67,6 +67,10 @@ impl DeclarationIndex {
         self.project.insert(anchor, symbol);
     }
 
+    pub fn insert_external(&mut self, anchor: SourceAnchor, symbol: SymbolId) {
+        self.external.insert(anchor, symbol);
+    }
+
     pub fn get(&self, place: &Place) -> Option<&SymbolId> {
         if place.external {
             self.external.get(&place.anchor)
@@ -434,6 +438,25 @@ mod tests {
         );
     }
 
+    fn external_end(start: u32) -> RawEnd {
+        RawEnd {
+            place: Some(Place {
+                anchor: anchor("<builtins>", start),
+                external: true,
+            }),
+            syntax_type: Some("function".into()),
+            through: vec![],
+        }
+    }
+
+    /// The index with two external declarations: `sym(5)` and `sym(6)`.
+    fn external_index() -> DeclarationIndex {
+        let mut index = index();
+        index.insert_external(anchor("<builtins>", 0), sym(5));
+        index.insert_external(anchor("<builtins>", 10), sym(6));
+        index
+    }
+
     fn outcome_with(
         index: &DeclarationIndex,
         bindings: Vec<RawBinding>,
@@ -528,5 +551,70 @@ mod tests {
         ];
         let reconciled = outcome_with(&index(), vec![binding(reference, ends, None)], &members);
         assert_eq!(reconciled, BindingOutcome::Resolved(sym(0)));
+    }
+
+    #[test]
+    fn an_end_in_an_external_asset_resolves_to_an_external_symbol() {
+        let reference = anchor("app.py", 50);
+        let index = external_index();
+        let one = vec![binding(reference.clone(), vec![external_end(0)], None)];
+        assert_eq!(
+            outcome_with(&index, one, &HashSet::new()),
+            BindingOutcome::Resolved(sym(5))
+        );
+        let two = vec![binding(
+            reference,
+            vec![external_end(0), external_end(10)],
+            None,
+        )];
+        assert_eq!(
+            outcome_with(&index, two, &HashSet::new()),
+            BindingOutcome::Ambiguous(vec![sym(5), sym(6)])
+        );
+    }
+
+    #[test]
+    fn a_project_definition_shadows_an_external_one() {
+        let reference = anchor("app.py", 50);
+        let ends = vec![end("a.py", 0, None), external_end(0)];
+        let all = reconcile(
+            &external_index(),
+            vec![binding(reference, ends, None)],
+            &HashSet::new(),
+        );
+        assert_eq!(all[0].outcome, BindingOutcome::Resolved(sym(0)));
+        assert_eq!(all[0].outside, 1);
+    }
+
+    #[test]
+    fn an_external_end_without_a_declaration_is_unresolved() {
+        let reference = anchor("app.py", 50);
+        let ends = vec![external_end(99)];
+        assert_eq!(
+            outcome_with(
+                &external_index(),
+                vec![binding(reference, ends, None)],
+                &HashSet::new()
+            ),
+            BindingOutcome::Unresolved(UnresolvedReason::NoDeclaration)
+        );
+    }
+
+    #[test]
+    fn an_external_span_never_joins_a_project_declaration() {
+        // `a.py:0` is a project declaration. The same span in an asset is not.
+        let reference = anchor("app.py", 50);
+        let ends = vec![RawEnd {
+            place: Some(Place {
+                anchor: anchor("a.py", 0),
+                external: true,
+            }),
+            syntax_type: None,
+            through: vec![],
+        }];
+        assert_eq!(
+            outcome(vec![binding(reference, ends, None)]),
+            BindingOutcome::Unresolved(UnresolvedReason::NoDeclaration)
+        );
     }
 }

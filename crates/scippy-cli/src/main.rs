@@ -80,13 +80,14 @@ fn main() -> ExitCode {
                         eprintln!("{diagnostic}");
                     }
                     println!(
-                        "files discovered: {}\nfiles indexed: {}\nfiles skipped: {}\ndeclarations: {}\noccurrences: {}\nreferences resolved: {}\nreferences unresolved: {}\nreferences ambiguous: {}\nreferences bounded: {}",
+                        "files discovered: {}\nfiles indexed: {}\nfiles skipped: {}\ndeclarations: {}\noccurrences: {}\nreferences resolved: {}\nreferences external: {}\nreferences unresolved: {}\nreferences ambiguous: {}\nreferences bounded: {}",
                         report.files_discovered,
                         report.files_indexed,
                         report.files_skipped,
                         report.declarations,
                         report.occurrences,
                         report.references_resolved,
+                        report.references_external,
                         report.references_unresolved,
                         report.references_ambiguous,
                         report.references_bounded,

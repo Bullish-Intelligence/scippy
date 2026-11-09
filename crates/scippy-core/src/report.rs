@@ -96,6 +96,9 @@ pub struct IndexReport {
     /// Occurrences written to the index.
     pub occurrences: usize,
     pub references_resolved: usize,
+    /// Resolved references whose target is an external symbol, such as a builtin.
+    /// The count is a part of `references_resolved`.
+    pub references_external: usize,
     pub references_unresolved: usize,
     pub references_ambiguous: usize,
     /// References whose search hit a work bound. They have no target.

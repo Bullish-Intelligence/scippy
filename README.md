@@ -40,12 +40,22 @@ Every symbol has the scheme `scippy`. Without a manifest, the Python pack uses t
 `python workspace`. Pass `--package-name` and `--package-version` to change them.
 A declaration inside a function gets a document-local symbol.
 
+## External symbols
+
+A reference that ends in the builtins stub of the Python rules resolves to an external symbol.
+The scheme is `scippy python python-stdlib typeshed-<12 hex digits> builtins/<descriptors>`,
+for example `builtins/len().`, `builtins/str#`, and `builtins/str#join().`.
+The version is the typeshed commit that the stub header names. The index lists each referenced
+external symbol in `Index.external_symbols`, with kind and display name.
+A definition in the project shadows the builtin of the same name.
+
 ## Resolution policy
 
 The reconciler turns the engine paths of one reference into one target, or none.
 
 - It drops a path that another path shadows, and it merges the reference nodes at one span.
 - It ignores an end that joins no declaration, such as an import alias or a module.
+- It prefers a definition in the project over a definition in an external asset.
 - It counts distinct symbols. One symbol is Resolved. Two or more are Ambiguous.
 - It prefers the nearest binding. The engine follows values, so a name such as `self` reaches
   its parameter and then the class that the value comes from. The reconciler drops an end

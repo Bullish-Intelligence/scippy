@@ -73,6 +73,20 @@ pub struct Identity {
     pub display_name: String,
 }
 
+/// The identity that a pack assigns to a declaration of an external asset.
+///
+/// An external asset is a source file that the pack supplies and the project does not own.
+/// The builtins are an example. A symbol of an external asset has the package of the asset,
+/// not the package of the project. The core writes the symbols that the project references
+/// to `Index.external_symbols`.
+#[derive(Clone, Debug)]
+pub struct ExternalIdentity {
+    pub package: Package,
+    pub descriptors: Vec<Descriptor>,
+    pub kind: crate::emit::SymbolKind,
+    pub display_name: String,
+}
+
 /// The pack's view of one project. The core builds it once for each indexing run.
 pub trait ProjectModel: Send + Sync {
     /// Global variables for the binding rules of one file, for example the import root.
@@ -87,6 +101,22 @@ pub trait ProjectModel: Send + Sync {
         scopes: &[Scope],
         declaration: &Scope,
     ) -> Identity;
+
+    /// Assign an identity to a declaration of an external asset, such as the builtins.
+    ///
+    /// `asset` is the name that the resolver gives to the asset.
+    /// `scopes` lists the enclosing declarations from the outermost to the innermost.
+    /// Return `None` when other code cannot address the declaration.
+    /// The default gives no identity, so references into an asset stay unresolved.
+    fn external_identity(
+        &self,
+        asset: &str,
+        scopes: &[Scope],
+        declaration: &Scope,
+    ) -> Option<ExternalIdentity> {
+        let _ = (asset, scopes, declaration);
+        None
+    }
 }
 
 /// The assets that the resolver needs to compile a language.
@@ -100,6 +130,9 @@ pub struct BindingRules {
 }
 
 /// A source file that defines the names every file can see.
+///
+/// It is an external asset. The reconciler resolves a reference that ends in it to an external
+/// symbol, when the project model gives the declaration an [`ExternalIdentity`].
 pub struct Builtins {
     pub path: &'static str,
     pub source: &'static str,

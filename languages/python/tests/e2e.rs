@@ -276,6 +276,113 @@ fn a_real_ambiguity_survives_the_nearest_binding_rule() {
     assert_eq!(indexed.report.references_ambiguous, 1);
 }
 
+// ---- builtins as external symbols ----
+
+/// The symbol of a builtin. The version is the typeshed commit of the stub header.
+fn builtin(rest: &str) -> String {
+    let stub = tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE;
+    let (_, tail) = stub.split_once("commit ").expect("a commit in the header");
+    let hash: String = tail.chars().take_while(char::is_ascii_hexdigit).collect();
+    assert_eq!(hash.len(), 40);
+    format!(
+        "scippy python python-stdlib typeshed-{} builtins/{rest}",
+        &hash[..12]
+    )
+}
+
+#[test]
+fn builtins_resolve_to_external_symbols() {
+    let indexed = index("builtins");
+    let at = |context, word| indexed.symbols_of("use.py", context, word);
+    assert_eq!(at("n = len(items)", "len"), [builtin("len().")]);
+    assert_eq!(
+        at("isinstance(n, int)", "isinstance"),
+        [builtin("isinstance().")]
+    );
+    assert_eq!(at("isinstance(n, int)", "int"), [builtin("int#")]);
+    assert_eq!(at("label = str(n)", "str"), [builtin("str#")]);
+    assert_eq!(
+        at("class Failure(ValueError)", "ValueError"),
+        [builtin("ValueError#")]
+    );
+    // A builtin method through its class.
+    assert_eq!(at("str.join(", "str"), [builtin("str#")]);
+    assert_eq!(at("str.join(", "join"), [builtin("str#join().")]);
+    // The references have the reference role.
+    for o in indexed.find("use.py", "n = len(items)", "len") {
+        assert_eq!(o.symbol_roles, 0);
+    }
+    assert_eq!(indexed.report.references_external, 7);
+    assert_eq!(indexed.report.references_unresolved, 0);
+
+    // The index lists each referenced external symbol once, with kind and display name.
+    let externals = &indexed.index.external_symbols;
+    let find = |symbol: &str| {
+        externals
+            .iter()
+            .find(|e| e.symbol == symbol)
+            .unwrap_or_else(|| panic!("no external symbol {symbol}"))
+    };
+    use scip::types::symbol_information::Kind;
+    let len = find(&builtin("len()."));
+    assert_eq!(len.display_name, "len");
+    assert_eq!(len.kind.enum_value().unwrap(), Kind::Function);
+    let join = find(&builtin("str#join()."));
+    assert_eq!(join.display_name, "join");
+    assert_eq!(join.kind.enum_value().unwrap(), Kind::Method);
+    assert_eq!(
+        find(&builtin("ValueError#")).kind.enum_value().unwrap(),
+        Kind::Class
+    );
+    // A builtin that no reference names is not listed. The list has no duplicates.
+    assert!(externals.iter().all(|e| e.symbol != builtin("print().")));
+    let mut names: Vec<&str> = externals.iter().map(|e| e.symbol.as_str()).collect();
+    let count = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), count);
+    assert_eq!(count, 6);
+    // No document holds the symbols of the standard library.
+    assert!(
+        indexed
+            .document("use.py")
+            .unwrap()
+            .symbols
+            .iter()
+            .all(|s| !s.symbol.contains("python-stdlib"))
+    );
+}
+
+#[test]
+fn a_local_definition_shadows_the_builtin() {
+    let indexed = index("builtins");
+    assert_eq!(
+        indexed.symbols_of("own.py", "size = len([])", "len"),
+        [global("own/len().")]
+    );
+    // The builtin `len` is still listed, because use.py references it.
+    assert!(
+        indexed
+            .index
+            .external_symbols
+            .iter()
+            .any(|e| e.symbol == builtin("len()."))
+    );
+    // A project that only shadows the builtin lists no external symbol of `len`.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("own.py"),
+        "def len(x):\n    return 0\n\n\nsize = len([])\n",
+    )
+    .unwrap();
+    let only = index_at(dir.path());
+    assert!(only.index.external_symbols.is_empty());
+    assert_eq!(
+        only.symbols_of("own.py", "size = len([])", "len"),
+        [global("own/len().")]
+    );
+}
+
 // ---- positions ----
 
 #[test]
@@ -500,6 +607,7 @@ fn run(scip: &Path, cwd: &Path, args: &[&str]) -> Output {
 
 const SCIP_FIXTURES: &[&str] = &[
     "alias",
+    "builtins",
     "flow",
     "unicode",
     "packages",

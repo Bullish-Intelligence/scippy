@@ -79,6 +79,8 @@ pub(crate) struct IndexData {
     /// The absolute project root. The emitter writes it as a `file://` URI.
     pub project_root: PathBuf,
     pub documents: Vec<Document>,
+    /// Symbols that documents reference and that no document of the project defines.
+    pub external_symbols: Vec<SymbolInfo>,
 }
 
 /// Check, sort, and serialize the index.
@@ -138,6 +140,22 @@ fn build(mut index: IndexData) -> Result<Index, ScippyError> {
         .map(|document| build_document(document, &mut check))
         .collect::<Result<Vec<_>, _>>()?;
 
+    let mut external: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
+    for info in index.external_symbols {
+        match external.get(&info.symbol) {
+            Some(first) if *first != info => {
+                return Err(collision(
+                    &info.symbol,
+                    "two different external symbol records".to_string(),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                external.insert(info.symbol.clone(), info);
+            }
+        }
+    }
+
     Ok(Index {
         metadata: Some(Metadata {
             version: ProtocolVersion::UnspecifiedProtocolVersion.into(),
@@ -153,6 +171,7 @@ fn build(mut index: IndexData) -> Result<Index, ScippyError> {
         })
         .into(),
         documents,
+        external_symbols: external.into_values().map(scip_symbol).collect(),
         ..Default::default()
     })
 }
@@ -394,6 +413,7 @@ mod tests {
         IndexData {
             project_root: "/proj/root".into(),
             documents,
+            external_symbols: vec![],
         }
     }
 
@@ -764,6 +784,32 @@ mod tests {
         assert!(matches!(
             write_index(data(vec![]), &missing),
             Err(ScippyError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn writes_each_external_symbol_once_in_symbol_order() {
+        let mut one = data(vec![doc("a.py", "", vec![], vec![])]);
+        one.external_symbols = vec![info(sym("b")), info(sym("a")), info(sym("b"))];
+        let index = parse(&encode(one).unwrap());
+        let names: Vec<&str> = index
+            .external_symbols
+            .iter()
+            .map(|s| s.symbol.as_str())
+            .collect();
+        assert_eq!(names, [sym("a").as_str(), sym("b").as_str()]);
+        assert!(index.documents[0].symbols.is_empty());
+    }
+
+    #[test]
+    fn rejects_conflicting_external_symbol_records() {
+        let mut one = data(vec![doc("a.py", "", vec![], vec![])]);
+        let mut other = info(sym("a"));
+        other.display_name = "other".into();
+        one.external_symbols = vec![info(sym("a")), other];
+        assert!(matches!(
+            encode(one),
+            Err(ScippyError::SymbolCollision { .. })
         ));
     }
 }
