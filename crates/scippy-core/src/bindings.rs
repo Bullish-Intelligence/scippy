@@ -181,13 +181,16 @@ impl BindingEngine {
 
     /// Build the graph of one file and store its partial paths.
     ///
-    /// On failure the engine never resolves a reference of the file.
+    /// The engine resolves the references of the file only when `resolve` is true. A file of a
+    /// dependency only gives definitions. On failure the engine never resolves a reference of
+    /// the file.
     pub fn add_file(
         &mut self,
         dialect: usize,
         path: &ProjectRelativePath,
         source: &str,
         globals: &[(String, String)],
+        resolve: bool,
     ) -> Result<(), BuildFailure> {
         let file = self.graph.get_or_create_file(path.as_str());
         let mut variables = Variables::new();
@@ -219,7 +222,9 @@ impl BindingEngine {
             Err(_) => return Err(fail("the rules panicked".into())),
         }
         self.add_partial_paths(file);
-        self.files.push((file, path.clone()));
+        if resolve {
+            self.files.push((file, path.clone()));
+        }
         Ok(())
     }
 

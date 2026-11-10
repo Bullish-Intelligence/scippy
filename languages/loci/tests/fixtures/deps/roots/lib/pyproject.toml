@@ -1,0 +1,6 @@
+[project]
+name = "lib.pkg"
+dependencies = ["base"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/libpkg"]

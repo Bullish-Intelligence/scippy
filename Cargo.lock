@@ -900,6 +900,7 @@ dependencies = [
  "scip",
  "scippy-core",
  "tempfile",
+ "toml",
  "tree-sitter",
  "tree-sitter-python",
  "tree-sitter-stack-graphs-python",

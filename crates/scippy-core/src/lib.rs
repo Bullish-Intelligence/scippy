@@ -30,7 +30,7 @@ pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
 pub use language::{
     Analysis, BindingRules, Builtins, DeclKind, Dialect, Engine, ExternalAsset, ExternalIdentity,
-    ExtraFile, ExtraFiles, ExtractionSpec, Identity, LanguagePack, NativeAnalysis,
+    ExtraFile, ExtraFiles, ExtractionSpec, Identity, LanguagePack, Manifest, NativeAnalysis,
     NativeDeclaration, NativeDocument, NativeInput, NativeOutput, NativeReference, NativeSource,
     NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind, ReferenceRole, Scope,
     SupportFile, VirtualSymbol, WalkRules,

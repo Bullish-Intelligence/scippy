@@ -13,9 +13,9 @@ use crate::extract::{DeclarationFact, Extractor, Facts, SourceAnchor};
 use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
 use crate::inherit::Inheritance;
 use crate::language::{
-    Analysis, DeclKind, Engine, ExternalAsset, LanguagePack, NativeAnalysis, NativeDocument,
-    NativeInput, NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceRole,
-    Scope, SupportFile, WalkRules,
+    Analysis, DeclKind, Engine, ExternalAsset, ExtraFile, LanguagePack, Manifest, NativeAnalysis,
+    NativeDocument, NativeInput, NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach,
+    ReferenceRole, Scope, SupportFile, WalkRules,
 };
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
@@ -150,6 +150,7 @@ pub(crate) fn run(
                 &found.root,
                 &files,
                 &shards,
+                &extra_files,
                 request,
                 &mut report,
                 &mut trace,
@@ -236,12 +237,17 @@ fn index_pack(
     root: &Path,
     files: &[&FoundFile],
     shards: &[ProjectRelativePath],
+    extra_files: &[ExtraFile],
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
 ) -> Result<PackIndex, ScippyError> {
     let paths: Vec<ProjectRelativePath> = files.iter().map(|f| f.path.clone()).collect();
-    let model = analysis.project_model(root, &paths);
+    let manifests = analysis
+        .manifest_name()
+        .map(|name| read_manifests(root, name, shards, extra_files))
+        .unwrap_or_default();
+    let model = analysis.project_model(root, &paths, &manifests);
     // One extractor for each dialect. The first one is the primary dialect.
     let mut extractors = vec![Extractor::new(pack.id(), analysis, analysis.grammar(), "")?];
     for dialect in analysis.extra_dialects() {
@@ -262,10 +268,15 @@ fn index_pack(
     }
     let mut docs: Vec<(usize, Doc)> = Vec::new();
     let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
-    for (shard, group) in shard_groups(files, shards) {
+    let groups = shard_groups(files, shards);
+    let members: HashMap<&str, &[usize]> = groups
+        .iter()
+        .filter_map(|(shard, group)| shard.map(|s| (s, &group[..])))
+        .collect();
+    for (shard, group) in &groups {
         let mut engine = BindingEngine::new(pack.id(), analysis)?;
         let first = docs.len();
-        for at in group {
+        for &at in group {
             let file = files[at];
             if let Some(doc) = load_file(
                 analysis,
@@ -276,14 +287,36 @@ fn index_pack(
                 file,
                 request,
                 report,
+                true,
             ) {
                 docs.push((at, doc));
+            }
+        }
+        // The code that the shard imports from other shards. The engine reads it to resolve
+        // the references of the shard. The shard that owns the code indexes it.
+        for dependency in dependency_closure(&*model, shard.unwrap_or_default(), &members) {
+            for &at in members[dependency.as_str()] {
+                let file = files[at];
+                if model.provides(&file.path) {
+                    let mut scratch = IndexReport::default();
+                    load_file(
+                        analysis,
+                        &extractors,
+                        &*model,
+                        &mut engine,
+                        root,
+                        file,
+                        request,
+                        &mut scratch,
+                        false,
+                    );
+                }
             }
         }
         // The support files of the shard, such as `tsconfig.json`.
         let sources: Vec<ProjectRelativePath> =
             docs[first..].iter().map(|(_, d)| d.path.clone()).collect();
-        for support in supports.remove(&shard).unwrap_or_default() {
+        for support in supports.remove(shard).unwrap_or_default() {
             if let Err(failure) = engine.add_support_file(&support, &sources) {
                 report.diagnostics.push(Diagnostic {
                     severity: Severity::Warning,
@@ -448,6 +481,59 @@ fn index_pack(
     })
 }
 
+/// Read the manifest `name` in the project root and in each shard.
+/// A shard is a virtual folder, so its manifest is an extra file.
+fn read_manifests(
+    root: &Path,
+    name: &str,
+    shards: &[ProjectRelativePath],
+    extra_files: &[ExtraFile],
+) -> Vec<Manifest> {
+    let real: HashMap<&str, &Path> = extra_files
+        .iter()
+        .map(|f| (f.path.as_str(), f.real.as_path()))
+        .collect();
+    let folders = std::iter::once("").chain(shards.iter().map(ProjectRelativePath::as_str));
+    folders
+        .filter_map(|folder| {
+            let virtual_path = if folder.is_empty() {
+                name.to_string()
+            } else {
+                format!("{folder}/{name}")
+            };
+            let disk = real
+                .get(virtual_path.as_str())
+                .map_or_else(|| root.join(&virtual_path), |p| p.to_path_buf());
+            let text = std::fs::read_to_string(disk).ok()?;
+            Some(Manifest {
+                folder: folder.to_string(),
+                text,
+            })
+        })
+        .collect()
+}
+
+/// The shards that `shard` depends on, directly or through another dependency, in the order
+/// that a breadth-first walk finds them. Only shards with files count.
+fn dependency_closure(
+    model: &dyn ProjectModel,
+    shard: &str,
+    members: &HashMap<&str, &[usize]>,
+) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::from([shard.to_string()]);
+    let mut queue = std::collections::VecDeque::from([shard.to_string()]);
+    while let Some(next) = queue.pop_front() {
+        for dependency in model.dependencies(&next) {
+            if members.contains_key(dependency.as_str()) && seen.insert(dependency.clone()) {
+                found.push(dependency.clone());
+                queue.push_back(dependency);
+            }
+        }
+    }
+    found
+}
+
 /// The longest shard that holds the path, or `None` for a path outside every shard.
 fn shard_of<'a>(path: &ProjectRelativePath, shards: &'a [ProjectRelativePath]) -> Option<&'a str> {
     let path = path.as_str();
@@ -492,6 +578,7 @@ fn load_file(
     file: &FoundFile,
     request: &IndexRequest,
     report: &mut IndexReport,
+    resolve: bool,
 ) -> Option<Doc> {
     let diagnostic = |stage, severity, code, range, message: String| Diagnostic {
         severity,
@@ -579,6 +666,7 @@ fn load_file(
         &file.path,
         text,
         &model.resolver_globals(&file.path),
+        resolve,
     ) {
         report.files_skipped += 1;
         report.diagnostics.push(diagnostic(

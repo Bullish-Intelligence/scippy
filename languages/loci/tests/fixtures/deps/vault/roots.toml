@@ -1,0 +1,19 @@
+[[root]]
+name = "app"
+path = "@ROOTS@/app"
+lister = "walk"
+
+[[root]]
+name = "lib"
+path = "@ROOTS@/lib"
+lister = "walk"
+
+[[root]]
+name = "base"
+path = "@ROOTS@/base"
+lister = "walk"
+
+[[root]]
+name = "other"
+path = "@ROOTS@/other"
+lister = "walk"

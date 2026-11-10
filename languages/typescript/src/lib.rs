@@ -130,8 +130,8 @@ use std::path::Path;
 
 use scippy_core::{
     Analysis, BindingRules, Builtins, DeclKind, Descriptor, Dialect, ExtractionSpec, Identity,
-    LanguagePack, Package, ProjectModel, ProjectRelativePath, Reach, ReferenceKind, Scope,
-    SupportFile, SymbolKind,
+    LanguagePack, Manifest, Package, ProjectModel, ProjectRelativePath, Reach, ReferenceKind,
+    Scope, SupportFile, SymbolKind,
 };
 use tree_sitter_stack_graphs::FileAnalyzer;
 use tree_sitter_stack_graphs_typescript as rules;
@@ -335,7 +335,12 @@ impl Analysis for TypeScriptPack {
         out
     }
 
-    fn project_model(&self, root: &Path, _files: &[ProjectRelativePath]) -> Box<dyn ProjectModel> {
+    fn project_model(
+        &self,
+        root: &Path,
+        _files: &[ProjectRelativePath],
+        _manifests: &[Manifest],
+    ) -> Box<dyn ProjectModel> {
         Box::new(TypeScriptModel {
             package: read_package(root),
         })

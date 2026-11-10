@@ -21,10 +21,32 @@ the ignore list or `discovery.exclude` hides is hidden from every pack. A note t
 skipped with a warning, where `loci-core` reads it lossy. A link with a resolved anchor has two
 occurrences: one over the target part, for the note, and one over the anchor part.
 
-Each root is an independent repository. Only notes link across roots. The core resolves the code
-of each root with a binding engine of its own, and frees the engine before the next root. A
-reference therefore never resolves to code in another root. The peak memory follows the largest
-root, not the sum of the roots.
+Each root is a repository of its own. The core resolves the code of each root with a binding
+engine of its own, and frees the engine before the next root. A root sees the code of another root
+only through its manifest. The peak memory follows the largest root with its dependencies, not the
+sum of the roots.
+
+## Manifests
+
+The Python pack reads the `pyproject.toml` of the project root and of each root.
+
+- The manifest of the project root names the package of the symbols: the project name and the
+  version.
+- The pack finds the package folders of a manifest: the folders that the wheel installs. It reads
+  Hatch, the uv build backend, Poetry, and setuptools. Without them, it looks for the import name
+  in `src/` and then in the root folder.
+- A package folder such as `src/pkg` makes `src` the import root of every file below it. A folder
+  without `__init__.py` is then a namespace package. A file outside every package folder keeps the
+  `__init__.py` rule. The symbols do not change.
+- The pack reads the declared dependencies: `[project] dependencies`, the optional dependencies,
+  the dependency groups, and the Poetry tables. It normalizes each name as Python Enhancement
+  Proposal (PEP) 503 says.
+- A dependency whose name is the project name of exactly one other root makes that root a
+  dependency. The dependencies of a dependency count too.
+
+The core loads the package folders of each dependency into the binding engine of the root. The
+engine reads them to resolve references only. A dependency adds no document and no occurrence to
+the root. Tests and scripts of a dependency stay out. Without a manifest, nothing changes.
 
 ## Workspace
 
@@ -33,8 +55,8 @@ root, not the sum of the roots.
   byte-span positions, and the SCIP emitter. Only `index_project`, the request and report
   types, and the language-pack contract are public.
 - `crates/scippy-cli` provides the `scippy` command.
-- `languages/python` holds the Python pack: the declaration query, the import-root policy,
-  and the symbol policy. It uses the binding rules of the fork.
+- `languages/python` holds the Python pack: the declaration query, the manifest reader, the
+  import-root policy, and the symbol policy. It uses the binding rules of the fork.
 - `languages/typescript` holds the TypeScript pack: the declaration query, two dialects (`.ts`
   and `.tsx`), the module and symbol policy, `package.json` and `tsconfig.json` support, and
   local fixes of the binding rules. The header of `languages/typescript/src/lib.rs` documents
@@ -72,6 +94,7 @@ indexed documents, and about 36 MB of Python. The Loci relations agree with `loc
 | --- | --- | --- | --- |
 | One binding engine for all roots | 19.8 GB | 16:56 | 1,363,480 |
 | One binding engine for each root | 5.7 GB | 18:51 | 1,362,852 |
+| Each root with its declared dependencies | 5.7 GB | 19:58 | 1,366,048 |
 
 The two indexes have the same documents, declarations, and external symbols. 380 documents
 differ. Without shards, 2,957 references resolved to code in another root, and 24 more reached a
@@ -79,10 +102,19 @@ builtin through such code. With shards, those references are unresolved. 2,353 r
 had a second candidate in another root were ambiguous. They now resolve to their own root.
 The run is slower because each root compiles the rules and loads the builtins again.
 
+The manifests bring back 998 of the 2,957 references, each with the target of the run without
+shards. The other references go to roots that the manifest does not declare. `basix` and `minix`
+import `pynix` (1,722 references), and their `devenv.nix` adds it to the environment. `argentic`
+imports `eventic` (151). `argentic` and `devenv-py` declare `pydantree-sitter`, and the root names
+itself `pydantree` (49). The package folders resolve about 2,100 more references in their own root,
+mostly through namespace packages. 26 references in `semantic-views` now reach the work limit,
+and 4 in `argentic` are ambiguous.
+
 ## Symbols
 
 Every symbol has the scheme `scippy`. Without a manifest, the Python pack uses the package
-`python workspace`. The TypeScript pack takes the package from `package.json` at the project
+`python workspace`. With a `pyproject.toml` at the project root, it uses the project name and the
+version. The TypeScript pack takes the package from `package.json` at the project
 root, and otherwise uses `npm workspace`. Pass `--package-name` and `--package-version` to
 change them. A TypeScript module symbol is the project-relative path of the file with its
 extension, for example `` `src/services.ts`/process(). ``.

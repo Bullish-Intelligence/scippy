@@ -1,0 +1,6 @@
+[project]
+name = "app"
+dependencies = ["Lib_Pkg>=1.0"]
+
+[dependency-groups]
+dev = ["pytest"]

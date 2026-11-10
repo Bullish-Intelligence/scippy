@@ -224,6 +224,33 @@ pub trait ProjectModel: Send + Sync {
         let _ = (asset, scopes, declaration);
         None
     }
+
+    /// The shards whose code the files of `shard` import, such as the declared dependencies of
+    /// a code repository. `shard` is `""` for the files outside every shard.
+    ///
+    /// The core loads the files that each dependency provides into the binding engine of
+    /// `shard`, for resolution only. It follows the dependencies of a dependency too. A loaded
+    /// file adds no document and no occurrence. The default is no dependency.
+    fn dependencies(&self, shard: &str) -> Vec<String> {
+        let _ = shard;
+        Vec::new()
+    }
+
+    /// Say whether a dependent shard loads this file of a dependency.
+    /// A package provides its importable code, not its tests or its scripts.
+    /// The default is every file.
+    fn provides(&self, path: &ProjectRelativePath) -> bool {
+        let _ = path;
+        true
+    }
+}
+
+/// The manifest of the project root or of a shard, such as `pyproject.toml`.
+#[derive(Clone, Debug)]
+pub struct Manifest {
+    /// The folder that holds the manifest. The project root is `""`.
+    pub folder: String,
+    pub text: String,
 }
 
 /// A project file that is not source code and still shapes name resolution.
@@ -411,7 +438,8 @@ pub struct ExtraFiles {
     pub files: Vec<ExtraFile>,
     pub diagnostics: Vec<Diagnostic>,
     /// The virtual folders that hold independent code, such as the code repositories of a
-    /// notes workspace. Code in one folder never refers to code in another.
+    /// notes workspace. Code in one folder refers to code in another only through the
+    /// dependencies that [`ProjectModel::dependencies`] names.
     /// The core resolves the files of each folder with a binding engine of its own and frees
     /// the engine before the next folder. The peak memory then follows the largest folder.
     pub shards: Vec<ProjectRelativePath>,
@@ -565,9 +593,20 @@ pub trait Analysis: Send + Sync {
     fn extraction_spec(&self) -> ExtractionSpec;
     /// The package identity that a project without a manifest uses.
     fn default_package(&self) -> Package;
+    /// The file name of the manifest that the project model reads, such as `pyproject.toml`.
+    /// The core reads it in the project root and in each shard. The default is none.
+    fn manifest_name(&self) -> Option<&'static str> {
+        None
+    }
     /// Build the project model from all files that the pack owns.
     /// `root` is the project root. A pack can read its manifest files there.
-    fn project_model(&self, root: &Path, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel>;
+    /// `manifests` holds each manifest that [`Analysis::manifest_name`] names and the core found.
+    fn project_model(
+        &self,
+        root: &Path,
+        files: &[ProjectRelativePath],
+        manifests: &[Manifest],
+    ) -> Box<dyn ProjectModel>;
     /// Repair source text that the grammar rejects but the language accepts.
     ///
     /// The core calls this for a file that has a syntax error. The pack returns the text with

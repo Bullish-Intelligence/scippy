@@ -995,6 +995,15 @@ fn packages_resolve_across_roots_and_cycles_end() {
 // ---- a module and a package of one name ----
 
 #[test]
+fn the_manifest_names_the_package_and_its_folder_sets_the_import_root() {
+    let indexed = index("src_layout");
+    // `src/demo/ns` has no `__init__.py`. The package folder `src/demo` makes it a namespace
+    // package below the import root `src`.
+    let symbols = indexed.symbols_of("src/demo/main.py", "f()", "f");
+    assert_eq!(symbols, ["scippy python Demo 2.0 src/demo/ns/mod/f()."]);
+}
+
+#[test]
 fn a_package_shadows_a_module_of_the_same_name() {
     let indexed = index("collision");
     // `a/__init__.py` wins, as in the Python import system. `a.py` is skipped. The run succeeds.

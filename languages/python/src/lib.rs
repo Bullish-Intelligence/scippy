@@ -9,7 +9,23 @@
 //! It finds the import root of each file as Python does for a script or a package:
 //! the first directory, going up, that has no `__init__.py`.
 //! A project without a manifest gets the package name `workspace`. Pass a name to change it.
-//! It does not read `pyproject.toml`, namespace packages, or installed dependencies.
+//!
+//! # Manifests
+//!
+//! The pack reads the `pyproject.toml` of the project root and of each shard, such as each code
+//! root of a notes workspace. The module `manifest` lists what it reads.
+//! - The manifest of the project root names the package of the symbols: the project name and
+//!   the version.
+//! - A package folder of a manifest, such as `src/pkg`, sets the import root of every file below
+//!   it to the parent folder, `src`. A subfolder without `__init__.py` is then a namespace
+//!   package, as in Python. The symbol of a file does not change, because it holds the import
+//!   root and the module path together.
+//! - A declared dependency whose name is the project name of another shard makes that shard a
+//!   dependency. The core loads the package folders of the dependency into the binding engine of
+//!   the dependent shard. Tests and scripts of the dependency stay out.
+//!
+//! A file outside every package folder keeps the rule of `__init__.py`. Without a manifest,
+//! nothing changes. The pack does not read installed dependencies.
 //!
 //! # Symbols
 //!
@@ -135,9 +151,13 @@ use std::path::Path;
 
 use scippy_core::{
     Analysis, BindingRules, Builtins, DeclKind, Descriptor, ExternalAsset, ExternalIdentity,
-    ExtractionSpec, Identity, LanguagePack, Package, ProjectModel, ProjectRelativePath, Reach,
-    ReferenceKind, Scope, SymbolKind,
+    ExtractionSpec, Identity, LanguagePack, Manifest, Package, ProjectModel, ProjectRelativePath,
+    Reach, ReferenceKind, Scope, SymbolKind,
 };
+
+mod manifest;
+
+use manifest::Project;
 use tree_sitter_stack_graphs_python::{STUB_MODULES, STUB_ROOT_PATH, StubModule};
 
 pub struct PythonPack;
@@ -223,8 +243,17 @@ impl Analysis for PythonPack {
         }
     }
 
-    fn project_model(&self, _root: &Path, files: &[ProjectRelativePath]) -> Box<dyn ProjectModel> {
-        Box::new(PythonModel::new(files))
+    fn manifest_name(&self) -> Option<&'static str> {
+        Some("pyproject.toml")
+    }
+
+    fn project_model(
+        &self,
+        _root: &Path,
+        files: &[ProjectRelativePath],
+        manifests: &[Manifest],
+    ) -> Box<dyn ProjectModel> {
+        Box::new(PythonModel::new(files, manifests))
     }
 }
 
@@ -232,6 +261,8 @@ impl Analysis for PythonPack {
 struct PythonModel {
     /// Directories that hold an `__init__.py`, as project-relative paths. The root is `""`.
     packages: BTreeSet<String>,
+    /// The manifests of the project root and of the shards.
+    projects: Vec<Project>,
     /// The version of the package that holds the builtins.
     stdlib_version: String,
     /// The stub modules of the standard library, by the file name of the asset.
@@ -282,7 +313,12 @@ fn builtin_aliases(stub: &str, builtins: &str) -> BTreeMap<String, String> {
 }
 
 impl PythonModel {
-    fn new(files: &[ProjectRelativePath]) -> Self {
+    fn new(files: &[ProjectRelativePath], manifests: &[Manifest]) -> Self {
+        let paths: Vec<&str> = files.iter().map(ProjectRelativePath::as_str).collect();
+        let projects = manifests
+            .iter()
+            .filter_map(|m| Project::read(&m.folder, &m.text, &paths))
+            .collect();
         let packages = files
             .iter()
             .filter_map(|f| {
@@ -296,6 +332,7 @@ impl PythonModel {
             .collect();
         Self {
             packages,
+            projects,
             stdlib_version: stub_version(
                 tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE,
             ),
@@ -319,6 +356,15 @@ impl PythonModel {
     /// or the directory of the file when that directory is not a package.
     /// The result is a project-relative directory. The project root is `""`.
     fn import_root<'a>(&self, path: &'a str) -> &'a str {
+        // A package folder of a manifest decides for the files below it.
+        let declared = self
+            .projects
+            .iter()
+            .filter_map(|p| p.package_of(path))
+            .max_by_key(|p| p.len());
+        if let Some(package) = declared {
+            return &path[..package.rfind('/').unwrap_or(0)];
+        }
         let mut dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
         while self.packages.contains(dir) && !dir.is_empty() {
             dir = dir.rsplit_once('/').map_or("", |(parent, _)| parent);
@@ -375,6 +421,43 @@ fn anchored_pattern(dir: &str) -> String {
 }
 
 impl ProjectModel for PythonModel {
+    /// The project name and the version from the manifest of the project root.
+    fn package(&self) -> Option<Package> {
+        let project = self.projects.iter().find(|p| p.folder.is_empty())?;
+        Some(Package {
+            manager: "python".into(),
+            name: project.raw_name.clone()?,
+            version: project.version.clone().unwrap_or_default(),
+        })
+    }
+
+    /// The shards whose project name the manifest of `shard` declares as a dependency.
+    /// A name that two shards share names no shard.
+    fn dependencies(&self, shard: &str) -> Vec<String> {
+        let Some(own) = self.projects.iter().find(|p| p.folder == shard) else {
+            return Vec::new();
+        };
+        own.dependencies
+            .iter()
+            .filter_map(|name| {
+                let mut owners = self.projects.iter().filter(|p| {
+                    !p.folder.is_empty() && p.folder != shard && p.name.as_ref() == Some(name)
+                });
+                match (owners.next(), owners.next()) {
+                    (Some(owner), None) => Some(owner.folder.clone()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// A dependency provides the files of its package folders.
+    fn provides(&self, path: &ProjectRelativePath) -> bool {
+        self.projects
+            .iter()
+            .any(|p| p.package_of(path.as_str()).is_some())
+    }
+
     fn resolver_globals(&self, path: &ProjectRelativePath) -> Vec<(String, String)> {
         let root = self.import_root(path.as_str());
         let value = if root.is_empty() {
@@ -654,17 +737,20 @@ mod tests {
 
     #[test]
     fn the_import_root_is_the_directory_above_the_topmost_package() {
-        let model = PythonModel::new(&paths(&[
-            "app.py",
-            "src/app.py",
-            "src/services.py",
-            "lib/pkg/__init__.py",
-            "lib/pkg/mod.py",
-            "lib/pkg/sub/__init__.py",
-            "lib/pkg/sub/leaf.py",
-            "__init__.py",
-            "top/__init__.py",
-        ]));
+        let model = PythonModel::new(
+            &paths(&[
+                "app.py",
+                "src/app.py",
+                "src/services.py",
+                "lib/pkg/__init__.py",
+                "lib/pkg/mod.py",
+                "lib/pkg/sub/__init__.py",
+                "lib/pkg/sub/leaf.py",
+                "__init__.py",
+                "top/__init__.py",
+            ]),
+            &[],
+        );
         assert_eq!(model.import_root("app.py"), "");
         assert_eq!(model.import_root("src/app.py"), "src");
         assert_eq!(model.import_root("lib/pkg/mod.py"), "lib");
@@ -676,7 +762,10 @@ mod tests {
 
     #[test]
     fn module_paths_come_from_the_import_root() {
-        let model = PythonModel::new(&paths(&["lib/pkg/__init__.py", "lib/pkg/sub/__init__.py"]));
+        let model = PythonModel::new(
+            &paths(&["lib/pkg/__init__.py", "lib/pkg/sub/__init__.py"]),
+            &[],
+        );
         let parts = |p: &str| model.module_parts(p);
         assert_eq!(
             parts("lib/pkg/mod.py"),
@@ -698,7 +787,7 @@ mod tests {
 
     #[test]
     fn a_plain_name_never_names_an_instance_attribute() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let class = [scope(DeclKind::Class, "C")];
         let init = [scope(DeclKind::Class, "C"), scope(DeclKind::Function, "f")];
         let field = scope(DeclKind::Field, "x");
@@ -710,7 +799,7 @@ mod tests {
 
     #[test]
     fn a_class_body_name_is_visible_in_the_class_body_only() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let class = vec![scope(DeclKind::Class, "C")];
         let method = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
         let inner = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Class, "D")];
@@ -740,7 +829,7 @@ mod tests {
 
     #[test]
     fn a_member_reference_never_names_a_name_that_a_function_binds() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let method = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
         let local_class = vec![scope(DeclKind::Function, "f"), scope(DeclKind::Class, "L")];
         let function = vec![scope(DeclKind::Function, "f")];
@@ -772,7 +861,7 @@ mod tests {
 
     #[test]
     fn a_keyword_argument_names_a_parameter_only() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let method = vec![scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
         let keyword = ReferenceKind::Keyword;
         let accepts = |kind| model.accepts_target(keyword, &[], &method, &scope(kind, "x"));
@@ -786,18 +875,21 @@ mod tests {
 
     #[test]
     fn a_package_shadows_a_module_of_the_same_name() {
-        let model = PythonModel::new(&paths(&[
-            "a.py",
-            "a/__init__.py",
-            "src/util.py",
-            "src/util/__init__.py",
-            "src/util/extra.py",
-            "solo.py",
-            "pkg/__init__.py",
-            "pkg/mod.py",
-            "pkg/sub.py",
-            "pkg/sub/leaf.py",
-        ]));
+        let model = PythonModel::new(
+            &paths(&[
+                "a.py",
+                "a/__init__.py",
+                "src/util.py",
+                "src/util/__init__.py",
+                "src/util/extra.py",
+                "solo.py",
+                "pkg/__init__.py",
+                "pkg/mod.py",
+                "pkg/sub.py",
+                "pkg/sub/leaf.py",
+            ]),
+            &[],
+        );
         let shadowed = |p: &str| {
             model
                 .shadowed_by(&ProjectRelativePath::new(p).unwrap())
@@ -820,11 +912,10 @@ mod tests {
 
     #[test]
     fn a_module_gets_a_namespace_symbol_from_its_import_root() {
-        let model = PythonModel::new(&paths(&[
-            "lib/pkg/__init__.py",
-            "lib/pkg/mod.py",
-            "__init__.py",
-        ]));
+        let model = PythonModel::new(
+            &paths(&["lib/pkg/__init__.py", "lib/pkg/mod.py", "__init__.py"]),
+            &[],
+        );
         let identity = |p: &str| model.module_identity(&ProjectRelativePath::new(p).unwrap());
         let names = |p: &str| -> Option<(Vec<String>, String)> {
             identity(p).map(|i| {
@@ -871,7 +962,7 @@ mod tests {
 
     #[test]
     fn a_parameter_of_a_global_function_is_global() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let path = ProjectRelativePath::new("m.py").unwrap();
         let param = scope(DeclKind::Parameter, "x");
         let id = |scopes: &[Scope], decl: &Scope, siblings: &[Scope]| {
@@ -901,7 +992,7 @@ mod tests {
 
     #[test]
     fn a_variable_that_rebinds_a_parameter_is_the_parameter() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let path = ProjectRelativePath::new("m.py").unwrap();
         let function = [scope(DeclKind::Function, "f")];
         let variable = scope(DeclKind::Variable, "x");
@@ -936,7 +1027,7 @@ mod tests {
 
     #[test]
     fn a_stub_declaration_gets_an_external_symbol_in_the_standard_library() {
-        let model = PythonModel::new(&[]);
+        let model = PythonModel::new(&[], &[]);
         let asset = STUB_MODULES[0].file_name();
         let external =
             |scopes: &[Scope], decl: &Scope| model.external_identity(&asset, scopes, decl);
@@ -996,7 +1087,7 @@ mod tests {
 
     #[test]
     fn the_root_path_global_is_an_anchored_pattern() {
-        let model = PythonModel::new(&paths(&["a.b/c.py"]));
+        let model = PythonModel::new(&paths(&["a.b/c.py"]), &[]);
         let globals = model.resolver_globals(&ProjectRelativePath::new("a.b/c.py").unwrap());
         assert_eq!(globals, [("ROOT_PATH".to_string(), "^a\\.b/".to_string())]);
         let top = model.resolver_globals(&ProjectRelativePath::new("x.py").unwrap());

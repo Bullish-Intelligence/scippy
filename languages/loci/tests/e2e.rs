@@ -39,6 +39,7 @@ const ORACLE_FIXTURES: &[&str] = &[
     "clips",
     "clips_custom",
     "code",
+    "deps",
     "extract_off",
     "fallback",
     "folders",
@@ -465,6 +466,60 @@ fn a_workspace_sends_the_files_of_its_roots_to_the_right_packs() {
     assert!(indexed.document("code/logo.png").is_some());
     assert!(indexed.document("repo/bin.dat").is_some());
     assert!(indexed.document("code/src/util.py").is_some());
+}
+
+#[test]
+fn a_root_resolves_into_the_packages_of_the_roots_that_its_manifest_declares() {
+    let prepared = prepare("deps");
+    let mut request = IndexRequest::new(&prepared.root, "");
+    let indexed = index_prepared(Some(prepared), &mut request, &[&PythonPack, &LociPack]);
+    let main = indexed.document("app/src/app/main.py").unwrap();
+    let references: Vec<&str> = main
+        .occurrences
+        .iter()
+        .filter(|o| !is_definition(o))
+        .map(|o| o.symbol.as_str())
+        .collect();
+    // `app` declares `Lib_Pkg`, the project `lib.pkg`. The package folder of `lib` is `src/libpkg`.
+    // `ns` has no `__init__.py`. The manifest makes it a namespace package.
+    for wanted in [
+        "lib/src/libpkg/core/build().",
+        "lib/src/libpkg/core/Engine#start().",
+        "lib/src/libpkg/ns/mod/helper().",
+        // `lib` declares `base`, so `app` reaches it through `lib`.
+        "base/src/base/types/Base#stop().",
+    ] {
+        assert!(
+            references.iter().any(|s| s.ends_with(wanted)),
+            "{wanted}: {references:?}"
+        );
+    }
+    // `app` does not declare `other`, and the tests of `lib` are not part of its package.
+    assert!(
+        references
+            .iter()
+            .all(|s| !s.contains("tools") && !s.contains("helpers")),
+        "{references:?}"
+    );
+    // A dependency adds no document and no occurrence.
+    let paths: Vec<&str> = indexed
+        .index
+        .documents
+        .iter()
+        .map(|d| d.relative_path.as_str())
+        .collect();
+    let core = paths
+        .iter()
+        .filter(|p| **p == "lib/src/libpkg/core.py")
+        .count();
+    assert_eq!(core, 1, "{paths:?}");
+    let occurrences: usize = indexed
+        .index
+        .documents
+        .iter()
+        .map(|d| d.occurrences.len())
+        .sum();
+    assert_eq!(occurrences, indexed.report.occurrences);
 }
 
 #[test]
