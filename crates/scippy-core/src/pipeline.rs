@@ -15,7 +15,7 @@ use crate::inherit::Inheritance;
 use crate::language::{
     Analysis, DeclKind, Engine, ExternalAsset, LanguagePack, NativeAnalysis, NativeDocument,
     NativeInput, NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceRole,
-    Scope, WalkRules,
+    Scope, SupportFile, WalkRules,
 };
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
@@ -95,10 +95,12 @@ pub(crate) fn run(
     let mut extra_files = Vec::new();
     let mut extra_diagnostics = Vec::new();
     let mut extra_states: Vec<Option<Box<dyn std::any::Any + Send + Sync>>> = Vec::new();
+    let mut shards = Vec::new();
     for pack in languages {
         let extra = pack.extra_files(&request.root);
         extra_files.extend(extra.files);
         extra_diagnostics.extend(extra.diagnostics);
+        shards.extend(extra.shards);
         extra_states.push(extra.state);
     }
     let found = project::discover(
@@ -147,6 +149,7 @@ pub(crate) fn run(
                 analysis,
                 &found.root,
                 &files,
+                &shards,
                 request,
                 &mut report,
                 &mut trace,
@@ -226,11 +229,13 @@ struct PackIndex {
     external_symbols: BTreeMap<SymbolId, SymbolInfo>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn index_pack(
     pack: &dyn LanguagePack,
     analysis: &dyn Analysis,
     root: &Path,
     files: &[&FoundFile],
+    shards: &[ProjectRelativePath],
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
@@ -247,140 +252,59 @@ fn index_pack(
             dialect.query,
         )?);
     }
-    let mut engine = BindingEngine::new(pack.id(), analysis)?;
-
-    // Stages B to D, for each file: read, parse, extract, and build the binding graph.
-    let mut docs: Vec<Doc> = Vec::new();
-    for file in files {
-        let diagnostic = |stage, severity, code, range, message: String| Diagnostic {
-            severity,
-            stage,
-            file: Some(file.path.as_str().to_string()),
-            range,
-            code,
-            message,
-        };
-        if let Some(winner) = model.shadowed_by(&file.path) {
-            report.files_skipped += 1;
-            report.diagnostics.push(diagnostic(
-                Stage::Identity,
-                Severity::Warning,
-                "shadowed-file",
-                None,
-                format!(
-                    "skipped: {} shadows this file, so no import reaches it",
-                    winner.as_str()
-                ),
-            ));
-            continue;
-        }
-        let source = match read_source(&file.disk_path(root), request.limits.max_file_bytes) {
-            Ok(source) => source,
-            Err((code, message)) => {
-                report.files_skipped += 1;
-                report.diagnostics.push(diagnostic(
-                    Stage::Discover,
-                    Severity::Warning,
-                    code,
-                    None,
-                    message,
-                ));
-                continue;
-            }
-        };
-        let dialect = analysis.dialect_of(&file.path).min(extractors.len() - 1);
-        let extractor = &extractors[dialect];
-        // The text that the parser and the resolver read. It differs from `source` only when
-        // the pack repaired a construct that its grammar rejects.
-        let mut parsed_text: Option<String> = None;
-        let first = extractor.parse(&source);
-        let tree = match first {
-            Ok(tree) => tree,
-            Err(error) => {
-                let repaired = analysis.repair_syntax(&source).filter(|fixed| {
-                    fixed.len() == source.len()
-                        && fixed.bytes().filter(|&b| b == b'\n').count()
-                            == source.bytes().filter(|&b| b == b'\n').count()
-                });
-                let tree = repaired.and_then(|fixed| {
-                    let tree = extractor.parse(&fixed).ok()?;
-                    parsed_text = Some(fixed);
-                    Some(tree)
-                });
-                if let Some(tree) = tree {
-                    report.diagnostics.push(diagnostic(
-                        Stage::Parse,
-                        Severity::Warning,
-                        "repaired-syntax",
-                        Some((error.start_byte, error.end_byte)),
-                        "the grammar rejects this file. The pack blanked out the syntax that it does not know"
-                            .to_string(),
-                    ));
-                    tree
-                } else {
-                    report.files_skipped += 1;
-                    report.diagnostics.push(diagnostic(
-                        Stage::Parse,
-                        Severity::Warning,
-                        "syntax-error",
-                        Some((error.start_byte, error.end_byte)),
-                        "skipped: the file has a syntax error".to_string(),
-                    ));
-                    continue;
-                }
-            }
-        };
-        let text = parsed_text.as_deref().unwrap_or(&source);
-        let facts = extractor.facts(&file.path, text, &tree);
-        drop(tree);
-        if let Err(failure) = engine.add_file(
-            dialect,
-            &file.path,
-            text,
-            &model.resolver_globals(&file.path),
-        ) {
-            report.files_skipped += 1;
-            report.diagnostics.push(diagnostic(
-                Stage::Bind,
-                Severity::Warning,
-                "bind-error",
-                None,
-                format!("skipped: {}", failure.message),
-            ));
-            continue;
-        }
-        for &(start, end) in &facts.conflicts {
-            report.diagnostics.push(diagnostic(
-                Stage::Extract,
-                Severity::Warning,
-                "declaration-conflict",
-                Some((start, end)),
-                "two captures give this identifier different kinds. The extractor dropped it"
-                    .to_string(),
-            ));
-        }
-        docs.push(Doc {
-            path: file.path.clone(),
-            source,
-            facts,
-            declared: Vec::new(),
-        });
-    }
-
-    // The support files of the pack, such as `tsconfig.json`.
+    // Stages B to D, one shard at a time. Each shard gets a binding engine of its own.
+    // The engine resolves the references of the shard. The pipeline frees it before the next
+    // shard, so the peak memory follows the largest shard.
+    let mut supports: HashMap<Option<&str>, Vec<SupportFile>> = HashMap::new();
     for support in analysis.support_files(root, &paths) {
-        let sources: Vec<ProjectRelativePath> = docs.iter().map(|d| d.path.clone()).collect();
-        if let Err(failure) = engine.add_support_file(&support, &sources) {
-            report.diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                stage: Stage::Bind,
-                file: Some(support.path.as_str().to_string()),
-                range: None,
-                code: "support-file-error",
-                message: format!("ignored: {}", failure.message),
-            });
+        let shard = shard_of(&support.path, shards);
+        supports.entry(shard).or_default().push(support);
+    }
+    let mut docs: Vec<(usize, Doc)> = Vec::new();
+    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
+    for (shard, group) in shard_groups(files, shards) {
+        let mut engine = BindingEngine::new(pack.id(), analysis)?;
+        let first = docs.len();
+        for at in group {
+            let file = files[at];
+            if let Some(doc) = load_file(
+                analysis,
+                &extractors,
+                &*model,
+                &mut engine,
+                root,
+                file,
+                request,
+                report,
+            ) {
+                docs.push((at, doc));
+            }
+        }
+        // The support files of the shard, such as `tsconfig.json`.
+        let sources: Vec<ProjectRelativePath> =
+            docs[first..].iter().map(|(_, d)| d.path.clone()).collect();
+        for support in supports.remove(&shard).unwrap_or_default() {
+            if let Err(failure) = engine.add_support_file(&support, &sources) {
+                report.diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    stage: Stage::Bind,
+                    file: Some(support.path.as_str().to_string()),
+                    range: None,
+                    code: "support-file-error",
+                    message: format!("ignored: {}", failure.message),
+                });
+            }
+        }
+        for binding in engine.resolve(ResolveLimits::default()) {
+            by_document
+                .entry(binding.reference.path.clone())
+                .or_default()
+                .push(binding);
         }
     }
+    // The later stages see the documents in the order of the walk.
+    docs.sort_by_key(|(at, _)| *at);
+    let mut docs: Vec<Doc> = docs.into_iter().map(|(_, doc)| doc).collect();
 
     // Stage F: assign identities.
     let mut package = model
@@ -421,16 +345,6 @@ fn index_pack(
     // The declarations of external assets, such as the builtins.
     let externals = declare_external(&extractors[0], analysis, &*model, report, &mut index);
 
-    // Stage D: resolve. Stage E: reconcile.
-    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
-    for binding in engine.resolve(ResolveLimits::default()) {
-        by_document
-            .entry(binding.reference.path.clone())
-            .or_default()
-            .push(binding);
-    }
-    drop(engine);
-
     // A binding name takes the target of its reference. It joins as a module-like binding.
     for doc in &docs {
         let Some(bindings) = by_document.get(&doc.path) else {
@@ -464,6 +378,7 @@ fn index_pack(
         }
     }
 
+    // Stage E: reconcile.
     let language = pack.scip_language().to_string();
     let mut out = Vec::with_capacity(docs.len());
     let mut inheritance = Inheritance::default();
@@ -530,6 +445,166 @@ fn index_pack(
         documents: out,
         stubs: Vec::new(),
         external_symbols: referenced,
+    })
+}
+
+/// The longest shard that holds the path, or `None` for a path outside every shard.
+fn shard_of<'a>(path: &ProjectRelativePath, shards: &'a [ProjectRelativePath]) -> Option<&'a str> {
+    let path = path.as_str();
+    shards
+        .iter()
+        .map(ProjectRelativePath::as_str)
+        .filter(|shard| {
+            path.strip_prefix(shard)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+        .max_by_key(|shard| shard.len())
+}
+
+/// The files of each shard, as indexes into `files`. The shards come in the order of their
+/// first file, and the files of a shard keep their order.
+fn shard_groups<'a>(
+    files: &[&FoundFile],
+    shards: &'a [ProjectRelativePath],
+) -> Vec<(Option<&'a str>, Vec<usize>)> {
+    let mut groups: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
+    let mut slot: HashMap<Option<&str>, usize> = HashMap::new();
+    for (at, file) in files.iter().enumerate() {
+        let shard = shard_of(&file.path, shards);
+        let n = *slot.entry(shard).or_insert_with(|| {
+            groups.push((shard, Vec::new()));
+            groups.len() - 1
+        });
+        groups[n].1.push(at);
+    }
+    groups
+}
+
+/// Read, parse, and extract one file, and add its graph to the engine.
+/// Return `None` when the pipeline skips the file. A diagnostic then says why.
+#[allow(clippy::too_many_arguments)]
+fn load_file(
+    analysis: &dyn Analysis,
+    extractors: &[Extractor],
+    model: &dyn ProjectModel,
+    engine: &mut BindingEngine,
+    root: &Path,
+    file: &FoundFile,
+    request: &IndexRequest,
+    report: &mut IndexReport,
+) -> Option<Doc> {
+    let diagnostic = |stage, severity, code, range, message: String| Diagnostic {
+        severity,
+        stage,
+        file: Some(file.path.as_str().to_string()),
+        range,
+        code,
+        message,
+    };
+    if let Some(winner) = model.shadowed_by(&file.path) {
+        report.files_skipped += 1;
+        report.diagnostics.push(diagnostic(
+            Stage::Identity,
+            Severity::Warning,
+            "shadowed-file",
+            None,
+            format!(
+                "skipped: {} shadows this file, so no import reaches it",
+                winner.as_str()
+            ),
+        ));
+        return None;
+    }
+    let source = match read_source(&file.disk_path(root), request.limits.max_file_bytes) {
+        Ok(source) => source,
+        Err((code, message)) => {
+            report.files_skipped += 1;
+            report.diagnostics.push(diagnostic(
+                Stage::Discover,
+                Severity::Warning,
+                code,
+                None,
+                message,
+            ));
+            return None;
+        }
+    };
+    let dialect = analysis.dialect_of(&file.path).min(extractors.len() - 1);
+    let extractor = &extractors[dialect];
+    // The text that the parser and the resolver read. It differs from `source` only when
+    // the pack repaired a construct that its grammar rejects.
+    let mut parsed_text: Option<String> = None;
+    let first = extractor.parse(&source);
+    let tree = match first {
+        Ok(tree) => tree,
+        Err(error) => {
+            let repaired = analysis.repair_syntax(&source).filter(|fixed| {
+                fixed.len() == source.len()
+                    && fixed.bytes().filter(|&b| b == b'\n').count()
+                        == source.bytes().filter(|&b| b == b'\n').count()
+            });
+            let tree = repaired.and_then(|fixed| {
+                let tree = extractor.parse(&fixed).ok()?;
+                parsed_text = Some(fixed);
+                Some(tree)
+            });
+            if let Some(tree) = tree {
+                report.diagnostics.push(diagnostic(
+                    Stage::Parse,
+                    Severity::Warning,
+                    "repaired-syntax",
+                    Some((error.start_byte, error.end_byte)),
+                    "the grammar rejects this file. The pack blanked out the syntax that it does not know"
+                        .to_string(),
+                ));
+                tree
+            } else {
+                report.files_skipped += 1;
+                report.diagnostics.push(diagnostic(
+                    Stage::Parse,
+                    Severity::Warning,
+                    "syntax-error",
+                    Some((error.start_byte, error.end_byte)),
+                    "skipped: the file has a syntax error".to_string(),
+                ));
+                return None;
+            }
+        }
+    };
+    let text = parsed_text.as_deref().unwrap_or(&source);
+    let facts = extractor.facts(&file.path, text, &tree);
+    drop(tree);
+    if let Err(failure) = engine.add_file(
+        dialect,
+        &file.path,
+        text,
+        &model.resolver_globals(&file.path),
+    ) {
+        report.files_skipped += 1;
+        report.diagnostics.push(diagnostic(
+            Stage::Bind,
+            Severity::Warning,
+            "bind-error",
+            None,
+            format!("skipped: {}", failure.message),
+        ));
+        return None;
+    }
+    for &(start, end) in &facts.conflicts {
+        report.diagnostics.push(diagnostic(
+            Stage::Extract,
+            Severity::Warning,
+            "declaration-conflict",
+            Some((start, end)),
+            "two captures give this identifier different kinds. The extractor dropped it"
+                .to_string(),
+        ));
+    }
+    Some(Doc {
+        path: file.path.clone(),
+        source,
+        facts,
+        declared: Vec::new(),
     })
 }
 
@@ -1271,5 +1346,48 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
         source: doc.source,
         occurrences,
         symbols: symbols.into_values().collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(p: &str) -> ProjectRelativePath {
+        ProjectRelativePath::new(p).unwrap()
+    }
+
+    #[test]
+    fn a_file_goes_to_the_longest_shard_that_holds_it() {
+        let shards = [path("code"), path("code/vendor"), path("lib")];
+        assert_eq!(shard_of(&path("code/a.py"), &shards), Some("code"));
+        assert_eq!(
+            shard_of(&path("code/vendor/b.py"), &shards),
+            Some("code/vendor")
+        );
+        assert_eq!(shard_of(&path("codex/c.py"), &shards), None);
+        assert_eq!(shard_of(&path("tool.py"), &shards), None);
+    }
+
+    #[test]
+    fn shards_keep_the_order_of_their_first_file() {
+        let shards = [path("a"), path("b")];
+        let found: Vec<FoundFile> = ["x.py", "b/1.py", "a/1.py", "b/2.py", "y.py"]
+            .iter()
+            .map(|p| FoundFile {
+                path: path(p),
+                pack: 0,
+                real: None,
+            })
+            .collect();
+        let files: Vec<&FoundFile> = found.iter().collect();
+        assert_eq!(
+            shard_groups(&files, &shards),
+            [
+                (None, vec![0, 4]),
+                (Some("b"), vec![1, 3]),
+                (Some("a"), vec![2])
+            ]
+        );
     }
 }

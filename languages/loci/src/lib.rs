@@ -146,7 +146,15 @@ impl LanguagePack for LociPack {
             return ExtraFiles::default();
         }
         let listing = Listing::of(&settings);
-        let mut extra = ExtraFiles::default();
+        // Each root is a repository of its own. Only notes link across roots.
+        let mut extra = ExtraFiles {
+            shards: settings
+                .roots
+                .iter()
+                .filter_map(|r| ProjectRelativePath::new(&r.name).ok())
+                .collect(),
+            ..ExtraFiles::default()
+        };
         for (name, code) in &listing.diagnostics {
             extra.diagnostics.push(Diagnostic {
                 severity: Severity::Warning,

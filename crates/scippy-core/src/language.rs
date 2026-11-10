@@ -410,6 +410,11 @@ pub struct ExtraFile {
 pub struct ExtraFiles {
     pub files: Vec<ExtraFile>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The virtual folders that hold independent code, such as the code repositories of a
+    /// notes workspace. Code in one folder never refers to code in another.
+    /// The core resolves the files of each folder with a binding engine of its own and frees
+    /// the engine before the next folder. The peak memory then follows the largest folder.
+    pub shards: Vec<ProjectRelativePath>,
     /// Data for the pack itself. The core hands it to [`NativeInput::extra`].
     pub state: Option<Box<dyn Any + Send + Sync>>,
 }
