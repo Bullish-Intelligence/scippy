@@ -21,6 +21,11 @@ the ignore list or `discovery.exclude` hides is hidden from every pack. A note t
 skipped with a warning, where `loci-core` reads it lossy. A link with a resolved anchor has two
 occurrences: one over the target part, for the note, and one over the anchor part.
 
+Each root is an independent repository. Only notes link across roots. The core resolves the code
+of each root with a binding engine of its own, and frees the engine before the next root. A
+reference therefore never resolves to code in another root. The peak memory follows the largest
+root, not the sum of the roots.
+
 ## Workspace
 
 - `crates/scippy-core` holds the language-neutral pipeline: the project walker with its
@@ -41,6 +46,11 @@ occurrences: one over the target part, for the note, and one over the anchor par
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
+The pin is `e5cba0a`. That commit adds shadow-aware similar path detection. The detector keeps
+the first of two similar paths. Without the mode, that path can be one that another path shadows,
+and a name loses a binding. The Python pack turns the mode on in its binding rules. The resolver
+uses it when it stores partial paths and when it resolves references. The TypeScript pack leaves
+it off.
 
 ## Input limits
 
@@ -51,6 +61,23 @@ The graph build used about 1.3 GB for each MB of Python source.
 The Loci pack needs far less memory. When a vault is active, the default per-file limit is the
 largest `note_max_bytes` of the vault and its roots, and the default total limit is 4 GiB.
 A flag still wins.
+
+## Workspace run
+
+The first real workspace is the `~/Notes` vault with 57 code roots: 42,340 files, 12,525
+indexed documents, and about 36 MB of Python. The Loci relations agree with `loci-core` on all
+35,333 relations.
+
+| Run | Peak memory | Wall time | Occurrences |
+| --- | --- | --- | --- |
+| One binding engine for all roots | 19.8 GB | 16:56 | 1,363,480 |
+| One binding engine for each root | 5.7 GB | 18:51 | 1,362,852 |
+
+The two indexes have the same documents, declarations, and external symbols. 380 documents
+differ. Without shards, 2,957 references resolved to code in another root, and 24 more reached a
+builtin through such code. With shards, those references are unresolved. 2,353 references that
+had a second candidate in another root were ambiguous. They now resolve to their own root.
+The run is slower because each root compiles the rules and loads the builtins again.
 
 ## Symbols
 
