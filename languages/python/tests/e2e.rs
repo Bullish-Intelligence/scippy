@@ -764,7 +764,10 @@ fn a_keyword_argument_names_a_field_of_a_model_class_or_a_typeddict() {
     let at = |context, word| indexed.symbols_of("use.py", context, word);
     assert_eq!(at("Model(title", "title"), [global("lib/Model#title.")]);
     // A model class takes the fields of its model base classes.
-    assert_eq!(at("Grandchild(title", "title"), [global("lib/Model#title.")]);
+    assert_eq!(
+        at("Grandchild(title", "title"),
+        [global("lib/Model#title.")]
+    );
     assert_eq!(at("extra=1", "extra"), [global("lib/Child#extra.")]);
     assert_eq!(at("deep=True", "deep"), [global("lib/Grandchild#deep.")]);
     // A call of a generic class names the fields of the class.

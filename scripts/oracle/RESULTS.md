@@ -206,3 +206,69 @@ Classes that the fixes touch (before / after):
 Run time and memory, mypy (GNU time): before 8:47.90 and 5.45 GiB; after 8:51.39 and 5.45 GiB.
 pydantic-ai after: 6:29.50 and 5.92 GiB. The indexes ran one at a time.
 The Loci oracle is unchanged: the Loci expectations and golden snapshots pass in `verify.sh`.
+
+## Run 2026-11-10: model classes, TypedDict, and generic bases
+
+Fork commit 013c27c. It adds the synthesized `__init__` for classes that derive from
+`pydantic.BaseModel`, `pydantic_settings.BaseSettings`, or `sqlmodel.SQLModel` (also through bases
+of the project, and from a base that `@dataclass_transform` marks), the keyword fields of
+`TypedDict` classes, the decorators of attrs and `pydantic.dataclasses`, and the keyword paths of
+`C[T](name=v)` and `class B(A[T])`.
+
+Setup: `scip-python` runs with the environment (`ORACLE_VENV=1`, indexes in `evals/out-env`) for
+the five user corpora. mypy and rich use the empty environment. The "before" Scippy is 9f588df.
+The "after" Scippy is the fork at the parent of 013c27c plus these rules. It is the build that
+isolates this change from the commits of the fork that landed at the same time.
+
+| Corpus | Field keywords (C_synth_init_field) | Raw recall | Wrong targets | Precision, plausible |
+|---|---|---|---|---|
+| agentman | 85 -> 0 | 97.04% -> 98.32% | 0 -> 0 | 100.00% -> 100.00% |
+| eventic | 164 -> 0 | 94.55% -> 96.55% | 31 -> 31 | 99.60% -> 99.61% |
+| argentic | 164 -> 0 | 97.27% -> 98.33% | 2 -> 2 | 99.99% -> 99.99% |
+| inferference | 347 -> 18 | 96.64% -> 97.63% | 0 -> 0 | 100.00% -> 100.00% |
+| pydantic-ai | 1,590 -> 287 | 90.74% -> 91.58% | 192 -> 192 | 99.87% -> 99.87% |
+| mypy | 0 -> 0 | 90.80% -> 90.80% | 21 -> 21 | 99.99% -> 99.99% |
+| rich | 0 -> 0 | 95.67% -> 95.67% | 0 -> 0 | 100.00% -> 100.00% |
+
+Syntax-only count (keyword arguments that name a field of an in-project model or TypedDict class,
+`budget.py`): inferference 1,052, eventic 288, pydantic-ai 242, argentic 240, agentman 175.
+Scippy resolved none of them before. Now it resolves all of them to the field, except one in
+pydantic-ai. `kwresolve.py` also counts the TypedDict calls (merged by class name): 615 of the
+about 640 TypedDict keywords in pydantic-ai resolve (the misses were about 561); the other 24
+keyword arguments of pydantic-ai (model and TypedDict) have no occurrence. The 6 eventic calls
+that `kwresolve.py` lists as another target name fields of classes that a function defines, so
+their targets are `local` symbols and correct. No keyword has a target in the wrong class.
+
+Field aliases (`Field(alias=...)`) occur in 4 fields in the corpora (pydantic-ai 1, argentic 3).
+No call uses an alias as a keyword. The rules ignore aliases.
+
+What remains in pydantic-ai (class C_synth_init_field, 287): calls inside `case` blocks of a
+`match` statement do not resolve at all (the fork has no rule for the block; a probe confirmed
+it). The rest is not examined. At the fork head with the other commit of the day (see below) the
+class falls to 65. Keywords on methods of instances need the receiver type and are out of scope.
+
+Cost. Time and memory are the same: pydantic-ai 6:07.79 (base 6:07.51), 6.19 GiB; mypy 8:36.96
+and 5.43 GiB (base 8:38.44); rich 0:32.43. A first version also followed the generic base for
+the lookup of members. It raised the raw recall of pydantic-ai by 0.6 point, but it hit the work
+limit of the search for 275 more mypy references (182 more missing positions, recall -0.12 point) and it raised the CPU time
+of pydantic-ai by 38%. The shipped version follows the generic base for keyword paths only.
+
+Merged with main 1a76712 (it declares walrus names, type parameters, and type aliases; pin 013c27c).
+A first measure on a base without 1a76712 gave extra wrong targets (rich 3, pydantic-ai 253). They
+came from the fork commit be7ece9 without the Scippy declarations, not from this change. The table
+below is the merged build. Wrong targets do not rise against main 1a76712 (mypy 13, rich 0,
+pydantic-ai 70, eventic 3, argentic 0, agentman 0, inferference 0).
+
+| Corpus | Field keywords (C_synth_init_field) | Raw recall | Wrong targets |
+|---|---|---|---|
+| agentman | 85 -> 0 | 97.04% -> 98.32% | 0 |
+| eventic | 164 -> 0 | 94.55% -> 97.91% | 3 |
+| argentic | 164 -> 0 | 97.27% -> 98.32% | 0 |
+| inferference | 347 -> 18 | 96.64% -> 97.63% | 0 |
+| pydantic-ai | 1,590 -> 65 | 90.74% -> 93.74% | 70 |
+| mypy | 0 -> 0 | 90.80% -> 90.85% | 13 |
+| rich | 0 -> 0 | 95.67% -> 95.72% | 0 |
+
+Merged run time: pydantic-ai 6:28 and 5.9 GiB; mypy 8:53 and 5.4 GiB. The class falls from 287 to 65
+in the merged build. The `case` block gap remains (a probe with the merged build confirmed it); the
+rest of the fall is not examined.

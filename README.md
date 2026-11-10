@@ -68,14 +68,34 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `be7ece9`. That commit adds type parameters, type aliases, the walrus, and relative imports
-with any number of dots. Commit `55f33f4` added the synthesized `__init__`, the keyword rule for star
-parameters, and the `global` and `nonlocal` rules. Commit `e5cba0a` added shadow-aware similar
+The pin is `013c27c`. That commit adds the synthesized `__init__` of model classes and `TypedDict`
+classes (see below). Commit `be7ece9` added type parameters, type aliases, the walrus, and relative
+imports with any number of dots. Commit `55f33f4` added the synthesized `__init__` of dataclasses
+and `NamedTuple` classes, the keyword rule for star parameters, and the `global` and `nonlocal`
+rules. Commit `e5cba0a` added shadow-aware similar
 path detection. The detector keeps
 the first of two similar paths. Without the mode, that path can be one that another path shadows,
 and a name loses a binding. The Python pack turns the mode on in its binding rules. The resolver
 uses it when it stores partial paths and when it resolves references. The TypeScript pack leaves
 it off.
+
+### Keyword arguments of classes
+
+A keyword argument in `C(name=v)` names a field of `C` in these cases. The rules read the text of
+the class definition. They do not check that a name resolves to the library.
+
+- `C` is a dataclass: the decorator is `dataclass`, `pydantic_dataclass`, or one of `attrs.define`,
+  `attrs.frozen`, `attr.s`.
+- `C` is a `NamedTuple` or a `TypedDict` (with `total=False` too).
+- `C` is a model class: it derives from `pydantic.BaseModel`, `pydantic_settings.BaseSettings`, or
+  `sqlmodel.SQLModel`. It also counts when `C` derives from a class of the project that is a model
+  class, or from a class that `@dataclass_transform` marks.
+- The subscript form `C[T](name=v)` and the generic base `class B(A[T])` reach `C` and `A`.
+
+A model class skips a `ClassVar`, a private field `_x`, and a `PrivateAttr`. A field takes
+its keyword from the field name. The alias in `Field(alias=...)` is not a keyword here. A written
+`__init__` wins over the fields. The rules do not follow a metaclass that `dataclass_transform`
+marks, or a decorator of the project that it marks. A call inside a `case` block can miss.
 
 ## Input limits
 
