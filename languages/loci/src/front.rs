@@ -348,7 +348,7 @@ pub struct FrontFacts {
     pub aliases: Vec<(String, usize, usize)>,
     /// The owned `loci` region is invalid or duplicate: the note is degraded.
     pub degraded: bool,
-    /// The `url` property is an http or https address: the note is a captured web page.
+    /// A `clip_url_properties` property is an http or https address: the note is a captured web page.
     pub has_url: bool,
 }
 
@@ -530,7 +530,7 @@ fn has_loci_line(window: &[u8]) -> bool {
 }
 
 /// Read the front matter of a note.
-pub fn analyze_front(raw: &[u8], envelope: &Envelope) -> FrontFacts {
+pub fn analyze_front(raw: &[u8], envelope: &Envelope, clip_url: &[String]) -> FrontFacts {
     let mut facts = FrontFacts::default();
     let (Some(content_span), Some(whole)) = (envelope.content, envelope.frontmatter) else {
         return facts;
@@ -577,7 +577,7 @@ pub fn analyze_front(raw: &[u8], envelope: &Envelope) -> FrontFacts {
                 facts.aliases.extend(items);
             }
         }
-        if key == "url" && value.as_str().is_some_and(safe_url) {
+        if clip_url.iter().any(|k| k == key) && value.as_str().is_some_and(safe_url) {
             facts.has_url = true;
         }
         if key == "loci" {

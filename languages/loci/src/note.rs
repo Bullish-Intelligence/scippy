@@ -19,14 +19,14 @@ pub struct Note {
     pub tags: Vec<TagOccurrence>,
     /// The aliases with their spans.
     pub aliases: Vec<(String, usize, usize)>,
-    /// The note is a captured web page: it has a `url` property.
+    /// The note is a captured web page: a property of `clip_url_properties` holds a web address.
     pub page: bool,
     pub len: usize,
 }
 
 pub fn analyze_note(raw: &[u8], settings: &Settings) -> Note {
     let envelope = scan_envelope(raw);
-    let front = analyze_front(raw, &envelope);
+    let front = analyze_front(raw, &envelope, &settings.clip_url_properties);
     let options = ExtractOptions {
         markdown_links: settings.markdown_links,
         inline_tags: settings.inline_tags,

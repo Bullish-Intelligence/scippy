@@ -11,7 +11,7 @@
 //! It owns the files that end in `.md`. A project without that file gives its `.md` files to
 //! no pack, as before. The other packs keep their files in a mixed project.
 //! The pack reads `discovery.include`, `discovery.exclude`, `[resolution]`, `[extract]`,
-//! `[diagnostics] id_anchors`, `[[analyzer]]`, `[[root]]`, `roots_file`, and `[policy]`:
+//! `[diagnostics] id_anchors`, `[diagnostics] clip_url_properties`, `[[analyzer]]`, `[[root]]`, `roots_file`, and `[policy]`:
 //! `note_max_bytes`, `ignore_file`, and `id_template`. `discovery.link_targets` is read and
 //! never applied, as in loci-core.
 //!

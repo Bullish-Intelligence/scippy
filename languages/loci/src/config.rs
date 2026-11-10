@@ -51,6 +51,9 @@ pub struct Settings {
     pub inline_tags: bool,
     /// `[diagnostics] id_anchors`: a fragment can name a footnote or an HTML id.
     pub id_anchors: bool,
+    /// `[diagnostics] clip_url_properties`: a note whose property in this list holds an http or
+    /// https address is a captured web page.
+    pub clip_url_properties: Vec<String>,
     pub note_max_bytes: u64,
     /// The globs that the `[[analyzer]]` entries claim. A claimed file is a document. Scippy
     /// loads no analyzer, so a claimed file has no structure, as in loci-core without the plugin.
@@ -82,6 +85,7 @@ impl Default for Settings {
             frontmatter_links: true,
             inline_tags: true,
             id_anchors: true,
+            clip_url_properties: vec!["url".to_string(), "source".to_string()],
             note_max_bytes: DEFAULT_NOTE_MAX_BYTES,
             claims: Vec::new(),
             analyzers: Vec::new(),
@@ -181,6 +185,9 @@ impl Settings {
         }
         if let Some(t) = section("diagnostics") {
             s.id_anchors = flag(t, "id_anchors").unwrap_or(s.id_anchors);
+            if let Some(v) = strings(t, "clip_url_properties") {
+                s.clip_url_properties = v;
+            }
         }
         if let Some(t) = data.get("policy") {
             crate::policy::parse_policy(t, &mut s)?;

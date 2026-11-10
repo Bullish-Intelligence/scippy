@@ -36,6 +36,8 @@ const ORACLE_FIXTURES: &[&str] = &[
     "attachments",
     "case_insensitive",
     "case_sensitive",
+    "clips",
+    "clips_custom",
     "code",
     "extract_off",
     "fallback",
