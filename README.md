@@ -68,7 +68,9 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `e5cba0a`. That commit adds shadow-aware similar path detection. The detector keeps
+The pin is `55f33f4`. That commit adds the synthesized `__init__`, the keyword rule for star
+parameters, and the `global` and `nonlocal` rules. Commit `e5cba0a` added shadow-aware similar
+path detection. The detector keeps
 the first of two similar paths. Without the mode, that path can be one that another path shadows,
 and a name loses a binding. The Python pack turns the mode on in its binding rules. The resolver
 uses it when it stores partial paths and when it resolves references. The TypeScript pack leaves
@@ -121,6 +123,15 @@ extension, for example `` `src/services.ts`/process(). ``.
 A local variable inside a function gets a document-local symbol.
 A parameter of a module-level function or of a method gets a global symbol with the parameter
 descriptor, such as `pkg/mod/f().(name)`. A keyword argument in another document can name it.
+A keyword argument never names `*args` or `**kwargs`.
+A `@dataclass` class and a `NamedTuple` class get a synthesized `__init__`. A keyword argument of
+a call of the class names the field, such as `pkg/mod/Point#x.`. A subclass with no `__init__`
+uses the fields of its base classes. A class that writes its own `__init__` uses only that.
+The rules read the decorator by its text, `dataclass` or `dataclasses.dataclass`. They do not
+check that the name comes from the `dataclasses` module.
+A name that `global` or `nonlocal` declares resolves to the binding of the module or of the
+enclosing function. The assignment in the function still makes a local definition, but no
+reference reaches it.
 
 ## External symbols
 
@@ -162,6 +173,25 @@ The reconciler turns the engine paths of one reference into one target, or none.
 
 `--trace FILE` writes one line for each reference location with its outcome:
 resolved, ambiguous, unresolved, or bounded. The file is not part of the index.
+
+## Accuracy oracle
+
+`scripts/oracle` compares a Scippy index with a `scip-python` index of the same corpus.
+`scip-python` is the reference only. Scippy never uses a type checker to resolve names.
+The corpora are mypy and rich. `scripts/oracle/RESULTS.md` records each run.
+
+1. Put the corpora, `scip-python`, and `env-empty.json` in `ORACLE_DIR`.
+   The default is `~/.local/state/scippy/oracle`. `run_all.sh` lists the setup.
+2. Build Scippy in release mode. Set `SCIPPY_BIN` to the binary.
+3. Run `scripts/oracle/run_all.sh OUTDIR`. It indexes one corpus at a time.
+4. To compare existing indexes again, run `scripts/oracle/recompute.sh CORPUS OUTDIR`.
+
+`compare.py` reads the stubs of the fork. Set `STACK_GRAPHS_DIR` to a checkout at the pin.
+`metrics.py` prints precision, wrong targets, raw recall, and recall without design gaps.
+Raw recall counts a rebind as matched when the Scippy definition has the definition location
+of the `scip-python` target. A keyword argument that resolves to `*args` or `**kwargs` is a wrong
+target. The design gaps are the rebinds without that credit, keyword names of plain functions,
+and skipped files.
 
 ## Verify
 

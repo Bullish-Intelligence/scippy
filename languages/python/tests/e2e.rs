@@ -746,6 +746,31 @@ fn a_keyword_argument_names_the_parameter_in_another_document() {
     assert_eq!(indexed.report.references_ambiguous, 0);
 }
 
+#[test]
+fn a_keyword_argument_names_a_field_of_a_synthesized_init() {
+    let indexed = index("synth");
+    let at = |context, word| indexed.symbols_of("use.py", context, word);
+    assert_eq!(at("Point(x=1", "x"), [global("lib/Point#x.")]);
+    assert_eq!(at("y=2", "y"), [global("lib/Point#y.")]);
+    assert_eq!(at("Sig(name", "name"), [global("lib/Sig#name.")]);
+    assert_eq!(at("args=[]", "args"), [global("lib/Sig#args.")]);
+    // No keyword argument names `*args` or `**kwargs`.
+    assert!(at("wrap(args", "args").is_empty());
+}
+
+#[test]
+fn a_global_name_resolves_to_the_module_binding() {
+    let indexed = index("synth");
+    let at = |context, word| indexed.symbols_of("use.py", context, word);
+    let count = global("use/count.");
+    assert_eq!(at("global count", "count"), [count.as_str()]);
+    assert_eq!(at("count + 1", "count"), [count.as_str()]);
+    assert_eq!(at("return count", "count"), [count.as_str()]);
+    // The assignment is a reference to the module binding as well.
+    let found = indexed.find("use.py", "    count = count", "count");
+    assert!(found.iter().any(|o| o.symbol == count && !is_definition(o)));
+}
+
 // ---- attribute assignment targets ----
 
 #[test]

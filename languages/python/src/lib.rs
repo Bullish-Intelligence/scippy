@@ -518,8 +518,11 @@ impl ProjectModel for PythonModel {
     ) -> bool {
         if reference == ReferenceKind::Keyword {
             // The name in `f(name=v)` names a parameter. The default value of the parameter,
-            // or any value that the callee holds, is no target.
-            return declaration.kind == DeclKind::Parameter;
+            // or any value that the callee holds, is no target. A class variable is a target:
+            // the synthesized `__init__` of a dataclass takes the fields of the class.
+            let in_class = scopes.last().is_some_and(|s| s.kind == DeclKind::Class);
+            return declaration.kind == DeclKind::Parameter
+                || (in_class && declaration.kind == DeclKind::Variable);
         }
         if reference == ReferenceKind::Member {
             // A name that a function body binds is not an attribute of any value.
@@ -871,6 +874,10 @@ mod tests {
         assert!(!accepts(DeclKind::Field));
         assert!(!accepts(DeclKind::Function));
         assert!(!accepts(DeclKind::Class));
+        // A class variable is a field of a synthesized `__init__`.
+        let class = vec![scope(DeclKind::Class, "C")];
+        assert!(model.accepts_target(keyword, &[], &class, &scope(DeclKind::Variable, "x")));
+        assert!(!model.accepts_target(keyword, &[], &class, &scope(DeclKind::Function, "m")));
     }
 
     #[test]
