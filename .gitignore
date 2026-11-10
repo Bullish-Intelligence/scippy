@@ -15,3 +15,4 @@ devenv.lock
 .devman/runs
 /.loci
 devenv.local.nix
+__pycache__/
