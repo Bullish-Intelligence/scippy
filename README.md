@@ -68,7 +68,8 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `55f33f4`. That commit adds the synthesized `__init__`, the keyword rule for star
+The pin is `be7ece9`. That commit adds type parameters, type aliases, the walrus, and relative imports
+with any number of dots. Commit `55f33f4` added the synthesized `__init__`, the keyword rule for star
 parameters, and the `global` and `nonlocal` rules. Commit `e5cba0a` added shadow-aware similar
 path detection. The detector keeps
 the first of two similar paths. Without the mode, that path can be one that another path shadows,
@@ -132,6 +133,12 @@ check that the name comes from the `dataclasses` module.
 A name that `global` or `nonlocal` declares resolves to the binding of the module or of the
 enclosing function. The assignment in the function still makes a local definition, but no
 reference reaches it.
+A type parameter, as in `class C[T: Base]` or `def f[T]()`, has its own scope. It covers the
+whole definition and wins over a module variable of the same name. It gets a document-local
+symbol. A `type Name = value` statement defines `Name`.
+A walrus `name := value` binds `name` in the enclosing function or module, also inside a comprehension.
+A relative import takes any number of dots. An import that climbs above the project root does
+not resolve.
 
 ## External symbols
 

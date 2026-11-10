@@ -15,6 +15,41 @@
 ; Names that code binds with an assignment, a loop, a `with`, an `except`, or a walrus.
 (pattern/identifier) @name @definition.variable
 
+; The name of an assignment expression: the `n` in `(n := f())`.
+(named_expression
+  name: (identifier) @name @definition.variable)
+
+; A type alias: `type Name = value` and `type Name[T] = value`.
+(type_alias_statement
+  . (type [
+    (identifier) @name
+    (generic_type . (identifier) @name)
+  ])) @definition.type
+
+; The type parameters of a class, a function, and a type alias: the `T` in `class C[T: Base]`.
+; The bound is no declaration.
+(class_definition
+  type_parameters: (type_parameter
+    (type [
+      (identifier) @name
+      (constrained_type . (type (identifier) @name))
+      (splat_type (identifier) @name)
+    ]) @definition.typeparameter))
+(function_definition
+  type_parameters: (type_parameter
+    (type [
+      (identifier) @name
+      (constrained_type . (type (identifier) @name))
+      (splat_type (identifier) @name)
+    ]) @definition.typeparameter))
+(type_alias_statement
+  . (type (generic_type (type_parameter
+    (type [
+      (identifier) @name
+      (constrained_type . (type (identifier) @name))
+      (splat_type (identifier) @name)
+    ]) @definition.typeparameter))))
+
 ; Names that a pattern binds: `case` patterns and `as` patterns.
 (as_pattern
   alias: (as_pattern_target (identifier) @name @definition.variable))

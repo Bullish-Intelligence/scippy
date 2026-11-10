@@ -167,3 +167,42 @@ names of model fields, and attribute reads on model instances (the receiver-type
 In pydantic-ai, the positions that both tools resolve in the project fall by 3 (147,277 to
 147,274). The cause is not examined. The recall falls because the oracle now sees misses that it hid before.
 Time of `scip-python` on pydantic-ai: 2:23 and 2.1 GiB with the environment.
+
+## Run 2026-11-10: type parameters, type aliases, walrus, relative imports with many dots
+
+Baseline is Scippy 9f588df with fork pin 55f33f4. The change is fork pin be7ece9 and the
+declarations of the Python pack: type parameters (`typeparameter`), `type` aliases (`type`), and
+the walrus name (`variable`). One index ran for each corpus and version, with `--trace`.
+The `scip-python` indexes are the same for both versions.
+
+Script change: bucket `function_type_parameter` is a plausible class. `scip-python` gives a type
+parameter of a function the symbol of the function (`f().`). Scippy gives the type parameter, a
+document-local symbol at its declaration in the `def` header. Scippy is correct by the language
+rules. Without the class, 7 positions in eventic and 7 in argentic count as wrong.
+
+| Corpus | Precision, plausible (before / after) | Wrong targets | Raw recall | Missing, Scippy |
+|---|---|---|---|---|
+| mypy | 99.99% / 99.99% | 21 / 13 | 90.80% / 90.85% | 8,966 / 8,891 |
+| rich | 100.00% / 100.00% | 0 / 0 | 95.67% / 95.72% | 698 / 688 |
+| pydantic-ai | 99.87% / 99.95% | 192 / 70 | 91.00% / 93.10% | 12,863 / 9,628 |
+| eventic | 99.60% / 99.96% | 31 / 3 | 96.46% / 97.85% | 254 / 163 |
+| argentic | 99.99% / 100.00% | 2 / 0 | 98.60% / 98.59% | 211 / 207 |
+
+No position is wrong after the change that was right before. The remaining wrong targets are not
+in the three syntax classes. Raw precision of argentic moves from 99.98% to 99.95%, because the 7
+function type parameter positions are wrong in the raw count. The new class holds them.
+
+Classes that the fixes touch (before / after):
+
+- pydantic-ai, annotation names without a declaration (C2, no-declaration): 397 / 0.
+- pydantic-ai, receiver is a parameter with a class annotation (C4b): 189 / 13.
+- pydantic-ai, receiver bound by a walrus (C4 walrus): 210 / 139. Other walrus names moved out of
+  `C_name_other` (110 / 0) and `C_name_store_target`.
+- pydantic-ai, wrong targets W2 (name resolved to another local): 152 / 35.
+- pydantic-ai, keyword argument names (C1): 29 / 17.
+- eventic, annotation and name misses with no declaration: 56 / 0. Wrong targets 31 / 3.
+- pydantic-ai: all 263 references on the 114 import lines with three or more dots resolve.
+
+Run time and memory, mypy (GNU time): before 8:47.90 and 5.45 GiB; after 8:51.39 and 5.45 GiB.
+pydantic-ai after: 6:29.50 and 5.92 GiB. The indexes ran one at a time.
+The Loci oracle is unchanged: the Loci expectations and golden snapshots pass in `verify.sh`.

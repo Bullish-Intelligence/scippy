@@ -536,6 +536,10 @@ impl ProjectModel for PythonModel {
         if declaration.kind == DeclKind::Field {
             return false;
         }
+        // A type parameter is visible in the whole definition that declares it, with its methods.
+        if declaration.kind == DeclKind::TypeParameter {
+            return true;
+        }
         // A name in a class body is visible in that body only. A method, a nested function,
         // and a nested class do not see it.
         let owned_by_class = scopes.last().is_some_and(|s| s.kind == DeclKind::Class);
@@ -695,6 +699,14 @@ fn describe(
             Descriptor::Namespace(declaration.name.clone()),
             SymbolKind::Module,
         ),
+        DeclKind::TypeAlias => (
+            Descriptor::Type(declaration.name.clone()),
+            SymbolKind::TypeAlias,
+        ),
+        DeclKind::TypeParameter => (
+            Descriptor::Term(declaration.name.clone()),
+            SymbolKind::TypeParameter,
+        ),
         // The query of this pack never captures the other kinds.
         _ => (
             Descriptor::Term(declaration.name.clone()),
@@ -705,6 +717,9 @@ fn describe(
 
     let local = if declaration.kind == DeclKind::Parameter {
         !function_is_global
+    } else if declaration.kind == DeclKind::TypeParameter {
+        // Only the document that declares a type parameter can address it.
+        true
     } else {
         inside_function
     };

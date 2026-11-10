@@ -771,6 +771,79 @@ fn a_global_name_resolves_to_the_module_binding() {
     assert!(found.iter().any(|o| o.symbol == count && !is_definition(o)));
 }
 
+// ---- type parameters, type aliases, assignment expressions, and many-dot imports ----
+
+#[test]
+fn a_type_parameter_binds_in_its_own_scope() {
+    let indexed = index("syntax");
+    let at = |context, word| indexed.find("generic.py", context, word);
+    let declared = at("class Box[T", "T");
+    assert_eq!(declared.len(), 1);
+    assert!(is_definition(declared[0]));
+    let own = declared[0].symbol.clone();
+    assert!(
+        own.starts_with("local "),
+        "a type parameter is local: {own}"
+    );
+    // The type parameter wins over the module variable `T` in the class, in a method, and in
+    // a function with its own type parameter.
+    assert_eq!(at("item: T", "T")[0].symbol, own);
+    assert_eq!(at("-> T:\n        return self", "T")[0].symbol, own);
+    let function = at("first[T", "T")[0].symbol.clone();
+    assert_ne!(function, own);
+    assert_eq!(at("list[T]", "T")[0].symbol, function);
+    assert_eq!(at("-> T:\n    return items", "T")[0].symbol, function);
+    let alias = at("Pair[T", "T")[0].symbol.clone();
+    assert_eq!(at("tuple[T, T]", "T")[0].symbol, alias);
+    // A name outside every type parameter list still resolves to the module variable.
+    assert_eq!(at("n: T", "T")[0].symbol, global("generic/T."));
+    // The bound is an ordinary reference.
+    assert_eq!(
+        at("T: BaseModel", "BaseModel")[0].symbol,
+        global("generic/BaseModel#")
+    );
+}
+
+#[test]
+fn a_type_alias_is_a_definition() {
+    let indexed = index("syntax");
+    let at = |context, word| indexed.find("generic.py", context, word);
+    let defined = at("type Alias", "Alias");
+    assert_eq!(defined.len(), 1);
+    assert!(is_definition(defined[0]));
+    assert_eq!(defined[0].symbol, global("generic/Alias#"));
+    assert_eq!(at("a: Alias", "Alias")[0].symbol, global("generic/Alias#"));
+    assert_eq!(at("p: Pair", "Pair")[0].symbol, global("generic/Pair#"));
+}
+
+#[test]
+fn an_assignment_expression_binds_in_the_enclosing_function() {
+    let indexed = index("syntax");
+    let at = |context, word| indexed.find("walrus.py", context, word);
+    let defined = at("(found :=", "found");
+    assert_eq!(defined.len(), 1);
+    assert!(is_definition(defined[0]));
+    assert_eq!(at("return found", "found")[0].symbol, defined[0].symbol);
+    // A comprehension binds the name in the function around it.
+    let kept = at("(y :=", "y");
+    assert!(is_definition(kept[0]));
+    assert_eq!(at("return kept, y", "y")[0].symbol, kept[0].symbol);
+    assert_eq!(at("x + total", "total")[0].symbol, global("walrus/total."));
+}
+
+#[test]
+fn a_relative_import_with_three_dots_resolves() {
+    let indexed = index("syntax");
+    let at = |context, word| indexed.find("pkg/sub/deep/mod.py", context, word);
+    let limit = global("pkg/top/LIMIT.");
+    assert!(
+        at("import LIMIT", "LIMIT")
+            .iter()
+            .any(|o| o.symbol == limit)
+    );
+    assert!(at("print(LIMIT", "LIMIT").iter().any(|o| o.symbol == limit));
+}
+
 // ---- attribute assignment targets ----
 
 #[test]

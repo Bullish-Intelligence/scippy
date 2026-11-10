@@ -146,6 +146,21 @@ def package_prefix_at_usage_site(r):
     return False
 
 
+def function_type_parameter(r):
+    """scip-python gives a type parameter of a function the symbol of the function.
+
+    Scippy gives the type parameter, a local symbol at its declaration in the `def` header.
+    """
+    if r["cat"] != "name" or not (r["sc"] and r["sp"] and r["sc_def"] and r["sp_def"]):
+        return False
+    if not r["sc"][0][0].startswith("local ") or not r["sp"][0][0].endswith(")."):
+        return False
+    (sc_doc, sc_rng), (sp_doc, sp_rng) = r["sc_def"][0], r["sp_def"][0]
+    if sc_doc != sp_doc or not 0 <= sc_rng[0] - sp_rng[0] <= 3:
+        return False
+    return re.match(r"(async\s+)?def\s+\w+\[", line_at(sp_doc, sp_rng[0])) is not None
+
+
 def wrong_cause(r):
     sc0 = r["sc"][0][0]
     if r.get("star_kw"):
@@ -177,6 +192,8 @@ for r in rows:
             buckets[("both_plausible", "same_name_member_in_another_class (inheritance/override)")].append(r)
         elif r["cat"] == "attribute" and spc and spc.endswith("#") and sc_kind(sc0) in ("var/attr", "func/method") and member_name(sc0.split(" . ", 1)[-1]) == r["text"]:
             buckets[("both_plausible", "sp_points_at_a_class_that_is_not_the_owner, Scippy at a same-name member")].append(r)
+        elif function_type_parameter(r):
+            buckets[("both_plausible", "function_type_parameter: scip-python gives a type parameter of a function the symbol of the function, Scippy the type parameter")].append(r)
         elif r["cat"] == "name" and sc0.endswith("/") and package_prefix_at_usage_site(r):
             # User decision 2026-11-09: W4 counts as "both plausible: import prefix" at usage sites.
             buckets[("both_plausible", "import_prefix_at_usage_site: Scippy points the leading name (`mypy` of `mypy.nodes.X`) at the package, scip-python at a submodule")].append(r)
