@@ -136,3 +136,34 @@ Script changes:
 Run time and memory of the new Scippy (GNU time): mypy 8:38.44 and 5.41 GiB (baseline 8:27.63
 and 5.43 GiB); rich 0:34.49 and 0.88 GiB. The indexes ran one at a time.
 The `global` and `nonlocal` rules touch 8 statements in the two corpora, so no metric shows them.
+
+## Run 2026-11-10: scip-python with a Python environment (`ORACLE_VENV=1`)
+
+Scippy is main 9f588df (fork pin as in that commit). The Scippy indexes did not change.
+Only the `scip-python` run changed. `mkenv.sh` built one environment per corpus with `uv`,
+from wheels only: `pydantic` 2.14.3 and its dependencies, plus `typing_extensions` for
+pydantic-ai. No corpus imports `pydantic_settings` or `sqlmodel`. No corpus code ran.
+References that resolve into installed packages have no definition in the corpus index, so
+they stay external. They count in neither recall nor precision.
+
+Default mode (empty environment) did not move. The `scip-python` indexes of mypy and rich are
+byte-identical to the earlier ones. A new Scippy run on main 9f588df gives the same metrics as
+the table above: mypy raw recall 90.80%, without design gaps 94.30%, 21 wrong targets; rich
+95.67%, 96.76%, 0 wrong targets.
+
+Per corpus, empty environment, then environment. "Field keywords" is the class
+`C_synth_init_field` (keyword names a dataclass, NamedTuple, or model field).
+
+| Corpus | sp positions | Raw recall | Recall without design gaps | Wrong targets | Field keywords | Receiver type (C4/C5) |
+|---|---|---|---|---|---|---|
+| agentman | 6,507 -> 6,622 | 98.76% -> 97.04% | 98.79% -> 97.07% | 0 -> 0 | 0 -> 85 | 62 -> 92 |
+| eventic | 8,062 -> 8,225 | 96.46% -> 94.55% | 96.51% -> 94.60% | 31 -> 31 | 1 -> 164 | 156 -> 156 |
+| argentic | 15,242 -> 15,450 | 98.60% -> 97.27% | 98.63% -> 97.31% | 2 -> 2 | 0 -> 164 | 161 -> 205 |
+| inferference | 32,982 -> 33,320 | 97.63% -> 96.64% | 97.79% -> 96.79% | 0 -> 0 | 18 -> 347 | 591 -> 600 |
+| pydantic-ai | 160,140 -> 160,608 | 91.00% -> 90.74% | 92.11% -> 91.84% | 192 -> 192 | 1,323 -> 1,590 | 6,367 -> 6,571 |
+
+Precision does not change. The environment adds recall positions that Scippy misses: keyword
+names of model fields, and attribute reads on model instances (the receiver-type rise).
+In pydantic-ai, the positions that both tools resolve in the project fall by 3 (147,277 to
+147,274). The cause is not examined. The recall falls because the oracle now sees misses that it hid before.
+Time of `scip-python` on pydantic-ai: 2:23 and 2.1 GiB with the environment.

@@ -193,6 +193,20 @@ of the `scip-python` target. A keyword argument that resolves to `*args` or `**k
 target. The design gaps are the rebinds without that credit, keyword names of plain functions,
 and skipped files.
 
+By default `scip-python` runs with an empty environment, so it cannot see third-party packages.
+It then emits no keyword references to the fields of Pydantic models. To measure those, run it
+with a per-corpus environment:
+
+1. Run `scripts/oracle/mkenv.sh CORPUS`. It uses `uv` to install wheels of `pydantic` into
+   `ORACLE_ENVS/CORPUS` (default `ORACLE_DIR/envs`). It adds `pydantic-settings`, `sqlmodel`, and
+   `typing_extensions` when the corpus imports them. It never installs or runs the corpus.
+2. Set `ORACLE_VENV=1` and run `scripts/oracle/run_tools.sh CORPUS CORPUS scip-python OUTDIR`.
+3. Compare as before with `recompute.sh`. Use a new OUTDIR, and copy `scippy.scip` and
+   `scippy.trace` into it, so the empty-environment numbers stay.
+
+Targets in installed packages are external. `compare.py` counts only targets that have a
+definition in the corpus, so recall and precision keep their meaning.
+
 ## Verify
 
 Install the official `scip` CLI from https://github.com/scip-code/scip/releases.
