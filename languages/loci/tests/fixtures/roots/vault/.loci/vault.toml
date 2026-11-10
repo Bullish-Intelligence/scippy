@@ -1,0 +1,23 @@
+schema = 1
+id = "01a08b81-648f-70e8-bb5f-cd8c53f0f3a0"
+roots_file = "roots.toml"
+
+[discovery]
+exclude = [".loci/**", "**/*.py", "private/**"]
+
+[[analyzer]]
+name = "sv-code"
+claims = ["claimed/**"]
+
+[policy]
+ignore_file = "ignore.txt"
+
+[[policy.id_template]]
+from = "areas/{rest:path}"
+to = "areas-id/{rest}"
+
+[[root]]
+name = "inline"
+path = "@ROOTS@/inline"
+lister = "walk"
+stem_visible = true

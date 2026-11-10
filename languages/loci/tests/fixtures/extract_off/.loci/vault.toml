@@ -1,0 +1,7 @@
+schema = 1
+id = "01a08b81-648f-70e8-bb5f-cd8c53f0f311"
+
+[extract]
+markdown_links = false
+frontmatter_links = false
+inline_tags = false

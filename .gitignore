@@ -13,5 +13,5 @@ devenv.lock
 .claude/skills
 .devman/workflows
 .devman/runs
-.loci
+/.loci
 devenv.local.nix
