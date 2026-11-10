@@ -92,6 +92,8 @@ pub struct Record {
     pub anchor_state: &'static str,
     pub anchor_kind: Option<&'static str>,
     pub anchor_span: Option<(usize, usize)>,
+    /// The spans of the target part and of the anchor part of the link. See [`Relation::parts`].
+    pub parts: Option<((usize, usize), (usize, usize))>,
 }
 
 /// The anchors of one note, ready for lookup.
@@ -119,15 +121,23 @@ pub struct Vault {
     link_targets: HashMap<String, Vec<String>>,
     link_by_basename: HashMap<String, Vec<String>>,
     anchors: HashMap<String, AnchorIndex>,
+    /// The extra roots: name to `stem_visible`.
+    roots: HashMap<String, bool>,
+    /// The sources and the attachments of every extra root, by (root, key), for a link that is
+    /// written inside that root.
+    by_root_stem: HashMap<(String, String), Vec<String>>,
+    by_root_basename: HashMap<(String, String), Vec<String>>,
 }
 
 /// The files that count in a vault.
 #[derive(Debug, Default)]
 pub struct Classified {
-    /// The notes, sorted by path.
+    /// The documents, sorted by path: the notes, and the files that an analyzer claims.
     pub sources: Vec<String>,
-    /// The files that are not notes and not excluded, sorted by path.
+    /// The files that are not documents and not excluded, sorted by path.
     pub link_targets: Vec<String>,
+    /// The extra roots: name and `stem_visible`.
+    pub roots: Vec<(String, bool)>,
 }
 
 /// Say whether a file or one of its folders matches an exclude glob.
@@ -164,17 +174,27 @@ impl Excluder {
     }
 }
 
-/// Sort the files of a vault into notes and link targets.
-pub fn classify(files: &[(String, u64)], settings: &Settings) -> Classified {
+/// Sort the files of a vault into documents and link targets.
+///
+/// `files` lists the files of the vault root with their sizes. A file of an extra root is in
+/// `extra`, already sorted into its tiers by [`crate::roots::list_root`].
+pub fn classify(
+    files: &[(String, u64)],
+    settings: &Settings,
+    extra: &crate::roots::Listing,
+) -> Classified {
     let include = GlobSet::new(&settings.include);
+    let claims = GlobSet::new(&settings.claims);
     let mut excluder = Excluder::new(settings);
     let mut out = Classified::default();
     for (path, size) in files {
-        if excluder.file(path) {
+        if excluder.file(path) || settings.ignore.ignored(path) {
             continue;
         }
         let is_md = path.to_lowercase().ends_with(".md");
-        if is_md && include.is_match(path) {
+        let claimed = !claims.is_empty() && claims.is_match(path);
+        if (is_md && include.is_match(path)) || (claimed && !is_manifest(path)) {
+            // A note, or a file that an analyzer claims, over the size cap is in neither tier.
             if *size > settings.note_max_bytes {
                 continue;
             }
@@ -183,8 +203,17 @@ pub fn classify(files: &[(String, u64)], settings: &Settings) -> Classified {
             out.link_targets.push(path.clone());
         }
     }
+    out.sources
+        .extend(extra.sources.iter().map(|(p, _)| p.clone()));
+    out.link_targets
+        .extend(extra.link_targets.iter().map(|(p, _)| p.clone()));
     out.sources.sort();
     out.link_targets.sort();
+    out.roots = settings
+        .roots
+        .iter()
+        .map(|r| (r.name.clone(), r.stem_visible))
+        .collect();
     out
 }
 
@@ -229,17 +258,38 @@ impl Vault {
             link_targets: HashMap::new(),
             link_by_basename: HashMap::new(),
             anchors: HashMap::new(),
+            roots: classified.roots.iter().cloned().collect(),
+            by_root_stem: HashMap::new(),
+            by_root_basename: HashMap::new(),
         };
         for path in &classified.sources {
             let npath = vault.norm(path);
             let stem = vault.norm(stem_of(path));
             vault.by_path.entry(npath).or_default().push(path.clone());
-            vault.by_stem.entry(stem).or_default().push(path.clone());
+            let visible = match vault.root_of(path) {
+                Some(root) => {
+                    vault
+                        .by_root_stem
+                        .entry((root.to_string(), stem.clone()))
+                        .or_default()
+                        .push(path.clone());
+                    vault.roots[root]
+                }
+                None => true,
+            };
+            if visible {
+                vault.by_stem.entry(stem).or_default().push(path.clone());
+            }
             let Some(note) = notes.get(path) else {
                 continue;
             };
             let mut seen: Vec<&str> = Vec::new();
+            // A root with `stem_visible = false` keeps its aliases out of bare lookups too.
+            let alias_visible = vault.root_of(path).is_none_or(|r| vault.roots[r]);
             for (alias, _, _) in &note.aliases {
+                if !alias_visible {
+                    break;
+                }
                 if seen.contains(&alias.as_str()) {
                     continue;
                 }
@@ -282,13 +332,32 @@ impl Vault {
                 .entry(npath)
                 .or_default()
                 .push(path.clone());
-            vault
-                .link_by_basename
-                .entry(stem)
-                .or_default()
-                .push(path.clone());
+            let visible = match vault.root_of(path) {
+                Some(root) => {
+                    vault
+                        .by_root_basename
+                        .entry((root.to_string(), stem.clone()))
+                        .or_default()
+                        .push(path.clone());
+                    vault.roots[root]
+                }
+                None => true,
+            };
+            if visible {
+                vault
+                    .link_by_basename
+                    .entry(stem)
+                    .or_default()
+                    .push(path.clone());
+            }
         }
         vault
+    }
+
+    /// The extra root that holds a path: the first segment names it, and a folder follows.
+    fn root_of<'a>(&self, path: &'a str) -> Option<&'a str> {
+        let (head, _) = path.split_once('/')?;
+        self.roots.contains_key(head).then_some(head)
     }
 
     /// The explicit path of an already normalized target: a document, then an attachment.
@@ -323,13 +392,28 @@ impl Vault {
     }
 
     /// Resolve the raw target of a wikilink, an embed, or a front matter link.
-    pub fn resolve_one(&self, target: &str) -> Resolution {
+    ///
+    /// A link in a file of an extra root resolves root-first: the path below that root, then a
+    /// name inside that root, and only then the rules of the vault.
+    pub fn resolve_one(&self, target: &str, source: &str) -> Resolution {
         let t = self.norm(target);
+        let root = self.root_of(source);
+        if let Some(root) = root {
+            if let Some(hit) = self.path_hit(&self.norm(&format!("{root}/{target}"))) {
+                return hit;
+            }
+        }
         if let Some(hit) = self.path_hit(&t) {
             return hit;
         }
         if !self.settings.path_links_only {
             let stem = self.norm(stem_of(target));
+            if let Some(root) = root {
+                let key = (root.to_string(), stem.clone());
+                if let Some(hit) = Self::from_list(self.by_root_stem.get(&key), true) {
+                    return hit;
+                }
+            }
             if let Some(hit) = Self::from_list(self.by_stem.get(&stem), true) {
                 return hit;
             }
@@ -340,6 +424,12 @@ impl Vault {
             }
         }
         let key = self.norm(stem_of(target));
+        if let Some(root) = root {
+            let scoped = (root.to_string(), key.clone());
+            if let Some(hit) = Self::from_list(self.by_root_basename.get(&scoped), false) {
+                return hit;
+            }
+        }
         if let Some(hit) = Self::from_list(self.link_by_basename.get(&key), false) {
             return hit;
         }
@@ -354,7 +444,18 @@ impl Vault {
                 .unwrap_or_else(Resolution::missing);
         }
         let base = source.rsplit_once('/').map_or("", |(b, _)| b);
-        for candidate in markdown_candidates(target, base) {
+        let mut named = markdown_candidates(target, base);
+        // A link in an extra root also names a path below that root.
+        if let Some(root) = self.root_of(source) {
+            if !target.starts_with('/') {
+                if let Some(scoped) = join_normalized(root, target) {
+                    if !scoped.is_empty() && !named.contains(&scoped) {
+                        named.insert(1.min(named.len()), scoped);
+                    }
+                }
+            }
+        }
+        for candidate in named {
             if let Some(hit) = self.path_hit(&self.norm(&candidate)) {
                 return hit;
             }
@@ -545,7 +646,7 @@ impl Vault {
         let resolution = if markdown || same_note {
             self.resolve_markdown(&r.target, source)
         } else {
-            self.resolve_one(&r.target)
+            self.resolve_one(&r.target, source)
         };
         let (anchor_state, anchor_kind, anchor_span) = self.resolve_anchor(
             &resolution,
@@ -575,6 +676,7 @@ impl Vault {
             anchor_state,
             anchor_kind,
             anchor_span,
+            parts: r.parts,
         }
     }
 
@@ -607,6 +709,7 @@ impl Vault {
                 anchor_state: "none",
                 anchor_kind: None,
                 anchor_span: None,
+                parts: None,
             });
         }
         out.sort_by_key(|r| r.span);

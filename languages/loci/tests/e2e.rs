@@ -20,7 +20,7 @@ use std::process::{Command, Output};
 use protobuf::Message;
 use scip::types::{Document, Index, Occurrence, SymbolRole, occurrence::Typed_range};
 use scippy_core::{IndexReport, IndexRequest, LanguagePack, Severity, index_project};
-use scippy_loci::{LociPack, Settings, export_relations, list_files};
+use scippy_loci::{Listing, LociPack, Settings, export_workspace};
 use scippy_python::PythonPack;
 use serde_json::Value;
 
@@ -45,6 +45,7 @@ const ORACLE_FIXTURES: &[&str] = &[
     "ids_off",
     "links",
     "path_links_only",
+    "roots",
     "same_note",
     "tables",
     "tags",
@@ -56,22 +57,111 @@ fn fixture(name: &str) -> PathBuf {
     Path::new(FIXTURES).join(name)
 }
 
+/// A fixture ready to use. A fixture that has a `vault` folder is a workspace. Its folder `roots`
+/// holds the roots. The tests copy it to a scratch folder, write the place of the roots into the
+/// `.toml` files (`@ROOTS@`), and make a git repository of each root folder named `git_*`.
+struct Prepared {
+    _scratch: Option<tempfile::TempDir>,
+    /// The vault root.
+    root: PathBuf,
+}
+
+fn copy_tree(from: &Path, to: &Path, roots: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target, roots);
+        } else if entry.path().extension().is_some_and(|e| e == "toml") {
+            let text = fs::read_to_string(entry.path()).unwrap();
+            fs::write(&target, text.replace("@ROOTS@", roots.to_str().unwrap())).unwrap();
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+fn prepare(name: &str) -> Prepared {
+    let source = fixture(name);
+    if !source.join("vault").is_dir() {
+        return Prepared {
+            _scratch: None,
+            root: source,
+        };
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let base = scratch.path().canonicalize().unwrap();
+    copy_tree(&source, &base, &base.join("roots"));
+    for entry in fs::read_dir(base.join("roots")).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name().to_string_lossy().starts_with("git_") {
+            for args in [&["init", "-q"][..], &["add", "-A"][..]] {
+                let status = Command::new("git")
+                    .args(args)
+                    .current_dir(entry.path())
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+        }
+    }
+    Prepared {
+        root: base.join("vault"),
+        _scratch: Some(scratch),
+    }
+}
+
+impl Prepared {
+    /// The place of a vault path on disk.
+    fn real(&self, vault_path: &str) -> PathBuf {
+        let settings = Settings::read(&self.root).unwrap().unwrap();
+        Listing::real_path(&settings, vault_path).unwrap_or_else(|| self.root.join(vault_path))
+    }
+}
+
 struct Indexed {
     _scratch: tempfile::TempDir,
+    _prepared: Option<Prepared>,
     path: PathBuf,
+    /// The folder that holds every document of the index at its path, for the scip CLI.
+    files: PathBuf,
     report: IndexReport,
     index: Index,
 }
 
 fn index_with(mut request: IndexRequest, packs: &[&dyn LanguagePack]) -> Indexed {
+    index_prepared(None, &mut request, packs)
+}
+
+fn index_prepared(
+    prepared: Option<Prepared>,
+    request: &mut IndexRequest,
+    packs: &[&dyn LanguagePack],
+) -> Indexed {
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("index.scip");
     request.output = path.clone();
-    let report = index_project(&request, packs).unwrap();
+    let report = index_project(request, packs).unwrap();
     let index = Index::parse_from_bytes(&fs::read(&path).unwrap()).unwrap();
+    let files = match &prepared {
+        Some(p) if p._scratch.is_some() => {
+            // The documents of a workspace come from several folders. Gather them.
+            let flat = scratch.path().join("files");
+            for doc in &index.documents {
+                let to = flat.join(&doc.relative_path);
+                fs::create_dir_all(to.parent().unwrap()).unwrap();
+                fs::copy(p.real(&doc.relative_path), to).unwrap();
+            }
+            flat
+        }
+        _ => request.root.clone(),
+    };
     Indexed {
         _scratch: scratch,
+        _prepared: prepared,
         path,
+        files,
         report,
         index,
     }
@@ -82,7 +172,9 @@ fn index_at(root: &Path) -> Indexed {
 }
 
 fn index(name: &str) -> Indexed {
-    index_at(&fixture(name))
+    let prepared = prepare(name);
+    let mut request = IndexRequest::new(&prepared.root, "");
+    index_prepared(Some(prepared), &mut request, &[&LociPack])
 }
 
 impl Indexed {
@@ -102,10 +194,8 @@ fn read_oracle(name: &str) -> Vec<Value> {
 }
 
 fn mine(name: &str) -> Vec<Value> {
-    let root = fixture(name);
-    let settings = Settings::read(&root).unwrap().unwrap();
-    let files = list_files(&root);
-    let mut records = export_relations(&settings, &files, |p| fs::read(root.join(p)).ok());
+    let prepared = prepare(name);
+    let mut records = export_workspace(&prepared.root).unwrap();
     records.sort_by(|a, b| (&a.source, a.span).cmp(&(&b.source, b.span)));
     records.iter().map(|r| r.to_json()).collect()
 }
@@ -217,38 +307,65 @@ fn definitions_at(doc: &Document, range: (i32, i32, i32, i32)) -> Vec<&str> {
 }
 
 #[test]
-fn the_index_has_an_occurrence_for_each_resolved_link_and_for_no_other() {
+fn the_index_has_the_occurrences_of_each_resolved_link_and_none_for_the_others() {
     for name in ORACLE_FIXTURES {
-        let root = fixture(name);
-        let indexed = index_at(&root);
+        let prepared = prepare(name);
+        let indexed = index_at(&prepared.root);
         let records = read_oracle(name);
         for r in records.iter().filter(|r| r["kind"] != "tag") {
             let source = r["source"].as_str().unwrap();
             let doc = indexed.document(source).unwrap();
-            let text = fs::read(root.join(source)).unwrap();
+            let text = fs::read(prepared.real(source)).unwrap();
             let range = range_of(&text, &r["span"]);
+            let context = format!("{name}: {source} {}", r["span"]);
+            // The other links of the note, which can lie inside this one, such as a link in a label.
+            let others: HashSet<(i32, i32, i32, i32)> = records
+                .iter()
+                .filter(|o| o["source"] == r["source"] && o["span"] != r["span"])
+                .map(|o| range_of(&text, &o["span"]))
+                .collect();
+            let inside = |o: &&Occurrence| {
+                let (l1, c1, l2, c2) = typed_range(o);
+                (l1, c1) >= (range.0, range.1)
+                    && (l2, c2) <= (range.2, range.3)
+                    && !others.contains(&(l1, c1, l2, c2))
+            };
             let got: Vec<&Occurrence> = doc
                 .occurrences
                 .iter()
-                .filter(|o| !is_definition(o) && typed_range(o) == range)
+                .filter(|o| !is_definition(o))
+                .filter(inside)
                 .collect();
-            let context = format!("{name}: {source} {}", r["span"]);
             if r["state"] != "resolved" {
                 assert!(got.is_empty(), "{context}: unexpected occurrence");
                 continue;
             }
             let target = r["target_path"].as_str().unwrap();
             let target_doc = indexed.document(target).unwrap();
-            let want = if r["anchor_state"] == "resolved" {
-                let target_text = fs::read(root.join(target)).unwrap();
-                definitions_at(target_doc, range_of(&target_text, &r["anchor_span"]))
+            let note = definitions_at(target_doc, (0, 0, 0, 0));
+            assert_eq!(note.len(), 1, "{context}: the target has no module");
+            if r["anchor_state"] == "resolved" {
+                // The note and the anchor are two references. The note comes first.
+                // A link to its own note has no target part, so it has the anchor reference only.
+                let target_text = fs::read(prepared.real(target)).unwrap();
+                let anchor = definitions_at(target_doc, range_of(&target_text, &r["anchor_span"]));
+                assert_eq!(anchor.len(), 1, "{context}: the anchor has no definition");
+                let own = r["target"] == "";
+                assert_eq!(got.len(), if own { 1 } else { 2 }, "{context}");
+                let last = got.last().unwrap();
+                assert_eq!(last.symbol, anchor[0], "{context}: anchor");
+                if !own {
+                    assert_eq!(got[0].symbol, note[0], "{context}: note");
+                    assert!(typed_range(got[0]) < typed_range(last), "{context}: order");
+                }
             } else {
-                definitions_at(target_doc, (0, 0, 0, 0))
-            };
-            assert_eq!(want.len(), 1, "{context}: the target has no definition");
-            assert_eq!(got.len(), 1, "{context}: expected one occurrence");
-            assert_eq!(got[0].symbol, want[0], "{context}");
-            assert_eq!(is_read(got[0]), r["embed"] == true, "{context}: role");
+                assert_eq!(got.len(), 1, "{context}: expected one occurrence");
+                assert_eq!(typed_range(got[0]), range, "{context}: range");
+                assert_eq!(got[0].symbol, note[0], "{context}");
+            }
+            for o in &got {
+                assert_eq!(is_read(o), r["embed"] == true, "{context}: role");
+            }
         }
     }
 }
@@ -299,6 +416,114 @@ fn a_same_note_wikilink_names_its_own_note() {
             .iter()
             .all(|o| o.symbol.starts_with("scippy loci same_note . `n.md`/"))
     );
+}
+
+// ---- roots ----
+
+#[test]
+fn a_workspace_sends_the_files_of_its_roots_to_the_right_packs() {
+    let prepared = prepare("roots");
+    let mut request = IndexRequest::new(&prepared.root, "");
+    let indexed = index_prepared(Some(prepared), &mut request, &[&PythonPack, &LociPack]);
+    let language = |path: &str| indexed.document(path).map(|d| d.language.clone());
+    // A Python file of a root gets the Python pack. A note of a root gets the Loci pack.
+    assert_eq!(language("code/src/main.py").as_deref(), Some("Python"));
+    assert_eq!(language("code/src/util.py").as_deref(), Some("Python"));
+    assert_eq!(language("repo/lib.py").as_deref(), Some("Python"));
+    assert_eq!(language("code/README.md").as_deref(), Some("Markdown"));
+    assert_eq!(language("repo/NOTES.md").as_deref(), Some("Markdown"));
+    // The import of the main file reaches the helper in the same root.
+    let main = indexed.document("code/src/main.py").unwrap();
+    assert!(
+        main.occurrences
+            .iter()
+            .any(|o| !is_definition(o) && o.symbol.contains("helper()."))
+    );
+    // The link from a note gives the Python document a symbol of the vault.
+    assert!(
+        main.occurrences
+            .iter()
+            .any(|o| is_definition(o) && o.symbol.starts_with("scippy loci "))
+    );
+    // The ignore list, the vault exclude, and the shape rule of the root hide a file from every pack.
+    for hidden in [
+        "tool.py",
+        "code/src/secret.py",
+        "code/vendor/dep.py",
+        "code/Cargo.lock",
+        "code/.env.local",
+        "hidden/Hidden.md",
+        "private/P.md",
+        "areas/ignored/Ignored.md",
+        "repo/ignored.txt",
+    ] {
+        assert!(indexed.document(hidden).is_none(), "{hidden}");
+    }
+    // A file that is a link target of the vault is a document only when a note links to it.
+    assert!(indexed.document("code/logo.png").is_some());
+    assert!(indexed.document("repo/bin.dat").is_some());
+    assert!(indexed.document("code/src/util.py").is_some());
+}
+
+#[test]
+fn a_root_lists_its_files_as_loci_core_does() {
+    let prepared = prepare("roots");
+    let settings = Settings::read(&prepared.root).unwrap().unwrap();
+    assert_eq!(
+        settings
+            .roots
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>(),
+        ["inline", "code", "repo"]
+    );
+    let listing = Listing::of(&settings);
+    let sources: Vec<&str> = listing.sources.iter().map(|(p, _)| p.as_str()).collect();
+    let attachments: Vec<&str> = listing
+        .link_targets
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .collect();
+    // A git root lists tracked files. A file that git ignores is not there.
+    assert!(sources.contains(&"repo/lib.py"));
+    assert!(sources.contains(&"repo/.gitignore"));
+    assert!(!sources.contains(&"repo/ignored.txt") && !attachments.contains(&"repo/ignored.txt"));
+    // A claimed file that proves binary is an attachment, and so is a claimed file over the cap.
+    assert!(attachments.contains(&"repo/bin.dat"));
+    assert!(attachments.contains(&"code/src/big.py"));
+    assert!(sources.contains(&"code/src/main.py") && sources.contains(&"code/src/lib.rs"));
+    // A file that no claim takes is an attachment. Hidden files are in neither tier.
+    assert!(attachments.contains(&"code/logo.png"));
+    for hidden in [
+        "code/src/secret.py",
+        "code/vendor/dep.py",
+        "code/Cargo.lock",
+    ] {
+        assert!(
+            !sources.contains(&hidden) && !attachments.contains(&hidden),
+            "{hidden}"
+        );
+    }
+}
+
+#[test]
+fn the_input_limits_follow_the_vault() {
+    let prepared = prepare("roots");
+    let limits = LociPack.input_limits(&prepared.root).unwrap();
+    assert_eq!(limits.max_file_bytes, 1024 * 1024);
+    assert!(limits.max_total_bytes > scippy_core::InputLimits::DEFAULT_MAX_TOTAL_BYTES);
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".loci")).unwrap();
+    fs::write(
+        dir.path().join(".loci/vault.toml"),
+        "schema = 1\nid = \"x\"\n[policy]\nnote_max_bytes = 3000000\n",
+    )
+    .unwrap();
+    assert_eq!(
+        LociPack.input_limits(dir.path()).unwrap().max_file_bytes,
+        3_000_000
+    );
+    assert!(LociPack.input_limits(&dir.path().join("none")).is_none());
 }
 
 // ---- symbols and relationships ----
@@ -402,7 +627,7 @@ fn a_heading_with_a_repeated_text_gets_a_numbered_symbol() {
 fn the_unicode_fixture_uses_byte_columns() {
     let indexed = index("unicode");
     let doc = indexed.document("use.md").unwrap();
-    // The emoji takes 4 bytes. The link after it starts at byte column 7 (`😀 emoji ` is 4+1+5+1... ).
+    // The emoji takes 4 bytes. The target part of the link starts after the `[[`, at a byte column.
     let first = doc
         .occurrences
         .iter()
@@ -412,7 +637,7 @@ fn the_unicode_fixture_uses_byte_columns() {
         .unwrap();
     let text = fs::read_to_string(fixture("unicode").join("use.md")).unwrap();
     let line = text.lines().next().unwrap();
-    assert_eq!(first.1 as usize, line.find("[[").unwrap());
+    assert_eq!(first.1 as usize, line.find("[[").unwrap() + 2);
     assert_ne!(
         line.find("[[").unwrap(),
         line.chars().take_while(|&c| c != '[').count()
@@ -511,13 +736,47 @@ fn a_folder_that_the_walker_ignores_is_a_vault_folder_unless_the_vault_excludes_
 }
 
 #[test]
-fn an_unsupported_setting_is_a_warning_and_a_bad_manifest_is_an_error() {
+fn a_bad_manifest_or_policy_is_an_error_and_the_pack_indexes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join(".loci")).unwrap();
+    fs::write(root.join("n.md"), "# N\n").unwrap();
+    let bad = [
+        // The ignore list is missing: the vault never means "ignore nothing".
+        "schema = 1\nid = \"x\"\n[policy]\nignore_file = \"ig\"\n",
+        // A typo in the policy.
+        "schema = 1\nid = \"x\"\n[policy]\nignorefile = \"ig\"\n",
+        "schema = 7\nid = \"x\"\n",
+        // A root with a relative path, a name that clashes with a folder of the vault, a claim
+        // for an analyzer that no entry declares.
+        "schema = 1\nid = \"x\"\n[[root]]\nname = \"a\"\npath = \"rel\"\n",
+        "schema = 1\nid = \"x\"\n[[root]]\nname = \".loci\"\npath = \"/nowhere\"\n",
+        "schema = 1\nid = \"x\"\n[[root]]\nname = \"a\"\npath = \"/nowhere\"\nclaims = { c = [\"*\"] }\n",
+        "schema = 1\nid = \"x\"\nroots_file = \"missing.toml\"\n",
+    ];
+    for manifest in bad {
+        fs::write(root.join(".loci/vault.toml"), manifest).unwrap();
+        let indexed = index_with(IndexRequest::new(root, ""), &[&LociPack]);
+        assert!(
+            indexed
+                .report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "vault-manifest-invalid" && d.severity == Severity::Error),
+            "{manifest}"
+        );
+        assert!(indexed.document("n.md").is_none(), "{manifest}");
+    }
+}
+
+#[test]
+fn a_root_that_does_not_exist_is_a_warning() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fs::create_dir_all(root.join(".loci")).unwrap();
     fs::write(
         root.join(".loci/vault.toml"),
-        "schema = 1\nid = \"x\"\n[policy]\nignore_file = \"ig\"\n",
+        "schema = 1\nid = \"x\"\n[[root]]\nname = \"gone\"\npath = \"/no/such/folder\"\n",
     )
     .unwrap();
     fs::write(root.join("n.md"), "# N\n").unwrap();
@@ -527,18 +786,9 @@ fn an_unsupported_setting_is_a_warning_and_a_bad_manifest_is_an_error() {
             .report
             .diagnostics
             .iter()
-            .any(|d| d.code == "vault-setting-unsupported")
+            .any(|d| d.code == "root-unavailable" && d.severity == Severity::Warning)
     );
-    fs::write(root.join(".loci/vault.toml"), "schema = 7\nid = \"x\"\n").unwrap();
-    let indexed = index_with(IndexRequest::new(root, ""), &[&LociPack]);
-    assert!(
-        indexed
-            .report
-            .diagnostics
-            .iter()
-            .any(|d| d.code == "vault-manifest-invalid" && d.severity == Severity::Error)
-    );
-    assert!(indexed.document("n.md").is_none());
+    assert!(indexed.document("n.md").is_some());
 }
 
 #[test]
@@ -607,7 +857,7 @@ fn scip_lint_accepts_every_fixture_index() {
         let indexed = index(name);
         let output = run(
             &scip,
-            &fixture(name),
+            &indexed.files,
             &["lint", indexed.path.to_str().unwrap()],
         );
         let text = String::from_utf8_lossy(&output.stdout).to_string()
@@ -626,7 +876,7 @@ fn scip_test_accepts_the_annotated_notes() {
         // The fixtures hold files that are not notes, so the document check stays off.
         let output = run(
             &scip,
-            &fixture(name),
+            &indexed.files,
             &[
                 "test",
                 "--from",
@@ -670,13 +920,14 @@ fn scip_snapshot_matches_the_golden_files() {
         ("code", &["code.md"][..]),
         ("same_note", &["n.md"][..]),
         ("ids", &["use.md", "target.md"][..]),
+        ("roots", &["Home.md", "code/notes/Design.md"][..]),
     ]);
     for (name, files) in files {
         let indexed = index(name);
         let out = scratch.path().join(name);
         let output = run(
             &scip,
-            &fixture(name),
+            &indexed.files,
             &[
                 "snapshot",
                 "--from",

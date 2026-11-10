@@ -1,0 +1,5 @@
+# The ignore list. A pattern matches a path, an id of the path, or a parent folder.
+hidden/
+*/.env*
+code/code/src/secret.py
+areas-id/ignored

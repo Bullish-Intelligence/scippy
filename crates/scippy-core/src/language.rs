@@ -9,10 +9,11 @@
 //! The core never reads the syntax of a language. It runs the query, reads the capture names,
 //! and asks the project model for every language decision.
 
-use std::path::Path;
+use std::any::Any;
+use std::path::{Path, PathBuf};
 
 use crate::identity::{Descriptor, Package};
-use crate::project::ProjectRelativePath;
+use crate::project::{InputLimits, ProjectRelativePath};
 use crate::report::Diagnostic;
 
 /// What a declaration is, in terms that every language shares.
@@ -379,6 +380,38 @@ pub trait LanguagePack: Send + Sync {
         let _ = root;
         WalkRules::default()
     }
+    /// Files outside the project root that belong to the project, such as the code
+    /// repositories of a notes workspace. The default is none. The core adds each one to the
+    /// walk under its virtual path and routes it to a pack like any other file.
+    fn extra_files(&self, root: &Path) -> ExtraFiles {
+        let _ = root;
+        ExtraFiles::default()
+    }
+    /// The input limits that suit this project, when the pack knows them. The command-line
+    /// tool uses them for a limit that the user did not set. The default is none.
+    fn input_limits(&self, root: &Path) -> Option<InputLimits> {
+        let _ = root;
+        None
+    }
+}
+
+/// A file that the project owns but that lies outside its root.
+#[derive(Clone, Debug)]
+pub struct ExtraFile {
+    /// The virtual path of the file in the project.
+    pub path: ProjectRelativePath,
+    /// Where the core reads the file.
+    pub real: PathBuf,
+    pub size: u64,
+}
+
+/// What [`LanguagePack::extra_files`] gives back.
+#[derive(Default)]
+pub struct ExtraFiles {
+    pub files: Vec<ExtraFile>,
+    pub diagnostics: Vec<Diagnostic>,
+    /// Data for the pack itself. The core hands it to [`NativeInput::extra`].
+    pub state: Option<Box<dyn Any + Send + Sync>>,
 }
 
 /// How a pack changes the walk of the project.
@@ -391,6 +424,10 @@ pub struct WalkRules {
     /// Return true to enter it. The pack then owns the files below it, and no other pack does.
     #[allow(clippy::type_complexity)]
     pub enter_ignored: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
+    /// Called with the project-relative path of each directory and file. Return true to hide it
+    /// from every pack. The walker then neither enters the directory nor lists the file.
+    #[allow(clippy::type_complexity)]
+    pub hidden: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
 }
 
 /// The engine that turns the files of a pack into bindings.
@@ -424,6 +461,8 @@ pub struct NativeInput<'a> {
     pub files: &'a [ProjectFile],
     /// The files that the pack accepts and that the core could read, in walk order.
     pub sources: &'a [NativeSource],
+    /// The data that the pack gave in [`ExtraFiles::state`].
+    pub extra: Option<&'a (dyn Any + Send + Sync)>,
 }
 
 /// How a reference occurrence reads its target.

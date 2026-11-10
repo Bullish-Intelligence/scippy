@@ -15,6 +15,11 @@ The Loci pack (Gate 5) indexes a notes vault: a project root that has `.loci/vau
 Without that file, the pack is off and `.md` files belong to no pack. The pack follows
 `loci-core`: the same scanner, the same resolution order, and the same states. A tie is
 `ambiguous` and gets no occurrence. The test oracle is `loci --json graph/relations`.
+The pack reads `[[root]]`, `roots_file`, and `[policy] ignore_file`, as `loci-core` does. A root is a
+code repository. Its Python files go to the Python pack and its notes to the Loci pack. A path that
+the ignore list or `discovery.exclude` hides is hidden from every pack. A note that is not UTF-8 is
+skipped with a warning, where `loci-core` reads it lossy. A link with a resolved anchor has two
+occurrences: one over the target part, for the note, and one over the anchor part.
 
 ## Workspace
 
@@ -43,7 +48,9 @@ The walker skips a file larger than 1 MiB (`--max-file-bytes`) with a `file-too-
 It stops to accept files when the accepted files would exceed 32 MiB in total
 (`--max-total-bytes`). It then raises an `input-limit-reached` error diagnostic.
 The graph build used about 1.3 GB for each MB of Python source.
-The Loci pack needs far less memory. A vault of more than 32 MiB needs a higher `--max-total-bytes`.
+The Loci pack needs far less memory. When a vault is active, the default per-file limit is the
+largest `note_max_bytes` of the vault and its roots, and the default total limit is 4 GiB.
+A flag still wins.
 
 ## Symbols
 

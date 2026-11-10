@@ -1,5 +1,6 @@
   By id [[target#note]] names a footnote
-[//]: # ^^^^^^^^^^^^^^^ reference scippy loci ids . `target.md`/`fn:note`.
+[//]: #   ^^^^^^ reference scippy loci ids . `target.md`/
+[//]: #          ^^^^ reference scippy loci ids . `target.md`/`fn:note`.
 By prefix [[target#fn-note]] and [[target#fn:note]] and [[target#fnref-note]] and [[target#user-content-fn-note]]
 Block form [[target#^note]] names it too
 HTML name [[target#anchor1]] and folded id [[target#box]] and inline [[target#inline]]

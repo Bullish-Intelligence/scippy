@@ -47,6 +47,10 @@ pub struct Relation {
     /// The block id with its caret.
     pub block: Option<String>,
     pub span: (usize, usize),
+    /// The spans of the target part and of the anchor part inside the link, when the link has an
+    /// anchor. `[[Note#Head|label]]` has `Note` and `Head`. The target span is empty for a link
+    /// to the note that holds it.
+    pub parts: Option<((usize, usize), (usize, usize))>,
     pub prop: Option<String>,
     pub embed: bool,
 }
@@ -110,6 +114,39 @@ fn lossy(bytes: &[u8]) -> String {
 /// Python `bytes.strip()` removes these bytes.
 fn is_ascii_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
+}
+
+/// The span `(a, b)` without the white space at both ends.
+fn trim_span(raw: &[u8], (mut a, mut b): (usize, usize)) -> (usize, usize) {
+    while a < b && is_ascii_space(raw[a]) {
+        a += 1;
+    }
+    while b > a && is_ascii_space(raw[b - 1]) {
+        b -= 1;
+    }
+    (a, b)
+}
+
+/// The target part and the anchor part of the inner text of a wikilink, as spans of `raw`.
+/// `inner` is the span between `[[` and `]]`.
+fn wikilink_parts(raw: &[u8], inner: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    let text = &raw[inner.0..inner.1];
+    let pipe = text.iter().position(|&b| b == b'|');
+    let mut end = pipe.unwrap_or(text.len());
+    if pipe.is_some() {
+        let slashes = text[..end]
+            .iter()
+            .rev()
+            .take_while(|&&b| b == b'\\')
+            .count();
+        if slashes % 2 == 1 {
+            end -= 1;
+        }
+    }
+    let hash = text[..end].iter().position(|&b| b == b'#').unwrap_or(end);
+    let target = trim_span(raw, (inner.0, inner.0 + hash));
+    let anchor = trim_span(raw, (inner.0 + (hash + 1).min(end), inner.0 + end));
+    (target, anchor)
 }
 
 fn strip_bytes(raw: &[u8]) -> &[u8] {
@@ -426,7 +463,7 @@ fn pair_brackets(raw: &[u8], start: usize, end: usize) -> HashMap<usize, usize> 
 
 /// The destination and the optional title of an inline link, from just after the `(`.
 /// Return the destination and the index past the closing parenthesis.
-fn parse_md_dest(raw: &[u8], mut p: usize, n: usize) -> Option<(Vec<u8>, usize)> {
+fn parse_md_dest(raw: &[u8], mut p: usize, n: usize) -> Option<(Vec<u8>, usize, (usize, usize))> {
     let limit = n.min(p + MAX_LINK_DEST);
     let at = |i: usize| raw.get(i).copied();
     while p < limit && matches!(raw[p], b' ' | b'\t') {
@@ -436,6 +473,7 @@ fn parse_md_dest(raw: &[u8], mut p: usize, n: usize) -> Option<(Vec<u8>, usize)>
         return None;
     }
     let dest;
+    let dest_span;
     if raw[p] == b'<' {
         let mut q = p + 1;
         while q < limit && raw[q] != b'>' {
@@ -448,6 +486,7 @@ fn parse_md_dest(raw: &[u8], mut p: usize, n: usize) -> Option<(Vec<u8>, usize)>
             return None;
         }
         dest = slice(raw, p + 1, q).to_vec();
+        dest_span = (p + 1, q);
         p = q + 1;
     } else {
         let mut depth = 0i32;
@@ -475,6 +514,7 @@ fn parse_md_dest(raw: &[u8], mut p: usize, n: usize) -> Option<(Vec<u8>, usize)>
             return None;
         }
         dest = slice(raw, p, q).to_vec();
+        dest_span = (p, q);
         p = q;
     }
     while p < limit && matches!(raw[p], b' ' | b'\t' | b'\r' | b'\n') {
@@ -495,9 +535,21 @@ fn parse_md_dest(raw: &[u8], mut p: usize, n: usize) -> Option<(Vec<u8>, usize)>
         }
     }
     if p < limit && at(p) == Some(b')') {
-        return Some((dest, p + 1));
+        return Some((dest, p + 1, dest_span));
     }
     None
+}
+
+/// The target part and the anchor part of a Markdown destination, as spans of `raw`.
+fn markdown_parts(raw: &[u8], dest: (usize, usize)) -> ((usize, usize), (usize, usize)) {
+    let text = &raw[dest.0..dest.1];
+    let hash = text.iter().position(|&b| b == b'#').unwrap_or(text.len());
+    // A backslash before the `#` escapes it. The target part ends before the backslash.
+    let escaped = hash > 0 && hash < text.len() && text[hash - 1] == b'\\';
+    let target_end = dest.0 + hash - usize::from(escaped);
+    let target = trim_span(raw, (dest.0, target_end));
+    let anchor = trim_span(raw, (dest.0 + (hash + 1).min(text.len()), dest.1));
+    (target, anchor)
 }
 
 /// A destination that leaves the vault: a scheme (`https:`, `mailto:`) or a `//` host.
@@ -778,9 +830,15 @@ impl<'a> Walk<'a> {
             heading,
             block,
             span: (start, k + 2),
+            parts: None,
             prop: None,
             embed: false,
         });
+        if let Some(relation) = self.relations.last_mut() {
+            if relation.heading.is_some() || relation.block.is_some() {
+                relation.parts = Some(wikilink_parts(raw, (content_start, k)));
+            }
+        }
         k + 2
     }
 
@@ -811,11 +869,11 @@ impl<'a> Walk<'a> {
         }
         let parsed = parse_md_dest(raw, close + 2, n);
         let used = match &parsed {
-            Some((_, end)) => *end,
+            Some((_, end, _)) => *end,
             None => MAX_LINK_DEST.min(n.saturating_sub(close)),
         };
         self.budget -= used as i64 - close as i64;
-        let Some((dest, end)) = parsed else {
+        let Some((dest, end, dest_span)) = parsed else {
             return false;
         };
         if let Some((path, heading, block)) = md_target(&dest) {
@@ -831,9 +889,15 @@ impl<'a> Walk<'a> {
                 heading,
                 block,
                 span: (if bang { j - 1 } else { j }, end),
+                parts: None,
                 prop: None,
                 embed: false,
             });
+            if let Some(relation) = self.relations.last_mut() {
+                if relation.heading.is_some() || relation.block.is_some() {
+                    relation.parts = Some(markdown_parts(raw, dest_span));
+                }
+            }
         }
         if depth < MAX_NEST && close > j + 1 {
             self.run(j + 1, close, depth + 1);

@@ -28,8 +28,8 @@
      <span id="fenced"></span>
      ```
      Same note [[#note]] and [[#fn-note]] and [[#Section]] and [[#absent]]
-[//]:          ^^^^^^^^^ reference scippy loci ids . `target.md`/`fn:note`.
-[//]:                        ^^^^^^^^^^^^ reference scippy loci ids . `target.md`/`fn:note`.
-[//]:                                         ^^^^^^^^^^^^ reference scippy loci ids . `target.md`/Section.
+[//]:             ^^^^ reference scippy loci ids . `target.md`/`fn:note`.
+[//]:                           ^^^^^^^ reference scippy loci ids . `target.md`/`fn:note`.
+[//]:                                            ^^^^^^^ reference scippy loci ids . `target.md`/Section.
 [//]:                                                          ^^^^^^^^^^^ reference scippy loci ids . `target.md`/
      

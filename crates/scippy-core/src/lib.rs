@@ -30,10 +30,10 @@ pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
 pub use language::{
     Analysis, BindingRules, Builtins, DeclKind, Dialect, Engine, ExternalAsset, ExternalIdentity,
-    ExtractionSpec, Identity, LanguagePack, NativeAnalysis, NativeDeclaration, NativeDocument,
-    NativeInput, NativeOutput, NativeReference, NativeSource, NativeTarget, ProjectFile,
-    ProjectModel, Reach, ReferenceKind, ReferenceRole, Scope, SupportFile, VirtualSymbol,
-    WalkRules,
+    ExtraFile, ExtraFiles, ExtractionSpec, Identity, LanguagePack, NativeAnalysis,
+    NativeDeclaration, NativeDocument, NativeInput, NativeOutput, NativeReference, NativeSource,
+    NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind, ReferenceRole, Scope,
+    SupportFile, VirtualSymbol, WalkRules,
 };
 pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};

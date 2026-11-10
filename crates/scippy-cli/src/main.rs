@@ -25,12 +25,14 @@ enum Command {
         /// The SCIP file to write.
         #[arg(long, short, default_value = "index.scip")]
         output: PathBuf,
-        /// Skip a file larger than this many bytes.
-        #[arg(long, default_value_t = InputLimits::DEFAULT_MAX_FILE_BYTES)]
-        max_file_bytes: u64,
+        /// Skip a file larger than this many bytes. The default is 1 MiB. In a vault, it is the
+        /// largest `note_max_bytes`.
+        #[arg(long)]
+        max_file_bytes: Option<u64>,
         /// Stop to accept files when the accepted files would exceed this many bytes.
-        #[arg(long, default_value_t = InputLimits::DEFAULT_MAX_TOTAL_BYTES)]
-        max_total_bytes: u64,
+        /// The default is 32 MiB. In a vault, it is 4 GiB.
+        #[arg(long)]
+        max_total_bytes: Option<u64>,
         /// The package name of the symbols. Each language pack has a default.
         #[arg(long)]
         package_name: Option<String>,
@@ -67,10 +69,16 @@ fn main() -> ExitCode {
             package_version,
             trace,
         } => {
+            // A pack that is active for the project can suggest limits. A flag wins over it.
+            let suggested = registry()
+                .iter()
+                .filter(|p| p.enabled(&project_root))
+                .find_map(|p| p.input_limits(&project_root))
+                .unwrap_or_default();
             let mut request = IndexRequest::new(project_root, output);
             request.limits = InputLimits {
-                max_file_bytes,
-                max_total_bytes,
+                max_file_bytes: max_file_bytes.unwrap_or(suggested.max_file_bytes),
+                max_total_bytes: max_total_bytes.unwrap_or(suggested.max_total_bytes),
             };
             request.package_name = package_name;
             request.package_version = package_version;

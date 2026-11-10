@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::ScippyError;
-use crate::language::ProjectFile;
+use crate::language::{ExtraFile, ProjectFile};
 use crate::report::{Diagnostic, Severity, Stage};
 
 /// What the walker needs from a language pack: the name and the file test.
@@ -14,6 +14,11 @@ pub(crate) trait Router {
     /// Say whether the pack wants to enter a directory that the walker ignores by default.
     fn enter_ignored(&self, relative_dir: &str) -> bool {
         let _ = relative_dir;
+        false
+    }
+    /// Say whether the pack hides a directory or a file from every pack.
+    fn hidden(&self, relative: &str) -> bool {
+        let _ = relative;
         false
     }
 }
@@ -99,6 +104,17 @@ pub(crate) struct FoundFile {
     pub path: ProjectRelativePath,
     /// The index of the pack in the `languages` slice.
     pub pack: usize,
+    /// Where to read a file that lies outside the root. `None` for a file below the root.
+    pub real: Option<PathBuf>,
+}
+
+impl FoundFile {
+    /// The path to read the file from.
+    pub fn disk_path(&self, root: &Path) -> PathBuf {
+        self.real
+            .clone()
+            .unwrap_or_else(|| root.join(self.path.as_str()))
+    }
 }
 
 /// The files that the walker routed to a language pack.
@@ -122,6 +138,7 @@ pub(crate) fn discover(
     output: &Path,
     languages: &[&dyn Router],
     limits: InputLimits,
+    extra: &[ExtraFile],
 ) -> Result<Discovery, ScippyError> {
     let invalid = |reason: String| ScippyError::InvalidRoot {
         path: root.to_path_buf(),
@@ -148,6 +165,21 @@ pub(crate) fn discover(
         },
     };
     walk.directory(&root, "", None);
+    for file in extra {
+        let name = file.path.as_str().rsplit('/').next().unwrap_or_default();
+        walk.found.files_discovered += 1;
+        walk.found.all_files.push(ProjectFile {
+            path: file.path.clone(),
+            size: file.size,
+        });
+        walk.route(
+            file.path.clone(),
+            Path::new(name),
+            file.size,
+            None,
+            Some(file.real.clone()),
+        );
+    }
     Ok(walk.found)
 }
 
@@ -198,6 +230,13 @@ impl Walk<'_> {
                 continue;
             };
             let utf8 = name.to_str();
+
+            if let Some(n) = utf8 {
+                let relative = format!("{prefix}{n}");
+                if self.languages.iter().any(|l| l.hidden(&relative)) {
+                    continue;
+                }
+            }
 
             if kind.is_dir() {
                 let mut owner = only;
@@ -275,52 +314,72 @@ impl Walk<'_> {
                     continue;
                 }
             };
-            if accepting.len() > 1 {
-                let ids: Vec<_> = accepting.iter().map(|&i| self.languages[i].id()).collect();
-                self.warn(
-                    Severity::Error,
-                    "ambiguous-language",
-                    Some(relative.as_str().to_string()),
-                    format!("claimed by more than one language pack: {}", ids.join(", ")),
-                );
-                continue;
-            }
-
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            if size > self.limits.max_file_bytes {
-                self.warn(
-                    Severity::Warning,
-                    "file-too-large",
-                    Some(relative.as_str().to_string()),
-                    format!(
-                        "skipped: {size} bytes exceed the limit of {} bytes",
-                        self.limits.max_file_bytes
-                    ),
-                );
-                continue;
-            }
-            if self.limit_reached {
-                continue;
-            }
-            if self.total_bytes + size > self.limits.max_total_bytes {
-                self.limit_reached = true;
-                self.warn(
-                    Severity::Error,
-                    "input-limit-reached",
-                    Some(relative.as_str().to_string()),
-                    format!(
-                        "skipped this file and every later file: the total input would exceed {} bytes",
-                        self.limits.max_total_bytes
-                    ),
-                );
-                continue;
-            }
-            self.total_bytes += size;
-            self.found.files.push(FoundFile {
-                path: relative,
-                pack: accepting[0],
-            });
+            self.route(relative, Path::new(&name), size, only, None);
         }
+    }
+
+    /// Give a file that the walker saw to the pack that accepts it, within the input limits.
+    /// `real` is where to read a file that lies outside the root.
+    fn route(
+        &mut self,
+        relative: ProjectRelativePath,
+        name: &Path,
+        size: u64,
+        only: Option<usize>,
+        real: Option<PathBuf>,
+    ) {
+        let accepting: Vec<usize> = (0..self.languages.len())
+            .filter(|&i| only.is_none_or(|o| o == i))
+            .filter(|&i| self.languages[i].accepts(name))
+            .collect();
+        if accepting.is_empty() {
+            return;
+        }
+        if accepting.len() > 1 {
+            let ids: Vec<_> = accepting.iter().map(|&i| self.languages[i].id()).collect();
+            self.warn(
+                Severity::Error,
+                "ambiguous-language",
+                Some(relative.as_str().to_string()),
+                format!("claimed by more than one language pack: {}", ids.join(", ")),
+            );
+            return;
+        }
+        if size > self.limits.max_file_bytes {
+            self.warn(
+                Severity::Warning,
+                "file-too-large",
+                Some(relative.as_str().to_string()),
+                format!(
+                    "skipped: {size} bytes exceed the limit of {} bytes",
+                    self.limits.max_file_bytes
+                ),
+            );
+            return;
+        }
+        if self.limit_reached {
+            return;
+        }
+        if self.total_bytes + size > self.limits.max_total_bytes {
+            self.limit_reached = true;
+            self.warn(
+                Severity::Error,
+                "input-limit-reached",
+                Some(relative.as_str().to_string()),
+                format!(
+                    "skipped this file and every later file: the total input would exceed {} bytes",
+                    self.limits.max_total_bytes
+                ),
+            );
+            return;
+        }
+        self.total_bytes += size;
+        self.found.files.push(FoundFile {
+            path: relative,
+            pack: accepting[0],
+            real,
+        });
     }
 
     fn warn(
@@ -401,6 +460,7 @@ mod tests {
             &dir.path().join("index.scip"),
             &[&py],
             InputLimits::default(),
+            &[],
         )
         .unwrap();
         let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
@@ -419,6 +479,7 @@ mod tests {
             &dir.path().join("a.scip"),
             &[&scip],
             InputLimits::default(),
+            &[],
         )
         .unwrap();
         assert!(found.files.is_empty());
@@ -434,6 +495,7 @@ mod tests {
             &dir.path().join("o.scip"),
             &[&one, &two],
             InputLimits::default(),
+            &[],
         )
         .unwrap();
         assert!(found.files.is_empty());
@@ -452,6 +514,7 @@ mod tests {
             &dir.path().join("o.scip"),
             &[&py],
             InputLimits::default(),
+            &[],
         )
         .unwrap();
         let all: Vec<_> = found.all_files.iter().map(|f| f.path.as_str()).collect();
@@ -489,6 +552,7 @@ mod tests {
             &dir.path().join("o.scip"),
             &[&md, &py],
             InputLimits::default(),
+            &[],
         )
         .unwrap();
         let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
@@ -508,6 +572,7 @@ mod tests {
             &dir.path().join("o.scip"),
             &[&py],
             InputLimits::default(),
+            &[],
         )
         .unwrap();
         assert_eq!(found.files.len(), 1);
@@ -523,7 +588,8 @@ mod tests {
                 &dir.path().join("missing"),
                 &out,
                 &[],
-                InputLimits::default()
+                InputLimits::default(),
+                &[]
             )
             .is_err()
         );
@@ -533,7 +599,8 @@ mod tests {
                 &dir.path().join("file.txt"),
                 &out,
                 &[],
-                InputLimits::default()
+                InputLimits::default(),
+                &[]
             )
             .is_err()
         );
@@ -555,7 +622,7 @@ mod tests {
             max_file_bytes: 10,
             max_total_bytes: 1000,
         };
-        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py], limits).unwrap();
+        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py], limits, &[]).unwrap();
         let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["small.py"]);
         assert_eq!(found.diagnostics.len(), 1);
@@ -574,7 +641,7 @@ mod tests {
             max_file_bytes: 10,
             max_total_bytes: 25,
         };
-        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py], limits).unwrap();
+        let found = discover(dir.path(), &dir.path().join("o.scip"), &[&py], limits, &[]).unwrap();
         let paths: Vec<_> = found.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["a.py", "b.py"]);
         // One diagnostic names the first file that the walker dropped.

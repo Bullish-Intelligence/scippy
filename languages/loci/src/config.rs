@@ -2,6 +2,9 @@
 
 use std::path::Path;
 
+use crate::policy::{IdTemplate, IgnoreList};
+use crate::roots::{RootSpec, parse_roots_array};
+
 /// The default `discovery.exclude` of a vault.
 const DEFAULT_EXCLUDE: &[&str] = &[
     ".obsidian/**",
@@ -49,8 +52,21 @@ pub struct Settings {
     /// `[diagnostics] id_anchors`: a fragment can name a footnote or an HTML id.
     pub id_anchors: bool,
     pub note_max_bytes: u64,
-    /// Things in the file that this reader does not support. Each one is a warning.
-    pub unsupported: Vec<String>,
+    /// The globs that the `[[analyzer]]` entries claim. A claimed file is a document. Scippy
+    /// loads no analyzer, so a claimed file has no structure, as in loci-core without the plugin.
+    pub claims: Vec<String>,
+    /// The names of the valid `[[analyzer]]` entries.
+    pub analyzers: Vec<String>,
+    /// `[policy] ignore_file` as written. `Settings::read` loads it into `ignore`.
+    pub ignore_file: Option<String>,
+    /// `[[policy.id_template]]`: the second names that the ignore list also matches.
+    pub id_templates: Vec<IdTemplate>,
+    /// The ignore list. A match hides a path from every output.
+    pub ignore: IgnoreList,
+    /// `roots_file` as written. `Settings::read` loads it into `roots`.
+    pub roots_file: Option<String>,
+    /// The extra roots: the `[[root]]` tables, then the tables of the roots file.
+    pub roots: Vec<RootSpec>,
 }
 
 impl Default for Settings {
@@ -67,7 +83,13 @@ impl Default for Settings {
             inline_tags: true,
             id_anchors: true,
             note_max_bytes: DEFAULT_NOTE_MAX_BYTES,
-            unsupported: Vec::new(),
+            claims: Vec::new(),
+            analyzers: Vec::new(),
+            ignore_file: None,
+            id_templates: Vec::new(),
+            ignore: IgnoreList::default(),
+            roots_file: None,
+            roots: Vec::new(),
         }
     }
 }
@@ -81,7 +103,39 @@ impl Settings {
         }
         let bytes = std::fs::read(&path).map_err(|e| format!("cannot read vault.toml: {e}"))?;
         let text = String::from_utf8(bytes).map_err(|_| "vault.toml is not UTF-8".to_string())?;
-        Self::parse(&text).map(Some)
+        let mut settings = Self::parse(&text)?;
+        settings.load_files(root)?;
+        Ok(Some(settings))
+    }
+
+    /// Read the ignore list and the roots file, and check the roots. Like loci-core, any fault
+    /// refuses the vault. A fault never means "ignore nothing".
+    fn load_files(&mut self, root: &Path) -> Result<(), String> {
+        let patterns = match &self.ignore_file {
+            Some(file) => crate::policy::read_ignore_file(root, file)?,
+            None => Vec::new(),
+        };
+        if let Some(file) = &self.roots_file {
+            let more = crate::roots::read_roots_file(root, file)?;
+            self.roots.extend(more);
+        }
+        crate::roots::check_roots(root, &self.roots)?;
+        for spec in &self.roots {
+            for (name, _) in &spec.claims {
+                if !self.analyzers.contains(name) {
+                    return Err(format!(
+                        "root {:?} claims files for analyzer {name:?}, which no [[analyzer]] entry of vault.toml declares",
+                        spec.name
+                    ));
+                }
+            }
+        }
+        let mut templates = self.id_templates.clone();
+        for spec in &self.roots {
+            templates.push(spec.ignore_template());
+        }
+        self.ignore = IgnoreList::new(patterns, templates);
+        Ok(())
     }
 
     /// Parse the manifest. A wrong type keeps the default, as in loci-core.
@@ -129,26 +183,52 @@ impl Settings {
             s.id_anchors = flag(t, "id_anchors").unwrap_or(s.id_anchors);
         }
         if let Some(t) = data.get("policy") {
-            let Some(t) = t.as_table() else {
-                return Err("[policy] must be a table".to_string());
-            };
-            if let Some(v) = t.get("note_max_bytes") {
-                match v.as_integer() {
-                    Some(n) if n >= 1 => s.note_max_bytes = n as u64,
-                    _ => return Err("[policy] note_max_bytes must be 1 or more".to_string()),
-                }
-            }
-            if t.contains_key("ignore_file") {
-                s.unsupported.push("[policy] ignore_file".to_string());
-            }
+            crate::policy::parse_policy(t, &mut s)?;
         }
-        for key in ["root", "roots_file"] {
-            if data.contains_key(key) {
-                s.unsupported.push(format!("{key} (extra roots)"));
-            }
+        if let Some(v) = data.get("analyzer") {
+            (s.analyzers, s.claims) = analyzers(v);
+        }
+        s.roots_file = match data.get("roots_file") {
+            None => None,
+            Some(v) => match v.as_str() {
+                Some(f) if !f.trim().is_empty() => Some(f.to_string()),
+                _ => return Err("roots_file must be a non-empty string".to_string()),
+            },
+        };
+        if let Some(v) = data.get("root") {
+            s.roots = parse_roots_array(v, "vault.toml")?;
         }
         Ok(s)
     }
+}
+
+/// The names and the globs of the valid `[[analyzer]]` entries. loci-core drops a bad entry and
+/// goes on.
+fn analyzers(value: &toml::Value) -> (Vec<String>, Vec<String>) {
+    let Some(entries) = value.as_array() else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut names: Vec<&str> = Vec::new();
+    let mut claims = Vec::new();
+    for entry in entries {
+        let Some(entry) = entry.as_table() else {
+            continue;
+        };
+        let name = entry.get("name").and_then(|v| v.as_str());
+        let globs: Option<Vec<&str>> = entry
+            .get("claims")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.iter().map(|v| v.as_str()).collect());
+        let (Some(name), Some(globs)) = (name, globs) else {
+            continue;
+        };
+        if name.is_empty() || names.contains(&name) || globs.is_empty() || globs.contains(&"") {
+            continue;
+        }
+        names.push(name);
+        claims.extend(globs.iter().map(|g| g.to_string()));
+    }
+    (names.iter().map(|n| n.to_string()).collect(), claims)
 }
 
 /// One compiled glob in the style of Python `fnmatch`.
@@ -164,11 +244,11 @@ enum Token {
 }
 
 #[derive(Clone, Debug)]
-struct Glob(Vec<Token>);
+pub(crate) struct Glob(Vec<Token>);
 
 impl Glob {
     /// Translate like `fnmatch.translate`: `*` crosses `/`.
-    fn new(pattern: &str) -> Self {
+    pub(crate) fn new(pattern: &str) -> Self {
         let chars: Vec<char> = pattern.chars().collect();
         let mut tokens = Vec::new();
         let mut i = 0;
@@ -222,7 +302,7 @@ impl Glob {
         Self(tokens)
     }
 
-    fn is_match(&self, text: &[char]) -> bool {
+    pub(crate) fn is_match(&self, text: &[char]) -> bool {
         let tokens = &self.0;
         let (mut t, mut p) = (0usize, 0usize);
         let mut backtrack: Option<(usize, usize)> = None;
@@ -273,6 +353,10 @@ impl GlobSet {
             }
         }
         Self(globs)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn is_match(&self, path: &str) -> bool {

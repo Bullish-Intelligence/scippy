@@ -1,0 +1,11 @@
+[[root]]
+name = "code"
+path = "@ROOTS@/code"
+lister = "walk"
+max_bytes = 200
+claims = { "sv-code" = ["**/*.py", "**/*.rs"] }
+
+[[root]]
+name = "repo"
+path = "@ROOTS@/git_repo"
+claims = { "sv-code" = ["**/*"] }

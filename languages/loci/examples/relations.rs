@@ -2,20 +2,21 @@
 //!
 //! Usage: relations <vault root>
 //! The output is one JSON record for each line, sorted by source and span.
+//! The example reads the vault, its ignore list, and its roots. It writes nothing.
 
-use std::fs;
 use std::path::Path;
 
-use scippy_loci::{Settings, export_relations, list_files};
+use scippy_loci::export_workspace;
 
 fn main() {
     let root = std::env::args().nth(1).expect("vault root");
-    let root = Path::new(&root);
-    let settings = Settings::read(root)
-        .expect("manifest")
-        .expect(".loci/vault.toml");
-    let files = list_files(root);
-    let mut records = export_relations(&settings, &files, |path| fs::read(root.join(path)).ok());
+    let mut records = match export_workspace(Path::new(&root)) {
+        Ok(records) => records,
+        Err(message) => {
+            eprintln!("relations: {message}");
+            std::process::exit(1);
+        }
+    };
     records.sort_by(|a, b| (&a.source, a.span).cmp(&(&b.source, b.span)));
     for r in records {
         println!("{}", r.to_json());

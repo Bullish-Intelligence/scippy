@@ -21,11 +21,15 @@
 [//]:           ^^^^^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/
      [//]: #    ^^^^^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/
      A heading [[target#Second]] link
-[//]:          ^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/Second.
-     [//]: #   ^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/Second.
+[//]:            ^^^^^^ reference scippy loci links . `target.md`/
+[//]:                   ^^^^^^ reference scippy loci links . `target.md`/Second.
+     [//]: #     ^^^^^^ reference scippy loci links . `target.md`/
+     [//]: #            ^^^^^^ reference scippy loci links . `target.md`/Second.
      A block id [[target#^blk1]] link
-[//]:           ^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/`^blk1`.
-     [//]: #    ^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/`^blk1`.
+[//]:             ^^^^^^ reference scippy loci links . `target.md`/
+[//]:                    ^^^^^ reference scippy loci links . `target.md`/`^blk1`.
+     [//]: #      ^^^^^^ reference scippy loci links . `target.md`/
+     [//]: #             ^^^^^ reference scippy loci links . `target.md`/`^blk1`.
      An embed of a note: ![[target]]
 [//]:                    ^^^^^^^^^^^ reference scippy loci links . `target.md`/
      An embed of a file: ![[img.png]]
@@ -34,8 +38,10 @@
 [//]:          ^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/
      [//]: #   ^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/
      A md anchor [text](target.md#second) here
-[//]:            ^^^^^^^^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/Second.
-     [//]: #     ^^^^^^^^^^^^^^^^^^^^^^^^ reference scippy loci links . `target.md`/Second.
+[//]:                   ^^^^^^^^^ reference scippy loci links . `target.md`/
+[//]:                             ^^^^^^ reference scippy loci links . `target.md`/Second.
+     [//]: #            ^^^^^^^^^ reference scippy loci links . `target.md`/
+     [//]: #                      ^^^^^^ reference scippy loci links . `target.md`/Second.
      A md image ![alt](img.png) here and a missing one ![gone](gone.png)
 [//]:           ^^^^^^^^^^^^^^^ reference scippy loci links . `img.png`/
      Same note [self](#intro) anchor

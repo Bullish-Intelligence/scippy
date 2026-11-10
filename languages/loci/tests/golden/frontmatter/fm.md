@@ -13,7 +13,8 @@
 [//]:          ^^^^^ reference scippy loci frontmatter . `c.md`/
      nested:
        key: "[[a#A]]"
-[//]:        ^^^^^^^ reference scippy loci frontmatter . `a.md`/A.
+[//]:          ^ reference scippy loci frontmatter . `a.md`/
+[//]:            ^ reference scippy loci frontmatter . `a.md`/A.
        deep: ["[[b]]"]
 [//]:          ^^^^^ reference scippy loci frontmatter . `b.md`/
      embed: "![[pic.png]]"

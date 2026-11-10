@@ -46,6 +46,12 @@ impl Router for PackRoute<'_> {
             .as_ref()
             .is_some_and(|enter| enter(relative_dir))
     }
+    fn hidden(&self, relative: &str) -> bool {
+        self.rules
+            .hidden
+            .as_ref()
+            .is_some_and(|hidden| hidden(relative))
+    }
 }
 
 /// A document that parsed and built.
@@ -86,13 +92,29 @@ pub(crate) fn run(
         })
         .collect();
     let routers: Vec<&dyn Router> = routes.iter().map(|r| r as &dyn Router).collect();
-    let found = project::discover(&request.root, &request.output, &routers, request.limits)?;
+    let mut extra_files = Vec::new();
+    let mut extra_diagnostics = Vec::new();
+    let mut extra_states: Vec<Option<Box<dyn std::any::Any + Send + Sync>>> = Vec::new();
+    for pack in languages {
+        let extra = pack.extra_files(&request.root);
+        extra_files.extend(extra.files);
+        extra_diagnostics.extend(extra.diagnostics);
+        extra_states.push(extra.state);
+    }
+    let found = project::discover(
+        &request.root,
+        &request.output,
+        &routers,
+        request.limits,
+        &extra_files,
+    )?;
 
     let mut report = IndexReport {
         files_discovered: found.files_discovered,
         diagnostics: found.diagnostics,
         ..Default::default()
     };
+    report.diagnostics.extend(extra_diagnostics);
     let mut documents: Vec<Document> = Vec::new();
     let mut stubs: Vec<Document> = Vec::new();
     let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
@@ -135,6 +157,7 @@ pub(crate) fn run(
                 &found.root,
                 &files,
                 &found.all_files,
+                extra_states[index].as_deref(),
                 request,
                 &mut report,
                 &mut trace,
@@ -251,7 +274,7 @@ fn index_pack(
             ));
             continue;
         }
-        let source = match read_source(root, &file.path, request.limits.max_file_bytes) {
+        let source = match read_source(&file.disk_path(root), request.limits.max_file_bytes) {
             Ok(source) => source,
             Err((code, message)) => {
                 report.files_skipped += 1;
@@ -523,6 +546,7 @@ fn index_native_pack(
     root: &Path,
     files: &[&FoundFile],
     all_files: &[ProjectFile],
+    extra: Option<&(dyn std::any::Any + Send + Sync)>,
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
@@ -530,7 +554,7 @@ fn index_native_pack(
     // Read the files that the pack accepts.
     let mut sources: Vec<NativeSource> = Vec::with_capacity(files.len());
     for file in files {
-        match read_source(root, &file.path, request.limits.max_file_bytes) {
+        match read_source(&file.disk_path(root), request.limits.max_file_bytes) {
             Ok(text) => sources.push(NativeSource {
                 path: file.path.clone(),
                 text,
@@ -552,6 +576,7 @@ fn index_native_pack(
         root,
         files: all_files,
         sources: &sources,
+        extra,
     });
     report.diagnostics.extend(output.diagnostics);
     let model = native.project_model(root);
@@ -937,14 +962,9 @@ fn declare_asset(
 }
 
 /// Read a file. Return a diagnostic code and message on failure.
-fn read_source(
-    root: &Path,
-    path: &ProjectRelativePath,
-    max: u64,
-) -> Result<String, (&'static str, String)> {
-    let full = root.join(path.as_str());
+fn read_source(full: &Path, max: u64) -> Result<String, (&'static str, String)> {
     let mut bytes = Vec::new();
-    File::open(&full)
+    File::open(full)
         .and_then(|f| f.take(max + 1).read_to_end(&mut bytes))
         .map_err(|e| ("unreadable-file", format!("skipped: {e}")))?;
     if bytes.len() as u64 > max {
