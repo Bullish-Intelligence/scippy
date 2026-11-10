@@ -759,6 +759,24 @@ fn a_keyword_argument_names_a_field_of_a_synthesized_init() {
 }
 
 #[test]
+fn a_keyword_argument_names_a_field_of_a_model_class_or_a_typeddict() {
+    let indexed = index("synth");
+    let at = |context, word| indexed.symbols_of("use.py", context, word);
+    assert_eq!(at("Model(title", "title"), [global("lib/Model#title.")]);
+    // A model class takes the fields of its model base classes.
+    assert_eq!(at("Grandchild(title", "title"), [global("lib/Model#title.")]);
+    assert_eq!(at("extra=1", "extra"), [global("lib/Child#extra.")]);
+    assert_eq!(at("deep=True", "deep"), [global("lib/Grandchild#deep.")]);
+    // A call of a generic class names the fields of the class.
+    assert_eq!(at("Item[int](value", "value"), [global("lib/Item#value.")]);
+    assert_eq!(at("Opts(quiet", "quiet"), [global("lib/Opts#quiet.")]);
+    assert_eq!(at("MoreOpts(quiet", "quiet"), [global("lib/Opts#quiet.")]);
+    assert_eq!(at("level=1", "level"), [global("lib/MoreOpts#level.")]);
+    // A class that derives from a class that is no model class takes no field.
+    assert!(at("NotModel(own", "own").is_empty());
+}
+
+#[test]
 fn a_global_name_resolves_to_the_module_binding() {
     let indexed = index("synth");
     let at = |context, word| indexed.symbols_of("use.py", context, word);
