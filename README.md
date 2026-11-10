@@ -68,8 +68,8 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `013c27c`. That commit adds the synthesized `__init__` of model classes and `TypedDict`
-classes (see below). Commit `be7ece9` added type parameters, type aliases, the walrus, and relative
+The pin is `91450c8`. That commit resolves the names in `match` patterns. Commit `013c27c` added
+the synthesized `__init__` of model classes and `TypedDict` classes (see below). Commit `be7ece9` added type parameters, type aliases, the walrus, and relative
 imports with any number of dots. Commit `55f33f4` added the synthesized `__init__` of dataclasses
 and `NamedTuple` classes, the keyword rule for star parameters, and the `global` and `nonlocal`
 rules. Commit `e5cba0a` added shadow-aware similar
@@ -95,7 +95,7 @@ the class definition. They do not check that a name resolves to the library.
 A model class skips a `ClassVar`, a private field `_x`, and a `PrivateAttr`. A field takes
 its keyword from the field name. The alias in `Field(alias=...)` is not a keyword here. A written
 `__init__` wins over the fields. The rules do not follow a metaclass that `dataclass_transform`
-marks, or a decorator of the project that it marks. A call inside a `case` block can miss.
+marks, or a decorator of the project that it marks.
 
 ## Input limits
 
@@ -157,6 +157,11 @@ A type parameter, as in `class C[T: Base]` or `def f[T]()`, has its own scope. I
 whole definition and wins over a module variable of the same name. It gets a document-local
 symbol. A `type Name = value` statement defines `Name`.
 A walrus `name := value` binds `name` in the enclosing function or module, also inside a comprehension.
+A `match` statement binds its captures in the enclosing function or module: `case x:`,
+`case [a, *rest]:`, `case {"k": v, **kw}:`, and the name of `as`. The wildcard `_` binds nothing.
+A name that a `case` binds stays visible after the `match` statement.
+A class pattern `case Point(x=0):` references the class. Its keyword name `x` references the
+member `x` of the class. A dotted name, as in `case Color.RED:`, is a reference.
 A relative import takes any number of dots. An import that climbs above the project root does
 not resolve.
 
@@ -212,6 +217,8 @@ The corpora are mypy and rich. `scripts/oracle/RESULTS.md` records each run.
 2. Build Scippy in release mode. Set `SCIPPY_BIN` to the binary.
 3. Run `scripts/oracle/run_all.sh OUTDIR`. It indexes one corpus at a time.
 4. To compare existing indexes again, run `scripts/oracle/recompute.sh CORPUS OUTDIR`.
+5. To count the references inside `case` clauses, run
+   `python3 -I scripts/oracle/caseblocks.py ROOT SCIPPY.scip SCIP_PYTHON.scip`.
 
 `compare.py` reads the stubs of the fork. Set `STACK_GRAPHS_DIR` to a checkout at the pin.
 `metrics.py` prints precision, wrong targets, raw recall, and recall without design gaps.

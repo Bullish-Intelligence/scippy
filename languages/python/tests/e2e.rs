@@ -853,6 +853,59 @@ fn an_assignment_expression_binds_in_the_enclosing_function() {
 }
 
 #[test]
+fn a_match_statement_binds_captures_and_references_its_names() {
+    let indexed = index("syntax");
+    let at = |context: &str, word: &str| indexed.find("match.py", context, word);
+    let symbol = |context: &str, word: &str| {
+        let found = at(context, word);
+        assert!(!found.is_empty(), "no occurrence of {word} in {context}");
+        found[0].symbol.clone()
+    };
+    // A case body and the subject resolve as normal code.
+    assert_eq!(
+        symbol("match helper(event", "helper"),
+        global("match/helper().")
+    );
+    assert_eq!(
+        symbol("return color", "color"),
+        global("match/handle().(color)")
+    );
+    // A class pattern references the class. Its keyword names reference the fields.
+    assert_eq!(symbol("case Point(x=0", "Point"), global("match/Point#"));
+    assert_eq!(symbol("(x=0", "x"), global("match/Point#x."));
+    assert_eq!(symbol(", y=", "y"), global("match/Point#y."));
+    // A value pattern references the member.
+    assert_eq!(symbol("case Color.RED", "Color"), global("match/Color#"));
+    assert_eq!(symbol("Color.RED", "RED"), global("match/Color#RED."));
+    // A capture, a splat, and an `as` name bind in the function. A guard and a body use them.
+    let bound = |context, word| {
+        let found = at(context, word);
+        assert!(!found.is_empty(), "no occurrence of {word} in {context}");
+        let occurrence = found[0];
+        assert!(is_definition(occurrence), "{word} is a definition");
+        occurrence.symbol.clone()
+    };
+    assert_eq!(symbol("if yy >", "yy"), bound("y=yy", "yy"));
+    assert_eq!(symbol("helper(yy", "yy"), bound("y=yy", "yy"));
+    assert_eq!(symbol("helper(first", "first"), bound("[first", "first"));
+    assert_eq!(symbol("rest\n", "rest"), bound("*rest", "rest"));
+    assert_eq!(symbol("return val,", "val"), bound("\"k\": val", "val"));
+    assert_eq!(symbol("val, extra", "extra"), bound("**extra", "extra"));
+    assert_eq!(symbol("return shape", "shape"), bound("as shape", "shape"));
+    assert_eq!(
+        symbol("return captured", "captured"),
+        bound("case captured", "captured")
+    );
+    // A name that a case binds stays visible after the match statement.
+    assert_eq!(
+        symbol("return left, right", "left"),
+        bound("[left, right]", "left")
+    );
+    // The wildcard binds nothing.
+    assert!(at("case _:", "_").is_empty());
+}
+
+#[test]
 fn a_relative_import_with_three_dots_resolves() {
     let indexed = index("syntax");
     let at = |context, word| indexed.find("pkg/sub/deep/mod.py", context, word);

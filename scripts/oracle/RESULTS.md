@@ -272,3 +272,47 @@ pydantic-ai 70, eventic 3, argentic 0, agentman 0, inferference 0).
 Merged run time: pydantic-ai 6:28 and 5.9 GiB; mypy 8:53 and 5.4 GiB. The class falls from 287 to 65
 in the merged build. The `case` block gap remains (a probe with the merged build confirmed it); the
 rest of the fall is not examined.
+
+## Run 2026-11-10: match statements
+
+Fork commit 91450c8. The binding rules of the fork already bound the captures of a `case` and
+resolved the subject and the body. They had no references for the names in a pattern. The commit
+adds them. A class pattern (`case Point():`) references its class. A dotted name (`case Color.RED:`)
+is a reference to the member. The keyword name of a class pattern (`case Point(x=0):`) is a member
+reference to the class. It is no binding any more: before, it bound `x` as a variable.
+Scippy declares the new bindings in `declarations.scm`: a single name in a `case`, a union, or a
+keyword pattern (a capture), and the name of `as`. It classifies the pattern names after the first
+as members.
+
+Setup: `scip-python` indexes of the earlier runs are reused (empty environment for mypy and rich,
+the pydantic environment for the five eval corpora). Before is main bdc99f3 with the pin 013c27c.
+After is the fork at 91450c8 with these Scippy changes. Both Scippy builds ran with `--trace` and the
+same `recompute.sh`.
+
+| Corpus | Wrong targets | Raw recall | Case-clause references resolved |
+|---|---|---|---|
+| agentman | 0 -> 0 | 98.32% -> 98.32% | no `match` |
+| eventic | 3 -> 3 | 97.91% -> 97.91% | no `match` |
+| argentic | 0 -> 0 | 98.32% -> 98.32% | no `match` |
+| inferference | 0 -> 0 | 97.63% -> 97.63% | no `match` |
+| pydantic-ai | 70 -> 67 | 93.74% -> 94.01% | 2,495 -> 2,933 of 3,424 (72.87% -> 85.66%) |
+| mypy | 13 -> 13 | 90.85% -> 90.85% | no `match` |
+| rich | 0 -> 0 | 95.72% -> 95.72% | no `match` |
+
+`caseblocks.py` counts the references of `scip-python` on the lines of a case clause (pattern,
+guard, and body; 541 cases in 41 files of pydantic-ai) and the ones that Scippy resolves at the
+same position. Only pydantic-ai uses `match`. The other corpora have none. The Loci oracle is
+unchanged: `verify.sh` passes.
+
+The earlier claim that no reference inside a `case` block resolved was too strong: 72.87% did.
+What the old build missed was the class and the value names in the patterns, the keyword names of
+class patterns, and the uses of the names that `as` and the keyword patterns bind.
+The 65 keyword misses of the class `C_synth_init_field` in pydantic-ai are no `case` block
+problem. The lines are plain calls such as `RequestUsage(unmeasured_requests=1)`, where the field
+is in a base class that the rules do not read as a model class. They did not change.
+What stays missing in the case clauses (491 references) has other causes: receiver types
+(`str.lower`), rebinds that `scip-python` counts as references, and names from outside the project.
+
+Known gap: the clauses of a `match` statement see the names of the clauses before them, as a
+statement sees the bindings before it. A name that a case binds can then reach the body of a later
+case. The wrong targets did not rise.

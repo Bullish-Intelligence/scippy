@@ -50,13 +50,21 @@
       (splat_type (identifier) @name)
     ]) @definition.typeparameter))))
 
-; Names that a pattern binds: `case` patterns and `as` patterns.
+; Names that a pattern binds. A `with` item binds the name of `as`. A `case` binds a capture
+; (`case x:`, `case [x, *rest]:`, `case {"k": v, **kw}:`) and the name of `as`.
+; The name of a keyword pattern, as `x` in `case Point(x=0):`, is no binding.
 (as_pattern
   alias: (as_pattern_target (identifier) @name @definition.variable))
-(keyword_pattern
-  (identifier) @name @definition.variable)
+(as_pattern
+  (case_pattern)
+  (identifier) @name @definition.variable .)
 (splat_pattern
   (identifier) @name @definition.variable)
+[
+  (case_pattern (dotted_name . (identifier) @name @definition.variable .))
+  (union_pattern (dotted_name . (identifier) @name @definition.variable .))
+  (keyword_pattern (dotted_name . (identifier) @name @definition.variable .))
+]
 
 ; Instance attributes that a method binds: `self.x = value`.
 (pattern/attribute
@@ -106,6 +114,18 @@
 ; nearest-binding rule to a plain name.
 (attribute
   attribute: (identifier) @member)
+
+; Members of a name in a pattern: the `RED` in `case Color.RED:` and the `x` in `case Point(x=0):`.
+; The first name of a dotted name is a plain name.
+[
+  (class_pattern . (dotted_name . (identifier) (identifier) @member))
+  (case_pattern (dotted_name . (identifier) (identifier) @member))
+  (union_pattern (dotted_name . (identifier) (identifier) @member))
+  (keyword_pattern (dotted_name . (identifier) (identifier) @member))
+  (dict_pattern key: (dotted_name . (identifier) (identifier) @member))
+  (class_pattern
+    (case_pattern (keyword_pattern . (identifier) @member)))
+]
 
 ; Keyword argument names: the `x` in `f(x=1)`. The name is a reference to a parameter of the
 ; callee. The path of the reference starts at the callee, so the reconciler treats it like a member.
