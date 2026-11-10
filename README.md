@@ -68,7 +68,8 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `91450c8`. That commit resolves the names in `match` patterns. Commit `013c27c` added
+The pin is `9a584b8`. That commit speeds up the stitcher and adds the option to turn off the debug
+attributes (see "Performance" below). Commit `91450c8` resolves the names in `match` patterns. Commit `013c27c` added
 the synthesized `__init__` of model classes and `TypedDict` classes (see below). Commit `be7ece9` added type parameters, type aliases, the walrus, and relative
 imports with any number of dots. Commit `55f33f4` added the synthesized `__init__` of dataclasses
 and `NamedTuple` classes, the keyword rule for star parameters, and the `global` and `nonlocal`
@@ -205,6 +206,17 @@ The reconciler turns the engine paths of one reference into one target, or none.
 
 `--trace FILE` writes one line for each reference location with its outcome:
 resolved, ambiguous, unresolved, or bounded. The file is not part of the index.
+
+## Performance
+
+The index keeps its output when it gets faster. Three changes of the fork and one of Scippy
+make an index about 30 to 40 percent cheaper in CPU time and up to 30 percent smaller in peak
+memory. The stitcher rejects a join early when the first symbols clash. The cycle detector uses a
+Bloom filter. Scippy turns off the debug attributes of the fork with
+`StackGraphLanguage::set_debug_attributes(false)`. The pipeline compiles the TSG rules once and
+shares them across shards. `scripts/oracle/RESULTS.md` has the numbers. To check a speed change,
+index the oracle corpora with the old and the new build, and compare the `.scip` and `--trace`
+files with `cmp`.
 
 ## Accuracy oracle
 

@@ -7,6 +7,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use stack_graphs::arena::Handle;
 use stack_graphs::graph::{File, Node, SourceInfo, StackGraph};
@@ -101,26 +102,28 @@ pub(crate) struct BuildFailure {
     pub message: String,
 }
 
-pub(crate) struct BindingEngine {
-    /// One compiled rule set for each dialect. The first one is the primary dialect.
-    languages: Vec<StackGraphLanguage>,
-    graph: StackGraph,
-    partials: PartialPaths,
-    database: Database,
-    files: Vec<(Handle<File>, ProjectRelativePath)>,
-    /// The names of the external assets, such as the builtins. They are not project files.
-    external: HashSet<String>,
-    /// The pack asks for shadow aware similar path detection in every stitcher.
-    shadow_aware: bool,
+/// The compiled binding rules of a pack: one rule set for each dialect.
+///
+/// Compiling the rules is costly. The pipeline compiles them once and shares them with the
+/// engine of each shard.
+#[derive(Clone)]
+pub(crate) struct CompiledRules {
+    /// The first rule set is the primary dialect.
+    languages: Rc<Vec<StackGraphLanguage>>,
 }
 
-impl BindingEngine {
-    /// Compile the rules of a pack and load its builtins.
+impl CompiledRules {
+    /// Compile the rules of a pack.
     pub fn new(pack: &'static str, analysis: &dyn Analysis) -> Result<Self, ScippyError> {
         let rules = analysis.binding_rules();
         let bad = |reason: String| ScippyError::Pack { pack, reason };
         let compile = |grammar, path: &str, source| {
             StackGraphLanguage::from_source(grammar, PathBuf::from(path), source)
+                .map(|mut language| {
+                    // Scippy never reads the debug information of the nodes.
+                    language.set_debug_attributes(false);
+                    language
+                })
                 .map_err(|e| bad(format!("the binding rules do not compile: {e}")))
         };
         let mut languages = vec![compile(
@@ -135,8 +138,36 @@ impl BindingEngine {
                 dialect.tsg_source,
             )?);
         }
+        Ok(Self {
+            languages: Rc::new(languages),
+        })
+    }
+}
+
+pub(crate) struct BindingEngine {
+    /// The compiled rules. The shards share them.
+    languages: Rc<Vec<StackGraphLanguage>>,
+    graph: StackGraph,
+    partials: PartialPaths,
+    database: Database,
+    files: Vec<(Handle<File>, ProjectRelativePath)>,
+    /// The names of the external assets, such as the builtins. They are not project files.
+    external: HashSet<String>,
+    /// The pack asks for shadow aware similar path detection in every stitcher.
+    shadow_aware: bool,
+}
+
+impl BindingEngine {
+    /// Start an engine with the compiled rules of a pack and load its builtins.
+    pub fn new(
+        pack: &'static str,
+        analysis: &dyn Analysis,
+        compiled: &CompiledRules,
+    ) -> Result<Self, ScippyError> {
+        let rules = analysis.binding_rules();
+        let bad = |reason: String| ScippyError::Pack { pack, reason };
         let mut engine = Self {
-            languages,
+            languages: Rc::clone(&compiled.languages),
             graph: StackGraph::new(),
             partials: PartialPaths::new(),
             database: Database::new(),

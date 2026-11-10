@@ -6,7 +6,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::IndexRequest;
-use crate::bindings::{BindingEngine, Bound, Place, RawBinding, RawEnd, ResolveLimits};
+use crate::bindings::{
+    BindingEngine, Bound, CompiledRules, Place, RawBinding, RawEnd, ResolveLimits,
+};
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts, SourceAnchor};
@@ -259,6 +261,7 @@ fn index_pack(
         )?);
     }
     // Stages B to D, one shard at a time. Each shard gets a binding engine of its own.
+    // The engines share one compiled copy of the rules.
     // The engine resolves the references of the shard. The pipeline frees it before the next
     // shard, so the peak memory follows the largest shard.
     let mut supports: HashMap<Option<&str>, Vec<SupportFile>> = HashMap::new();
@@ -273,8 +276,9 @@ fn index_pack(
         .iter()
         .filter_map(|(shard, group)| shard.map(|s| (s, &group[..])))
         .collect();
+    let compiled = CompiledRules::new(pack.id(), analysis)?;
     for (shard, group) in &groups {
-        let mut engine = BindingEngine::new(pack.id(), analysis)?;
+        let mut engine = BindingEngine::new(pack.id(), analysis, &compiled)?;
         let first = docs.len();
         for &at in group {
             let file = files[at];

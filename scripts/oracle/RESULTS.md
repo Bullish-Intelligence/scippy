@@ -316,3 +316,37 @@ What stays missing in the case clauses (491 references) has other causes: receiv
 Known gap: the clauses of a `match` statement see the names of the clauses before them, as a
 statement sees the bindings before it. A name that a case binds can then reach the body of a later
 case. The wrong targets did not rise.
+
+## Run 2026-11-10: performance
+
+Four changes make the index faster and smaller. The output does not change.
+
+1. The stitcher skips a candidate whose first four symbols clash with the path at the join node.
+   The work count stays the same, so the work limit triggers at the same point.
+2. The cycle detector keeps a Bloom filter of 1024 bits. It skips the list scan when no earlier
+   path element starts at the end node. A filter of 4096 bits raised the peak memory of mypy to
+   6.25 GB.
+3. Scippy turns off the debug attributes of the fork (`tsg_location`, `tsg_variable`,
+   `tsg_match_node`). The fork keeps them on by default.
+4. The pipeline compiles the TSG rules once and shares them with the engine of each shard. The
+   builtins still build once for each shard.
+
+Before is main 89f4683 with the fork at 91450c8. After is the fork at 9a584b8 with these Scippy
+changes. Both builds ran with `--trace` on the same machine, one index at a time, under
+`/usr/bin/time -v`. Wall time is noisy, so the table shows user CPU time and peak resident memory.
+
+| Corpus | User CPU (s) | Peak memory (GB) |
+|---|---|---|
+| agentman | 8.0 -> 5.2 (-36%) | 0.38 -> 0.31 (-19%) |
+| eventic | 11.6 -> 7.2 (-38%) | 0.46 -> 0.31 (-32%) |
+| argentic | 29.3 -> 20.2 (-31%) | 0.76 -> 0.56 (-26%) |
+| inferference | 40.9 -> 26.0 (-36%) | 1.19 -> 0.82 (-30%) |
+| rich | 32.8 -> 21.6 (-34%) | 0.90 -> 0.62 (-31%) |
+| pydantic-ai | 389.7 -> 238.9 (-39%) | 5.94 -> 5.20 (-12%) |
+| mypy | 533.1 -> 387.4 (-27%) | 5.45 -> 5.22 (-4%) |
+| loci-roots | 3.1 -> 1.7 (-44%) | 0.23 -> 0.19 (-19%) |
+| loci-deps | 5.8 -> 2.8 (-51%) | 0.24 -> 0.19 (-20%) |
+
+For all seven corpora and two Loci workspace fixtures with roots (`roots` and `deps`; the second
+one has four roots, so it indexes four shards), the `.scip` file and the `--trace` output of the
+new build equal those of the old build, byte for byte.
