@@ -42,9 +42,38 @@ enum Command {
         /// Write one line for each reference location to this file. It is a debugging report.
         #[arg(long)]
         trace: Option<PathBuf>,
+        /// Index this many shards at once. The default is the number of logical cores. The output is
+        /// the same for every value.
+        #[arg(long, short, value_parser = clap::value_parser!(u64).range(1..))]
+        jobs: Option<u64>,
+        /// Start a shard only while the memory estimates of the running shards stay under this
+        /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is half
+        /// of the physical memory, and at most 16G.
+        #[arg(long, value_parser = parse_size)]
+        memory_budget: Option<u64>,
     },
     /// List the built-in language packs.
     Languages,
+}
+
+/// Read a size such as `8G`, `512M`, `64K`, or a plain number of bytes.
+fn parse_size(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let digits = text.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = text[digits.len()..].to_ascii_lowercase();
+    let shift = match unit.as_str() {
+        "" | "b" => 0,
+        "k" | "kb" | "kib" => 10,
+        "m" | "mb" | "mib" => 20,
+        "g" | "gb" | "gib" => 30,
+        _ => return Err(format!("unknown size unit `{unit}`")),
+    };
+    let number: u64 = digits
+        .parse()
+        .map_err(|_| format!("`{text}` is not a size"))?;
+    number
+        .checked_mul(1 << shift)
+        .ok_or_else(|| format!("`{text}` is too large"))
 }
 
 /// The static registry of built-in language packs.
@@ -68,6 +97,8 @@ fn main() -> ExitCode {
             package_name,
             package_version,
             trace,
+            jobs,
+            memory_budget,
         } => {
             // A pack that is active for the project can suggest limits. A flag wins over it.
             let suggested = registry()
@@ -83,6 +114,12 @@ fn main() -> ExitCode {
             request.package_name = package_name;
             request.package_version = package_version;
             request.trace = trace;
+            if let Some(jobs) = jobs {
+                request.jobs = usize::try_from(jobs).unwrap_or(usize::MAX);
+            }
+            if let Some(bytes) = memory_budget {
+                request.memory_budget = bytes;
+            }
             match index_project(&request, &registry()) {
                 Ok(report) => {
                     for diagnostic in &report.diagnostics {

@@ -350,3 +350,56 @@ changes. Both builds ran with `--trace` on the same machine, one index at a time
 For all seven corpora and two Loci workspace fixtures with roots (`roots` and `deps`; the second
 one has four roots, so it indexes four shards), the `.scip` file and the `--trace` output of the
 new build equal those of the old build, byte for byte.
+
+## Run 2026-11-10: parallel shards
+
+The core runs the shards of a workspace on worker threads. The engine types are not `Send`
+(`StackGraphLanguage` shares its rules with `Rc`, and a support-file analyzer is a plain
+`Box<dyn FileAnalyzer>`). The fork needs no change: each worker builds, uses, and frees its own
+engines, and compiles the rules once for all of its shards. A worker makes its own support-file
+analyzers. The scheduler starts the largest shard first and merges the results in shard order.
+
+Workspace: `~/Notes` and its 57 roots (49 shards, 42,456 files, 12,594 indexed documents). Both
+runs used `--trace`, read-only, one at a time under `index.lock`, on 4 cores with 8 threads and 125 GB
+of memory. Sequential is main 75a50b7. Parallel is the new build with the defaults: 8 workers and
+a budget of 16 GiB.
+
+| Run | Wall time | User CPU (s) | System CPU (s) | Peak memory (GB) | Occurrences |
+|---|---|---|---|---|---|
+| Sequential, 75a50b7 | 14:13 | 818.5 | 26.1 | 8.05 | 1,405,585 |
+| Parallel, 8 workers | 4:21 | 1051.9 | 30.3 | 10.87 | 1,405,585 |
+
+The wall time falls to 31 percent (3.3 times faster). The user CPU time rises by 29 percent: the
+workers share caches and memory bandwidth, and the machine has 4 cores with 2 threads each. The peak memory
+rises by 2.8 GB, because the largest shards run together. The git status and HEAD of the vault
+and the 57 roots were the same before and after.
+
+The `.scip` file, the `--trace` file, the report, and the diagnostics of the parallel run equal
+those of the sequential run at 75a50b7, byte for byte. The new build with `--jobs 1` also gives
+the same `.scip`, `--trace`, and report. On the fixtures `roots` and `deps`, `--jobs 1`, `--jobs 4`,
+and a budget of one byte give the same files as 75a50b7. A test of the repository checks it.
+
+Calibration of the memory estimate. `SCIPPY_SHARD_LOG=1` with `--jobs 1` gave the peak resident
+memory after each shard. The numbers include the memory that earlier shards left in the heap, about
+0.2 to 1 GB at the end of the run, so they are upper bounds for small shards.
+
+| Shard | Python MB | Peak (GB) | GB per MB |
+|---|---|---|---|
+| llama-infernal | 2.7 | 7.7 | 2.8 |
+| semantic-views | 2.3 | 4.1 | 1.8 |
+| loci-core | 1.8 | 1.5 | 0.8 |
+| argentic | 1.3 | 0.7 | 0.6 |
+| pynix | 15.7 | 4.0 | 0.25 |
+| mypy (corpus) | 4.7 | 5.2 | 1.1 |
+| pydantic-ai (corpus) | 9.6 | 5.2 | 0.5 |
+
+The ratio falls as the shard grows. The peak of the large shards stays between 4 and 8 GB. The
+estimate is therefore 300 MiB plus 1.3 GiB for each MiB of loaded source, and the second part stops
+at 7.7 GiB. A linear estimate of 1.3 GiB for each MiB gives 19 GB for pynix, which would run alone
+under the 16 GiB budget, so it would delay the other shards. The estimate is too low for
+llama-infernal (3.9 GB against 7.7 GB). The budget is half of the physical memory, so it absorbs an
+error of a factor of two.
+
+The corpora without roots run as before. For mypy and pydantic-ai, the new build gives the same
+`.scip`, `--trace`, and report as main 75a50b7, byte for byte. A project with one shard runs on
+the calling thread.

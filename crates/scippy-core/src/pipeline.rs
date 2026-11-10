@@ -17,7 +17,7 @@ use crate::inherit::Inheritance;
 use crate::language::{
     Analysis, DeclKind, Engine, ExternalAsset, ExtraFile, LanguagePack, Manifest, NativeAnalysis,
     NativeDocument, NativeInput, NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach,
-    ReferenceRole, Scope, SupportFile, WalkRules,
+    ReferenceRole, Scope, WalkRules,
 };
 use crate::positions::LineIndex;
 use crate::project::{self, FoundFile, ProjectRelativePath, Router};
@@ -25,6 +25,7 @@ use crate::reconcile::{
     BindingOutcome, DeclarationIndex, Reconciled, Targeting, UnresolvedReason, reconcile,
 };
 use crate::report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
+use crate::schedule;
 
 /// The SCIP scheme of every symbol that Scippy writes.
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
@@ -260,79 +261,70 @@ fn index_pack(
             dialect.query,
         )?);
     }
-    // Stages B to D, one shard at a time. Each shard gets a binding engine of its own.
-    // The engines share one compiled copy of the rules.
-    // The engine resolves the references of the shard. The pipeline frees it before the next
-    // shard, so the peak memory follows the largest shard.
-    let mut supports: HashMap<Option<&str>, Vec<SupportFile>> = HashMap::new();
-    for support in analysis.support_files(root, &paths) {
-        let shard = shard_of(&support.path, shards);
-        supports.entry(shard).or_default().push(support);
-    }
-    let mut docs: Vec<(usize, Doc)> = Vec::new();
-    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
+    // Stages B to D, one shard at a time or several at once. Each shard gets a binding engine
+    // of its own, and the engine resolves the references of the shard. A worker frees the engine
+    // before it takes the next shard. The engine never leaves its worker. Each worker compiles
+    // the rules once and shares them across its shards. The scheduler admits a shard only when
+    // the estimates of the running shards stay under the memory budget.
+    // The pipeline merges the results in shard order, so the output does not depend on the
+    // number of workers.
     let groups = shard_groups(files, shards);
     let members: HashMap<&str, &[usize]> = groups
         .iter()
         .filter_map(|(shard, group)| shard.map(|s| (s, &group[..])))
         .collect();
-    let compiled = CompiledRules::new(pack.id(), analysis)?;
-    for (shard, group) in &groups {
-        let mut engine = BindingEngine::new(pack.id(), analysis, &compiled)?;
-        let first = docs.len();
-        for &at in group {
-            let file = files[at];
-            if let Some(doc) = load_file(
-                analysis,
-                &extractors,
-                &*model,
-                &mut engine,
-                root,
-                file,
-                request,
-                report,
-                true,
-            ) {
-                docs.push((at, doc));
+    let context = ShardContext {
+        pack,
+        analysis,
+        extractors: &extractors,
+        model: &*model,
+        root,
+        files,
+        paths: &paths,
+        shards,
+        members: &members,
+        request,
+    };
+    let jobs: Vec<(u64, usize)> = groups
+        .iter()
+        .enumerate()
+        .map(|(n, (shard, group))| (context.estimate(*shard, group), n))
+        .collect();
+    let log = std::env::var_os("SCIPPY_SHARD_LOG").is_some();
+    let results = schedule::run_ordered(
+        jobs,
+        request.jobs,
+        request.memory_budget,
+        || None::<CompiledRules>,
+        |compiled, estimate, n| {
+            let (shard, group) = &groups[n];
+            if compiled.is_none() {
+                *compiled = Some(CompiledRules::new(pack.id(), analysis)?);
             }
-        }
-        // The code that the shard imports from other shards. The engine reads it to resolve
-        // the references of the shard. The shard that owns the code indexes it.
-        for dependency in dependency_closure(&*model, shard.unwrap_or_default(), &members) {
-            for &at in members[dependency.as_str()] {
-                let file = files[at];
-                if model.provides(&file.path) {
-                    let mut scratch = IndexReport::default();
-                    load_file(
-                        analysis,
-                        &extractors,
-                        &*model,
-                        &mut engine,
-                        root,
-                        file,
-                        request,
-                        &mut scratch,
-                        false,
-                    );
-                }
+            if log {
+                reset_peak_memory();
             }
-        }
-        // The support files of the shard, such as `tsconfig.json`.
-        let sources: Vec<ProjectRelativePath> =
-            docs[first..].iter().map(|(_, d)| d.path.clone()).collect();
-        for support in supports.remove(shard).unwrap_or_default() {
-            if let Err(failure) = engine.add_support_file(&support, &sources) {
-                report.diagnostics.push(Diagnostic {
-                    severity: Severity::Warning,
-                    stage: Stage::Bind,
-                    file: Some(support.path.as_str().to_string()),
-                    range: None,
-                    code: "support-file-error",
-                    message: format!("ignored: {}", failure.message),
-                });
+            let out = index_shard(&context, compiled.as_ref().unwrap(), *shard, group);
+            if log {
+                eprintln!(
+                    "shard {} files {} estimate {} peak_rss_kib {}",
+                    shard.unwrap_or("."),
+                    group.len(),
+                    estimate,
+                    peak_memory()
+                );
             }
-        }
-        for binding in engine.resolve(ResolveLimits::default()) {
+            out
+        },
+    );
+    let mut docs: Vec<(usize, Doc)> = Vec::new();
+    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
+    for result in results {
+        let out = result?;
+        report.files_skipped += out.report.files_skipped;
+        report.diagnostics.extend(out.report.diagnostics);
+        docs.extend(out.docs);
+        for binding in out.bindings {
             by_document
                 .entry(binding.reference.path.clone())
                 .or_default()
@@ -483,6 +475,146 @@ fn index_pack(
         stubs: Vec::new(),
         external_symbols: referenced,
     })
+}
+
+/// What one shard gives back.
+struct ShardOutput {
+    docs: Vec<(usize, Doc)>,
+    bindings: Vec<RawBinding>,
+    /// The files that the shard skipped and the diagnostics of the shard.
+    report: IndexReport,
+}
+
+/// What every shard reads. It is shared by all workers.
+struct ShardContext<'a> {
+    pack: &'a dyn LanguagePack,
+    analysis: &'a dyn Analysis,
+    extractors: &'a [Extractor],
+    model: &'a dyn ProjectModel,
+    root: &'a Path,
+    files: &'a [&'a FoundFile],
+    paths: &'a [ProjectRelativePath],
+    shards: &'a [ProjectRelativePath],
+    members: &'a HashMap<&'a str, &'a [usize]>,
+    request: &'a IndexRequest,
+}
+
+/// The estimate of the peak memory of a shard is a fixed part for the builtins and the rules,
+/// and a part that grows with the source bytes that the engine loads. The loaded bytes are
+/// the files of the shard and the files that it imports from other shards.
+/// The growing part has a ceiling: the peak of the largest shards (mypy, pydantic-ai, pynix)
+/// stays near 4 to 8 GiB, while the peak of a small shard of dense code reaches 1.3 GiB for
+/// each MiB. `scripts/oracle/RESULTS.md` has the measurements.
+const SHARD_BASE_BYTES: u64 = 300 << 20;
+const SHARD_BYTES_PER_SOURCE_BYTE: u64 = 1300;
+const SHARD_GRAPH_CEILING_BYTES: u64 = 7_700 << 20;
+
+impl ShardContext<'_> {
+    fn estimate(&self, shard: Option<&str>, group: &[usize]) -> u64 {
+        let size = |at: usize| {
+            std::fs::metadata(self.files[at].disk_path(self.root))
+                .map_or(0, |m| m.len().min(self.request.limits.max_file_bytes))
+        };
+        let mut bytes: u64 = group.iter().map(|&at| size(at)).sum();
+        for dependency in dependency_closure(self.model, shard.unwrap_or_default(), self.members) {
+            for &at in self.members[dependency.as_str()] {
+                if self.model.provides(&self.files[at].path) {
+                    bytes += size(at);
+                }
+            }
+        }
+        SHARD_BASE_BYTES + (SHARD_BYTES_PER_SOURCE_BYTE * bytes).min(SHARD_GRAPH_CEILING_BYTES)
+    }
+}
+
+/// Stages B to D for one shard: build the graphs, then resolve the references.
+fn index_shard(
+    cx: &ShardContext,
+    compiled: &CompiledRules,
+    shard: Option<&str>,
+    group: &[usize],
+) -> Result<ShardOutput, ScippyError> {
+    let mut report = IndexReport::default();
+    let mut engine = BindingEngine::new(cx.pack.id(), cx.analysis, compiled)?;
+    let mut docs: Vec<(usize, Doc)> = Vec::new();
+    for &at in group {
+        let file = cx.files[at];
+        if let Some(doc) = load_file(
+            cx.analysis,
+            cx.extractors,
+            cx.model,
+            &mut engine,
+            cx.root,
+            file,
+            cx.request,
+            &mut report,
+            true,
+        ) {
+            docs.push((at, doc));
+        }
+    }
+    // The code that the shard imports from other shards. The engine reads it to resolve
+    // the references of the shard. The shard that owns the code indexes it.
+    for dependency in dependency_closure(cx.model, shard.unwrap_or_default(), cx.members) {
+        for &at in cx.members[dependency.as_str()] {
+            let file = cx.files[at];
+            if cx.model.provides(&file.path) {
+                let mut scratch = IndexReport::default();
+                load_file(
+                    cx.analysis,
+                    cx.extractors,
+                    cx.model,
+                    &mut engine,
+                    cx.root,
+                    file,
+                    cx.request,
+                    &mut scratch,
+                    false,
+                );
+            }
+        }
+    }
+    // The support files of the shard, such as `tsconfig.json`. An analyzer is not `Send`,
+    // so the worker makes its own.
+    let sources: Vec<ProjectRelativePath> = docs.iter().map(|(_, d)| d.path.clone()).collect();
+    for support in cx.analysis.support_files(cx.root, cx.paths) {
+        if shard_of(&support.path, cx.shards) != shard {
+            continue;
+        }
+        if let Err(failure) = engine.add_support_file(&support, &sources) {
+            report.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                stage: Stage::Bind,
+                file: Some(support.path.as_str().to_string()),
+                range: None,
+                code: "support-file-error",
+                message: format!("ignored: {}", failure.message),
+            });
+        }
+    }
+    let bindings = engine.resolve(ResolveLimits::default());
+    Ok(ShardOutput {
+        docs,
+        bindings,
+        report,
+    })
+}
+
+/// The peak resident memory of the process in KiB since the last reset. It is a debugging aid.
+fn peak_memory() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmHWM:"))
+                .and_then(|rest| rest.split_whitespace().next()?.parse().ok())
+        })
+        .unwrap_or(0)
+}
+
+fn reset_peak_memory() {
+    let _ = std::fs::write("/proc/self/clear_refs", "5");
 }
 
 /// Read the manifest `name` in the project root and in each shard.

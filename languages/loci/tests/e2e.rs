@@ -867,6 +867,29 @@ fn the_same_input_gives_the_same_bytes() {
     assert_eq!(fs::read(&a.path).unwrap(), fs::read(&b.path).unwrap());
 }
 
+#[test]
+fn parallel_shards_give_the_bytes_of_a_sequential_run() {
+    for name in ["roots", "deps"] {
+        let prepared = prepare(name);
+        let scratch = tempfile::tempdir().unwrap();
+        let run = |label: &str, jobs: usize, budget: u64| {
+            let mut request = IndexRequest::new(&prepared.root, scratch.path().join(label));
+            request.trace = Some(scratch.path().join(format!("{label}.trace")));
+            request.jobs = jobs;
+            request.memory_budget = budget;
+            index_project(&request, &[&PythonPack, &LociPack]).unwrap();
+            (
+                fs::read(scratch.path().join(label)).unwrap(),
+                fs::read(scratch.path().join(format!("{label}.trace"))).unwrap(),
+            )
+        };
+        let sequential = run("sequential", 1, u64::MAX);
+        assert_eq!(sequential, run("parallel", 4, u64::MAX), "{name}");
+        // A budget of one byte lets each shard run alone.
+        assert_eq!(sequential, run("alone", 4, 1), "{name}");
+    }
+}
+
 // ---- the official scip CLI ----
 
 fn scip() -> Option<PathBuf> {

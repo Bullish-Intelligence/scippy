@@ -24,6 +24,7 @@ mod positions;
 mod project;
 mod reconcile;
 mod report;
+mod schedule;
 
 pub use emit::SymbolKind;
 pub use error::ScippyError;
@@ -55,6 +56,11 @@ pub struct IndexRequest {
     /// Write one line for each reference location to this file. It is a debugging report.
     /// The file is not part of the index.
     pub trace: Option<PathBuf>,
+    /// The number of shards that run at once. The output does not depend on it.
+    pub jobs: usize,
+    /// The shards run together only while the sum of their memory estimates stays under this
+    /// many bytes. A shard over the budget runs alone.
+    pub memory_budget: u64,
 }
 
 impl IndexRequest {
@@ -67,6 +73,8 @@ impl IndexRequest {
             package_name: None,
             package_version: None,
             trace: None,
+            jobs: schedule::default_jobs(),
+            memory_budget: schedule::default_memory_budget(),
         }
     }
 }

@@ -22,9 +22,8 @@ skipped with a warning, where `loci-core` reads it lossy. A link with a resolved
 occurrences: one over the target part, for the note, and one over the anchor part.
 
 Each root is a repository of its own. The core resolves the code of each root with a binding
-engine of its own, and frees the engine before the next root. A root sees the code of another root
-only through its manifest. The peak memory follows the largest root with its dependencies, not the
-sum of the roots.
+engine of its own, and frees the engine after the root. A root sees the code of another root
+only through its manifest. The roots run in parallel (see "Parallel roots").
 
 ## Manifests
 
@@ -103,7 +102,7 @@ marks, or a decorator of the project that it marks.
 The walker skips a file larger than 1 MiB (`--max-file-bytes`) with a `file-too-large` warning.
 It stops to accept files when the accepted files would exceed 32 MiB in total
 (`--max-total-bytes`). It then raises an `input-limit-reached` error diagnostic.
-The graph build used about 1.3 GB for each MB of Python source.
+The graph build used up to 1.3 GB for each MB of Python source.
 The Loci pack needs far less memory. When a vault is active, the default per-file limit is the
 largest `note_max_bytes` of the vault and its roots, and the default total limit is 4 GiB.
 A flag still wins.
@@ -214,9 +213,31 @@ make an index about 30 to 40 percent cheaper in CPU time and up to 30 percent sm
 memory. The stitcher rejects a join early when the first symbols clash. The cycle detector uses a
 Bloom filter. Scippy turns off the debug attributes of the fork with
 `StackGraphLanguage::set_debug_attributes(false)`. The pipeline compiles the TSG rules once and
-shares them across shards. `scripts/oracle/RESULTS.md` has the numbers. To check a speed change,
+shares them across shards. Parallel shards cut the wall time of the workspace to a third.
+`scripts/oracle/RESULTS.md` has the numbers. To check a speed change,
 index the oracle corpora with the old and the new build, and compare the `.scip` and `--trace`
 files with `cmp`.
+
+## Parallel roots
+
+The core indexes the roots (shards) on worker threads. Each worker owns the binding engines that
+it builds, so no engine crosses a thread. Identities, reconciliation, and output stay global. The
+core merges the results in the order of the shards. The `.scip` file and the `--trace` file do not
+depend on the number of workers.
+
+- `--jobs N` sets the number of workers. The default is the number of logical cores. `--jobs 1` runs the
+  shards one at a time, as before.
+- `--memory-budget SIZE` (for example `8G`) sets the memory that the running shards may use
+  together. The default is half of the physical memory, and at most 16G.
+- The core estimates the peak of a shard from the source bytes that its engine loads: the shard
+  and the code that it imports. The estimate is 300 MiB plus 1.3 GiB for each MiB, and the second
+  part stops at 7.7 GiB.
+- The scheduler starts the largest shards first. It starts a shard only when the estimates of the
+  running shards and of this shard stay under the budget. A shard over the budget runs alone.
+- A project with one shard, or no shards, runs on the calling thread.
+
+Set `SCIPPY_SHARD_LOG=1` to print the estimate and the peak resident memory of each shard. The
+peak is exact only with `--jobs 1`. `scripts/oracle/RESULTS.md` has the measurements.
 
 ## Accuracy oracle
 
