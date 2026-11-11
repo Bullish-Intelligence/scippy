@@ -536,3 +536,37 @@ covers this case. Before the fix, the first build had 31 wrong targets and 86.17
 
 The mypy ambiguous count rises by 109. A tuple of classes gives one candidate for each class, so
 its members can be ambiguous. This run did not break the 109 down.
+
+## Run 2026-11-11: element types of containers
+
+Fork commit cda555a on 41d89fb; Scippy on main e772606. The rules read the name of a written container
+annotation (`list`, `Sequence`, `Iterable`, `Iterator`, `set`, `frozenset`, `deque`,
+`tuple[T, ...]`, `dict`, `Mapping`, `defaultdict`, with `typing` spellings, `Optional`, and `| None`).
+A loop or comprehension asks for `<elem>`. A subscript asks for `<val>`. `d.items()`, `d.values()`,
+`d.get()`, `enumerate`, `zip`, `sorted`, and `*args: T` also keep the element types. The earlier run
+on 9a584b8 had three new wrong targets in mypy (`copy_modified(id=...)` after an `isinstance` guard).
+They are gone now that the receiver narrowing is in main.
+
+Setup: scip-python indexes of the earlier runs, the pydantic environment for the five eval corpora.
+Before is main e772606; after is the same with the new fork rules. Both ran with `--trace`.
+
+| Corpus | Wrong targets | Raw recall | for_target class | assign_subscript class |
+|---|---|---|---|---|
+| mypy | 0 -> 0 | 93.22% -> 93.82% | 727 -> 194 | 191 -> 72 |
+| rich | 0 -> 0 | 95.88% -> 96.72% | 124 -> 45 | 27 -> 4 |
+| pydantic-ai | 44 -> 44 | 94.94% -> 95.60% | 849 -> 461 | 120 -> 55 |
+| eventic | 3 -> 3 | 98.61% -> 99.70% | 46 -> 0 | 10 -> 1 |
+| argentic | 0 -> 0 | 98.55% -> 99.00% | 26 -> 22 | 11 -> 0 |
+| inferference | 0 -> 0 | 97.79% -> 98.78% | 178 -> 24 | 35 -> 5 |
+| agentman | 0 -> 0 | 98.44% -> 98.70% | 33 -> 18 | 2 -> 0 |
+
+Cost (timed runs, no other load on the machine):
+
+| Corpus | Wall time | User CPU (s) | Peak memory (GB) |
+|---|---|---|---|
+| mypy | 9:59 -> 9:06 | 530 -> 525 | 5.44 -> 5.45 |
+| pydantic-ai | 4:07 -> 4:29 | 238 -> 260 (+9%) | 5.48 -> 5.52 |
+
+The Loci oracle is unchanged: `verify.sh` passes. Left open: a container class of the project, a dict
+subclass with type arguments in its base class, and the types of values that need `isinstance`
+or value flow.

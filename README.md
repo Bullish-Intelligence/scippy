@@ -97,6 +97,24 @@ its keyword from the field name. The alias in `Field(alias=...)` is not a keywor
 `__init__` wins over the fields. The rules do not follow a metaclass that `dataclass_transform`
 marks, or a decorator of the project that it marks.
 
+### Element types of containers
+
+A written container annotation gives the type of its elements. The rules read the name of the
+annotation only: `list`, `Sequence`, `Iterable`, `Iterator`, `set`, `frozenset`, `deque`,
+`tuple[T, ...]`, and their `typing` spellings, also inside `Optional` or a union with `None`.
+
+- `for x in xs` and `[x for x in xs]` give `x` the element type.
+- `xs[i]` gives the element type. `d[k]` on `dict`, `Mapping`, or `defaultdict` gives the value type.
+- `d.keys()`, `d.values()`, `d.items()`, `d.get(k)`, `d.pop(k)`, and `d.setdefault(k, v)` give the
+  key or the value type.
+- A tuple pattern, such as `for k, v in ...`, reads `tuple[A, B]`, `d.items()`, `enumerate(xs)`, and
+  `zip(xs, ys)` by position. `sorted`, `reversed`, `list`, `set`, `tuple`, and `iter` keep the
+  element type.
+- `*args: T` has elements of type `T`. `**kwargs: T` has values of type `T`.
+
+A container class of the project does not give its element type. Neither does a dict subclass
+with type arguments in its base class.
+
 ## Input limits
 
 The walker skips a file larger than 1 MiB (`--max-file-bytes`) with a `file-too-large` warning.
