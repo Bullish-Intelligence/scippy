@@ -74,7 +74,7 @@ impl IndexRequest {
             package_version: None,
             trace: None,
             jobs: schedule::default_jobs(),
-            memory_budget: schedule::default_memory_budget(),
+            memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
         }
     }
 }

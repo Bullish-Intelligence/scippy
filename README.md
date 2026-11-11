@@ -228,7 +228,7 @@ depend on the number of workers.
 - `--jobs N` sets the number of workers. The default is the number of logical cores. `--jobs 1` runs the
   shards one at a time, as before.
 - `--memory-budget SIZE` (for example `8G`) sets the memory that the running shards may use
-  together. The default is half of the physical memory, and at most 16G.
+  together. The default is 50G.
 - The core estimates the peak of a shard from the source bytes that its engine loads: the shard
   and the code that it imports. The estimate is 300 MiB plus 3,000 bytes for each byte of loaded
   source, and the second part stops at 10 GiB. The largest measured peak is 8.08 GB.

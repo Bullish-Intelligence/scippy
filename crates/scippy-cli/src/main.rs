@@ -47,8 +47,7 @@ enum Command {
         #[arg(long, short, value_parser = clap::value_parser!(u64).range(1..))]
         jobs: Option<u64>,
         /// Start a shard only while the memory estimates of the running shards stay under this
-        /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is half
-        /// of the physical memory, and at most 16G.
+        /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is 50G.
         #[arg(long, value_parser = parse_size)]
         memory_budget: Option<u64>,
     },

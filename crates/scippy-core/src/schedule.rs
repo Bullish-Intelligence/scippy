@@ -8,21 +8,8 @@ use std::thread;
 /// The stack of a worker. The main thread has 8 MiB. The workers need no less.
 const WORKER_STACK_BYTES: usize = 256 << 20;
 
-/// The memory budget that a run uses when the caller gives none.
-///
-/// It is half of the physical memory, and never more than 16 GiB.
-pub(crate) fn default_memory_budget() -> u64 {
-    const CAP: u64 = 16 << 30;
-    const FALLBACK: u64 = 4 << 30;
-    let total_kib: Option<u64> = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .find_map(|line| line.strip_prefix("MemTotal:"))
-                .and_then(|rest| rest.split_whitespace().next()?.parse().ok())
-        });
-    total_kib.map_or(FALLBACK, |kib| (kib * 1024 / 2).min(CAP))
-}
+/// The memory budget that a run uses when the caller gives none: 50 GiB.
+pub(crate) const DEFAULT_MEMORY_BUDGET: u64 = 50 << 30;
 
 /// The number of workers that a run uses when the caller gives none.
 pub(crate) fn default_jobs() -> usize {
@@ -133,6 +120,11 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn the_default_budget_is_50_gib() {
+        assert_eq!(DEFAULT_MEMORY_BUDGET, 50 << 30);
+    }
 
     #[test]
     fn results_keep_the_order_of_the_jobs() {

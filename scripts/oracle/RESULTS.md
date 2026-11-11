@@ -426,6 +426,16 @@ the vault and the roots were the same before and after each run.
 
 No shard grew past its estimate. Fifteen small shards have a peak above their estimate, because
 their start figure already holds the heap that earlier shards left (0.5 to 1.2 GB at the end of
-the run). The growth of each (peak minus start) stays under the estimate. The parallel run is
-slower than the run at b8b522b (4:21) because pynix and semantic-views now each take most of the
-12 GiB budget and run nearly alone.
+the run). The growth of each (peak minus start) stays under the estimate. The parallel run of this
+table used the old default budget of 16 GiB (the machine has 125 GB of memory).
+
+The default budget is now a flat 50 GiB. The shard comparison uses growth (peak minus start), not
+the raw peak. A shard over the budget still runs alone.
+
+| Run | Wall time | User CPU (s) | System CPU (s) | Peak memory (GB) |
+|---|---|---|---|---|
+| Default parallel, 50 GiB budget | 3:30 | 1243.5 | 32.8 | 16.02 |
+
+The `.scip` and `--trace` equal those of the `--jobs 1` run above, byte for byte, and the vault
+and the roots had the same git status before and after. The wall time falls from 7:19 to 3:30,
+and the peak memory rises from 9.5 to 16.0 GB, because the largest shards now run together.
