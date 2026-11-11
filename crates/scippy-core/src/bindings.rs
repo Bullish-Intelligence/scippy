@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use stack_graphs::arena::Handle;
-use stack_graphs::graph::{File, Node, SourceInfo, StackGraph};
+use stack_graphs::graph::{File, Node, SourceInfo, StackGraph, Symbol};
 use stack_graphs::partial::{PartialPath, PartialPaths};
 use stack_graphs::stitching::{
     Database, ForwardPartialPathStitcher, StitchBound, StitcherConfig, StitcherLimits,
@@ -81,6 +81,10 @@ pub(crate) struct RawEnd {
     /// The definition nodes that the path passes before it reaches the end, sorted.
     /// A path that passes a definition follows a value from that definition to the end.
     pub through: Vec<Place>,
+    /// The definition nodes among `through` whose name is the name of the reference, sorted.
+    /// A path that pops the name of the reference at such a node, and goes on, follows the
+    /// value that a store gave to that name.
+    pub echo: Vec<Place>,
 }
 
 /// What the engine found for one reference node.
@@ -338,6 +342,7 @@ impl BindingEngine {
                 let Some(reference) = self.anchor(node, path) else {
                     continue;
                 };
+                let reference_name = self.graph[node].symbol();
                 let mut kept: Vec<(PartialPath, RawEnd)> = Vec::new();
                 let mut all: BTreeSet<RawEnd> = BTreeSet::new();
                 let searched = catch_unwind(AssertUnwindSafe(|| {
@@ -351,7 +356,7 @@ impl BindingEngine {
                         |graph, partials, path: &PartialPath| {
                             // Drop every path that another path shadows. The engine does not
                             // do it. Its own test runner applies the same filter.
-                            let end = end_of(graph, partials, path, external);
+                            let end = end_of(graph, partials, path, external, reference_name);
                             all.insert(end.clone());
                             if kept.iter().any(|(other, _)| other.shadows(partials, path)) {
                                 return;
@@ -422,20 +427,30 @@ fn end_of(
     partials: &PartialPaths,
     path: &PartialPath,
     external: &HashSet<String>,
+    reference_name: Option<Handle<Symbol>>,
 ) -> RawEnd {
     let end = path.end_node;
     let place = place_of(graph, end, external);
     // The edges of the path name every node of the path except the last one.
-    let mut through: Vec<Place> = path
+    let definitions: Vec<Handle<Node>> = path
         .edges
         .iter_unordered(partials)
         .filter_map(|edge| graph.node_for_id(edge.source_node_id))
         .filter(|&node| graph[node].is_definition())
-        .filter_map(|node| place_of(graph, node, external))
-        .filter(|p| Some(p) != place.as_ref())
         .collect();
-    through.sort();
-    through.dedup();
+    let places = |keep: &dyn Fn(Handle<Node>) -> bool| {
+        let mut found: Vec<Place> = definitions
+            .iter()
+            .filter(|&&node| keep(node))
+            .filter_map(|&node| place_of(graph, node, external))
+            .filter(|p| Some(p) != place.as_ref())
+            .collect();
+        found.sort();
+        found.dedup();
+        found
+    };
+    let through = places(&|_| true);
+    let echo = places(&|node| reference_name.is_some() && graph[node].symbol() == reference_name);
     RawEnd {
         place,
         syntax_type: graph
@@ -443,5 +458,6 @@ fn end_of(
             .and_then(|info| info.syntax_type.into_option())
             .map(|h| graph[h].to_string()),
         through,
+        echo,
     }
 }

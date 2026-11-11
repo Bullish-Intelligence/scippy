@@ -192,6 +192,12 @@ The reconciler turns the engine paths of one reference into one target, or none.
   when its path passes the definition of another symbol. The language pack marks member
   references with the `@member` capture. For `a.x`, only a definition that is an end of the
   same reference counts, because every path passes the definition of `a`.
+- It drops the end of a member reference when the path pops the name of the reference at an
+  assignment target that no declaration claims, as in `item.kind = value` with an unknown type
+  of `item`. The path then follows the assigned value. The reference has no target.
+- A search that reaches the work limit keeps its result when a plain name has a nearest binding
+  in the same document and no other nearest end. A rebind such as `left, right = f(left, right)`
+  reaches the limit often. A member reference, a keyword name, and other limits stay bounded.
 - It asks the language pack whether a reference can name each joined declaration, and drops
   the ends that the pack refuses. The Python pack refuses an instance field for a plain name,
   because Python needs `self.x`. It also refuses a name that a class body binds, for a plain name
@@ -254,6 +260,9 @@ The corpora are mypy and rich. `scripts/oracle/RESULTS.md` records each run.
 4. To compare existing indexes again, run `scripts/oracle/recompute.sh CORPUS OUTDIR`.
 5. To count the references inside `case` clauses, run
    `python3 -I scripts/oracle/caseblocks.py ROOT SCIPPY.scip SCIP_PYTHON.scip`.
+
+The five eval corpora (`agentman`, `eventic`, `argentic`, `inferference`, `pydantic-ai`) sit in
+another `ORACLE_DIR`. Run them with the `mkenv.sh` environment: set `ORACLE_VENV=1` for `scip-python`.
 
 `compare.py` reads the stubs of the fork. Set `STACK_GRAPHS_DIR` to a checkout at the pin.
 `metrics.py` prints precision, wrong targets, raw recall, and recall without design gaps.

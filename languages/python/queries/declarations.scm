@@ -60,6 +60,41 @@
   (identifier) @name @definition.variable .)
 (splat_pattern
   (identifier) @name @definition.variable)
+
+; A star target: the `rest` in `first, *rest = value`.
+(pattern/list_splat_pattern
+  (identifier) @name @definition.variable)
+
+; A tuple or list target of `with`: the `a` and `b` in `with f() as (a, b):`.
+; The grammar reads the target as an expression. The names can sit in a nested tuple or list,
+; or after a star.
+(as_pattern
+  alias: (as_pattern_target [
+    (tuple [
+      (identifier) @name @definition.variable
+      (list_splat (identifier) @name @definition.variable)
+      (tuple [
+        (identifier) @name @definition.variable
+        (list_splat (identifier) @name @definition.variable)
+      ])
+      (list [
+        (identifier) @name @definition.variable
+        (list_splat (identifier) @name @definition.variable)
+      ])
+    ])
+    (list [
+      (identifier) @name @definition.variable
+      (list_splat (identifier) @name @definition.variable)
+      (tuple [
+        (identifier) @name @definition.variable
+        (list_splat (identifier) @name @definition.variable)
+      ])
+      (list [
+        (identifier) @name @definition.variable
+        (list_splat (identifier) @name @definition.variable)
+      ])
+    ])
+  ]))
 [
   (case_pattern (dotted_name . (identifier) @name @definition.variable .))
   (union_pattern (dotted_name . (identifier) @name @definition.variable .))

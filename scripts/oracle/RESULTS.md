@@ -439,3 +439,53 @@ the raw peak. A shard over the budget still runs alone.
 The `.scip` and `--trace` equal those of the `--jobs 1` run above, byte for byte, and the vault
 and the roots had the same git status before and after. The wall time falls from 7:19 to 3:30,
 and the peak memory rises from 9.5 to 16.0 GB, because the largest shards now run together.
+
+## Wrong-target fixes (branch wrongfix)
+
+Before is main 281a29f with the pin 9a584b8. After is the fork d39e253 and the change of
+`reconcile.rs`. The five eval corpora ran with the pydantic environment for `scip-python`. Mypy and
+rich ran with the empty one. The `scip-python` indexes are the same in both runs.
+
+| Corpus | Wrong targets | Raw recall |
+|---|---|---|
+| mypy | 13 -> 0 | 90.85% -> 91.85% (139,925 -> 141,463 of 154,016) |
+| rich | 0 -> 0 | 95.72% -> 95.85% |
+| agentman | 0 -> 0 | 98.32% -> 98.43% |
+| eventic | 3 -> 3 | 97.91% -> 97.91% |
+| argentic | 0 -> 0 | 98.32% -> 98.53% |
+| inferference | 0 -> 0 | 97.63% -> 97.79% |
+| pydantic-ai | 67 -> 44 | 94.01% -> 94.27% (150,991 -> 151,411 of 160,608) |
+
+The Loci oracle is unchanged: the Loci golden files and expectations pass in `scripts/verify.sh`.
+
+What changed:
+
+1. Store to an attribute (mypy 13, pydantic-ai 17). The path of a member reference can pop the
+   name of the reference at an assignment target that no declaration claims, as in
+   `response.model_name = self._model_name` with an unknown type of `response`. The path then
+   follows the assigned value, and its end is the right-hand side. `RawEnd.echo` records these
+   definition nodes. The reconciler drops such an end, also when no other end exists. All 13
+   mypy wrongs and the 17 of pydantic-ai are gone.
+2. Keyword capture in a class pattern. Main already binds the capture token (`a` in
+   `case P(x=a)`), and the uses of the capture resolve to it. The e2e test
+   `binding_forms_bind_the_right_token` now checks columns. The 29 wrongs of the audit are the
+   key tokens: `scip-python` links a key with the same name as its capture
+   (`capability_id=capability_id`) to the capture. Scippy links the key to the field, which is
+   right. They stay in the count, and no change is made. Skipped on purpose.
+3. Star target `*words, last = value` and the loop form `for a, *b in rows`: bound (fork rule and
+   `declarations.scm`). The 4 wrongs of `models/test.py` are gone.
+4. Tuple or list target of `with ... as (a, b)`, also nested or after a star: bound. The rules give
+   no value to the names, because the element of the value is not known.
+5. The `else` clause of a `try` statement sees the names of the body. Its edge has precedence 1,
+   so a name bound in the body shadows the binding before the statement. The case `{...} as x` and
+   the captures inside a dict pattern value already resolved on main (checked with a fixture).
+6. Work limit. A bounded search keeps its result for a plain name when it has a nearest binding
+   (no value flow) that is one declaration of the same document and no other nearest end
+   exists. The first try kept only local symbols: mypy 139,935 -> 141,219 matches, 0 new wrongs.
+   Allowing any declaration of the same document (parameters too) gave 141,463 in mypy, and
+   pydantic-ai 151,318 -> 151,411 over the first try, with the same wrongs and the same plausible
+   count. The shipped rule is the second.
+   Member references, keyword names, and the queue and arena limits stay bounded.
+
+The per-corpus gain without item 6 (mypy +10 matches, rich +11, agentman +7) comes from items 1
+to 5. The wall times of this run are no measure: other runs shared the machine.

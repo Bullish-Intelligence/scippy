@@ -36,10 +36,10 @@ percent-encoding = "2"
 
 # The resolver engine is our fork of Stack Graphs. All four crates use one pin.
 # To bump the pin, change the `rev` of the four lines below to the same commit.
-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "9a584b8a39a5c2685f92a2bc3ee74a301b3cb36e" }
-tree-sitter-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "9a584b8a39a5c2685f92a2bc3ee74a301b3cb36e" }
-tree-sitter-stack-graphs-python = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "9a584b8a39a5c2685f92a2bc3ee74a301b3cb36e" }
-tree-sitter-stack-graphs-typescript = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "9a584b8a39a5c2685f92a2bc3ee74a301b3cb36e" }
+stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "d39e25322e6c3596d7ec1ed30a274b94854e5de3" }
+tree-sitter-stack-graphs = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "d39e25322e6c3596d7ec1ed30a274b94854e5de3" }
+tree-sitter-stack-graphs-python = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "d39e25322e6c3596d7ec1ed30a274b94854e5de3" }
+tree-sitter-stack-graphs-typescript = { git = "https://github.com/Bullish-Intelligence/stack-graphs", rev = "d39e25322e6c3596d7ec1ed30a274b94854e5de3" }
 # Keep the same minor version as the fork.
 tree-sitter = "0.24"
 tree-sitter-python = "=0.23.5"

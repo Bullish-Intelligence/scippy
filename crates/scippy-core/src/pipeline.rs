@@ -1068,6 +1068,7 @@ fn index_native_pack(
                     place: Some(place),
                     syntax_type: None,
                     through: Vec::new(),
+                    echo: Vec::new(),
                 })
                 .collect();
             RawBinding {

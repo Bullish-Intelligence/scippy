@@ -6,7 +6,9 @@
 //!
 //! Policy for one reference location:
 //! 1. Reference nodes at one span merge. Their ends form one set.
-//! 2. A bounded search gives no target. It can lack ends.
+//! 2. A bounded search gives no target. It can lack ends. One exception: a work bound keeps the
+//!    result of a plain name when the nearest binding (rule 4) is a declaration of the same
+//!    document and the search found no other nearest end.
 //! 3. An end that joins to no declaration is a binding, such as an import alias or a module.
 //!    The final definition replaces it.
 //! 4. A reference prefers the nearest binding. The engine follows values, so a name can reach
@@ -222,12 +224,18 @@ pub(crate) struct Reconciled {
     pub targets: Vec<String>,
 }
 
+fn end_has_declaration(declarations: &DeclarationIndex, place: &Place) -> bool {
+    declarations.entry(place).is_some()
+}
+
 /// The ends of one definition node. Paths with different routes reach one node.
 struct EndGroup<'a> {
     place: Option<&'a Place>,
     syntax_type: &'a Option<String>,
     /// The `through` lists of the paths that reach the node.
     routes: Vec<&'a [Place]>,
+    /// The `echo` lists of the same paths.
+    echoes: Vec<&'a [Place]>,
 }
 
 fn group_ends(ends: &BTreeSet<RawEnd>) -> Vec<EndGroup<'_>> {
@@ -239,11 +247,13 @@ fn group_ends(ends: &BTreeSet<RawEnd>) -> Vec<EndGroup<'_>> {
                 if last.place == end.place.as_ref() && last.syntax_type == &end.syntax_type =>
             {
                 last.routes.push(&end.through);
+                last.echoes.push(&end.echo);
             }
             _ => groups.push(EndGroup {
                 place: end.place.as_ref(),
                 syntax_type: &end.syntax_type,
                 routes: vec![&end.through],
+                echoes: vec![&end.echo],
             }),
         }
     }
@@ -331,6 +341,20 @@ pub(crate) fn reconcile(
                 .filter(|(_, place, _)| !place.external)
                 .count();
 
+            // A path can pop the name of a member reference at a store, as `a.x = v`. The store
+            // token is a definition node. When no declaration claims it, the path carries the
+            // assigned value on, and its end is the value, not the field. This holds even when
+            // no other end exists. A store token that a declaration claims, as `self.x = v`,
+            // is a field and stays.
+            if is_member {
+                joined.retain(|(group, _, _)| {
+                    !group.echoes.iter().all(|echo| {
+                        echo.iter()
+                            .any(|store| !end_has_declaration(declarations, store))
+                    })
+                });
+            }
+
             // The nearest binding. A route is direct when it passes no definition of another
             // symbol. A member reference counts only the definitions of its own ends.
             let end_places: HashSet<&Place> = joined.iter().map(|(_, place, _)| *place).collect();
@@ -353,6 +377,7 @@ pub(crate) fn reconcile(
                 })
             };
             let nearest: Vec<_> = joined.iter().filter(|j| direct(j)).collect();
+            let had_nearest = !nearest.is_empty();
             let (kept, value_flow_dropped): (Vec<_>, usize) = if nearest.is_empty() {
                 (joined.iter().collect(), 0)
             } else {
@@ -380,10 +405,25 @@ pub(crate) fn reconcile(
                 }
             }
 
+            // A work bound stops the search before it has found every end. A plain name that
+            // already has a nearest binding in this document keeps that result. The oracle runs
+            // show that these results are as exact as the unbounded ones. A rebind that reads
+            // itself, as in `left, right = f(left, right)`, reaches this bound often.
+            let keeps_nearest = |bound: Bound| {
+                bound == Bound::Work
+                    && had_nearest
+                    && !through_value
+                    && usable.len() == 1
+                    && !foreign
+                    && kept
+                        .iter()
+                        .all(|(_, place, _)| !place.external && place.anchor.path == reference.path)
+            };
+
             let own = declarations.project.get(&reference).map(|e| &e.symbol);
             let outcome = if let Some(own) = own {
                 BindingOutcome::Resolved(own.clone())
-            } else if let Some(bound) = bound {
+            } else if let Some(bound) = bound.filter(|b| !keeps_nearest(*b)) {
                 BindingOutcome::Bounded(bound)
             } else if groups.is_empty() {
                 BindingOutcome::Unresolved(UnresolvedReason::NoPath)
@@ -442,6 +482,7 @@ mod tests {
             place: Some(place(path, start)),
             syntax_type: syntax.map(str::to_string),
             through: vec![],
+            echo: vec![],
         }
     }
 
@@ -596,6 +637,45 @@ mod tests {
     }
 
     #[test]
+    fn a_member_path_through_an_undeclared_store_has_no_target() {
+        // `item.kind = v` with an unknown type of `item`: the only path passes a store token
+        // that pops the name `kind`, and ends at the value. A member reference drops the end.
+        // The store can sit at the reference or at another place. A plain name keeps the end.
+        let reference = anchor("app.py", 50);
+        let run = |end: RawEnd, members: &HashSet<(u32, u32)>| {
+            reconcile(
+                &index(),
+                vec![binding(reference.clone(), vec![end], None)],
+                members,
+                &HashSet::new(),
+                &Targeting::accept_all(),
+            )
+            .remove(0)
+            .outcome
+        };
+        let echoed = |store: (&str, u32)| RawEnd {
+            echo: vec![place(store.0, store.1)],
+            ..end_through("a.py", 10, &[store])
+        };
+        let member = HashSet::from([(50, 53)]);
+        for store in [("app.py", 50), ("other.py", 7)] {
+            assert_eq!(
+                run(echoed(store), &member),
+                BindingOutcome::Unresolved(UnresolvedReason::NoDeclaration)
+            );
+            assert_eq!(
+                run(echoed(store), &HashSet::new()),
+                BindingOutcome::Resolved(sym(1))
+            );
+        }
+        // A store that a declaration claims is a field. The path stays.
+        assert_eq!(
+            run(echoed(("a.py", 0)), &member),
+            BindingOutcome::Resolved(sym(1))
+        );
+    }
+
+    #[test]
     fn a_reference_at_a_declaration_names_that_declaration() {
         // `self.x = v`: the receiver reaches two fields, but the token declares one of them.
         let reference = anchor("a.py", 0);
@@ -643,6 +723,54 @@ mod tests {
     }
 
     #[test]
+    fn a_work_bound_keeps_the_nearest_binding_in_the_same_document() {
+        let reference = anchor("a.py", 50);
+        let run = |ends: Vec<RawEnd>, members: &HashSet<(u32, u32)>| {
+            reconcile(
+                &index(),
+                vec![binding(reference.clone(), ends, Some(Bound::Work))],
+                members,
+                &HashSet::new(),
+                &Targeting::accept_all(),
+            )
+            .remove(0)
+            .outcome
+        };
+        let nearest = || end("a.py", 0, None);
+        // The nearest binding and a value-flow end that lies farther: the bound keeps the nearest.
+        assert_eq!(
+            run(
+                vec![nearest(), end_through("a.py", 10, &[("a.py", 0)])],
+                &HashSet::new()
+            ),
+            BindingOutcome::Resolved(sym(0))
+        );
+        // A member reference stays bounded.
+        assert_eq!(
+            run(vec![nearest()], &HashSet::from([(50, 53)])),
+            BindingOutcome::Bounded(Bound::Work)
+        );
+        // A binding in another document stays bounded.
+        assert_eq!(
+            run(vec![end("b.py", 0, None)], &HashSet::new()),
+            BindingOutcome::Bounded(Bound::Work)
+        );
+        // Two nearest bindings of different symbols stay bounded.
+        assert_eq!(
+            run(vec![nearest(), end("a.py", 10, None)], &HashSet::new()),
+            BindingOutcome::Bounded(Bound::Work)
+        );
+        // No nearest end: only value-flow ends exist, so the result stays bounded.
+        assert_eq!(
+            run(
+                vec![end_through("a.py", 10, &[("a.py", 0)])],
+                &HashSet::new()
+            ),
+            BindingOutcome::Bounded(Bound::Work)
+        );
+    }
+
+    #[test]
     fn a_bounded_search_gives_no_target() {
         let reference = anchor("app.py", 50);
         let ends = vec![end("a.py", 0, None)];
@@ -659,6 +787,7 @@ mod tests {
             place: None,
             syntax_type: Some("function".into()),
             through: vec![],
+            echo: vec![],
         }];
         assert_eq!(
             outcome(vec![binding(reference, ends, None)]),
@@ -691,6 +820,7 @@ mod tests {
             }),
             syntax_type: Some("function".into()),
             through: vec![],
+            echo: vec![],
         }
     }
 
@@ -893,6 +1023,7 @@ mod tests {
             }),
             syntax_type: None,
             through: vec![],
+            echo: vec![],
         }];
         assert_eq!(
             outcome(vec![binding(reference, ends, None)]),

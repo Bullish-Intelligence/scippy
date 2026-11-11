@@ -906,6 +906,107 @@ fn a_match_statement_binds_captures_and_references_its_names() {
 }
 
 #[test]
+fn binding_forms_bind_the_right_token() {
+    // The tests check columns, not only lines: `x` and `a` sit on one line in a class pattern.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("forms.py"),
+        "from dataclasses import dataclass
+
+
+@dataclass
+class P:
+    x: int
+    y: int
+
+
+def pattern(p):
+    match p:
+        case P(x=a, y=y):
+            return a + y
+    return 0
+
+
+def star(text):
+    *words, last = text.split(' ')
+    words = [w for w in words]
+    return words, last
+
+
+def star_loop(rows):
+    for head, *tail in rows:
+        print(tail)
+
+
+def pair(factory):
+    with factory() as (left, right):
+        left.read(right)
+    with factory() as [one, [two, *rest]]:
+        print(one, two, rest)
+
+
+def attempt(path):
+    try:
+        data = open(path)
+    except OSError:
+        data = None
+    else:
+        print(data)
+    return data
+
+
+def store(item, value):
+    item.kind = value
+",
+    )
+    .unwrap();
+    let indexed = index_at(dir.path());
+    let at = |context: &str, word: &str| indexed.find("forms.py", context, word);
+    let one = |context: &str, word: &str| {
+        let found = at(context, word);
+        assert_eq!(found.len(), 1, "{word} in {context}: {found:?}");
+        found[0].symbol.clone()
+    };
+    let defines = |context: &str, word: &str| {
+        let found = at(context, word);
+        assert!(
+            found.iter().any(|o| is_definition(o)),
+            "{word} in {context} is no definition"
+        );
+        found[0].symbol.clone()
+    };
+    // A class pattern: the key `x` references the field. The capture `a` is the definition.
+    assert_eq!(one("P(x=a", "x"), global("forms/P#x."));
+    assert_eq!(one(", y", "y"), global("forms/P#y."));
+    assert!(!is_definition(at("P(x=a", "x")[0]));
+    assert_eq!(one("return a +", "a"), defines("x=a", "a"));
+    assert_eq!(one("+ y\n", "y"), defines("y=y)", "y"));
+    assert_ne!(one("+ y\n", "y"), global("forms/P#y."));
+    // A star target binds. The comprehension reads the star target, the later rebind is another one.
+    assert_eq!(
+        one("[w for w in words", "words"),
+        defines("*words", "words")
+    );
+    assert_eq!(one("return words", "words"), defines("words = [w", "words"));
+    assert_eq!(one("words, last", "last"), defines(", last =", "last"));
+    assert_eq!(one("print(tail", "tail"), defines("*tail", "tail"));
+    // A tuple or list target of `with` binds each name, also in a nested list and after a star.
+    assert_eq!(one("left.read", "left"), defines("(left", "left"));
+    assert_eq!(one("read(right", "right"), defines("right)", "right"));
+    assert_eq!(one("print(one", "one"), defines("[one", "one"));
+    assert_eq!(one(", two,", "two"), defines("[two", "two"));
+    assert_eq!(one("two, rest", "rest"), defines("*rest", "rest"));
+    // A name that the `try` body binds is visible in `else`.
+    assert_eq!(one("print(data", "data"), defines("data = open", "data"));
+    // A store to an attribute of an unknown receiver names no other symbol.
+    assert!(
+        at("item.kind", "kind")
+            .iter()
+            .all(|o| o.symbol != global("forms/store().(value)"))
+    );
+}
+
+#[test]
 fn a_relative_import_with_three_dots_resolves() {
     let indexed = index("syntax");
     let at = |context, word| indexed.find("pkg/sub/deep/mod.py", context, word);
