@@ -207,6 +207,20 @@ The reconciler turns the engine paths of one reference into one target, or none.
   in `self.x = v` is the definition of the field, not a second reference.
 - A reference with no target gets no occurrence.
 
+### Narrowing by `isinstance`
+
+The Python rules narrow the receiver of `x.attr` inside a block that `isinstance(x, C)` guards.
+The receiver then has an instance of `C`, so `x.attr` reaches the members of `C` and its bases.
+The rules read the written guard only. They infer no type.
+
+- The body of an `if` or an `elif` is narrowed. So is the right side of `and`.
+- The rest of a block is narrowed after `assert isinstance(x, C)`, and after
+  `if not isinstance(x, C):` when its body ends with `return`, `raise`, `continue`, or `break`.
+- `x` is a name or an attribute of a name. `C` is a name, a dotted name, or a tuple of them.
+  A tuple gives one candidate for each class.
+- The narrowing stays inside the guarded statements. An inner guard shadows an outer guard.
+  The declared type still resolves a member that `C` lacks.
+
 ## Debugging an index
 
 `--trace FILE` writes one line for each reference location with its outcome:

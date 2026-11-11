@@ -489,3 +489,50 @@ What changed:
 
 The per-corpus gain without item 6 (mypy +10 matches, rich +11, agentman +7) comes from items 1
 to 5. The wall times of this run are no measure: other runs shared the machine.
+
+## isinstance narrowing (branch narrow)
+
+Before is main 5342f7c with the fork d39e253. After is the fork with the narrowing rules. The five
+eval corpora ran with the pydantic environment for `scip-python`. Mypy and rich ran with the empty
+one. The `scip-python` indexes are the same in both runs. Ambiguous is the count of
+`references ambiguous` in the Scippy report.
+
+| Corpus | Wrong targets | Raw recall | Ambiguous |
+|---|---|---|---|
+| mypy | 0 -> 0 | 91.85% -> 93.22% (141,463 -> 143,573 of 154,016) | 254 -> 363 |
+| rich | 0 -> 0 | 95.85% -> 95.88% | 22 -> 24 |
+| agentman | 0 -> 0 | 98.43% -> 98.44% | 2 -> 2 |
+| eventic | 3 -> 3 | 97.91% -> 98.61% | 16 -> 16 |
+| argentic | 0 -> 0 | 98.53% -> 98.55% | 16 -> 16 |
+| inferference | 0 -> 0 | 97.79% -> 97.79% | 12 -> 12 |
+| pydantic-ai | 44 -> 44 | 94.27% -> 94.94% (151,411 -> 152,487 of 160,608) | 182 -> 153 |
+
+The Loci oracle is unchanged: the Loci golden files and expectations pass in `scripts/verify.sh`.
+
+Cost, one `scippy index` run without `--trace`, base then new back to back. The machine ran other
+agents, so the user time of one build varies by 10% between runs.
+
+| Corpus | Wall time | User CPU (s) | Peak memory (GB) |
+|---|---|---|---|
+| mypy, run 1 | 8:13 -> 6:59 | 437.9 -> 410.3 | 5.21 -> 5.24 |
+| mypy, with trace (oracle run) | 7:24 -> 6:51 | 377.1 -> 402.0 | 5.22 -> 5.24 |
+| pydantic-ai | 3:53 -> 4:02 | 224.3 -> 234.1 | 5.16 -> 5.20 |
+| argentic (quiet machine) | 19.9 s -> 20.5 s | 19.5 -> 20.0 | 0.53 -> 0.55 |
+
+The time stays inside the noise on mypy and grows 4% on pydantic-ai.
+
+How it works. Each statement of a module or block has a narrowing scope that leads to the scope of
+the enclosing statement. A guard adds an edge from the scope of each narrowed statement. The edge
+pops the subject (`x`, or `a.b`) and pushes an instance of the class. The receiver of an attribute
+looks in the narrowing scope with a precedence above the other scopes. So the narrowed class
+shadows the declared type when it has the member, and the declared type resolves the rest. The
+scope belongs to the statements, not to the flow of bindings, so nothing leaks out of the guarded
+block. A tuple of classes gives one candidate for each class.
+
+A first build skipped `mypy/checkexpr.py` (9,000 positions lost). A comment in the argument list of
+`isinstance(...)` (`# type: ignore`) broke the pattern that defined the narrowing nodes, and a
+stanza then used an undefined node. Every `isinstance` call now defines the nodes. A fork test
+covers this case. Before the fix, the first build had 31 wrong targets and 86.17% recall on mypy (base 13 and 90.85%, main 281a29f).
+
+The mypy ambiguous count rises by 109. A tuple of classes gives one candidate for each class, so
+its members can be ambiguous. This run did not break the 109 down.
