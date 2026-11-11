@@ -403,3 +403,29 @@ error of a factor of two.
 The corpora without roots run as before. For mypy and pydantic-ai, the new build gives the same
 `.scip`, `--trace`, and report as main 75a50b7, byte for byte. A project with one shard runs on
 the calling thread.
+
+## Memory estimate and shard log (branch memfix)
+
+The old estimate (300 MiB plus 1,300 bytes for each source byte) was low for llama-infernal (3.9 GB
+against a peak of 8.08 GB) and high for pynix (8.4 GB against 4.2 GB). The new estimate is 300 MiB
+plus 3,000 bytes for each source byte. The second part stops at 10 GiB, above the largest peak.
+Llama-infernal now has 8.54 GB, pynix 11.05 GB, and semantic-views 10.6 GB.
+
+`SCIPPY_SHARD_LOG=1` no longer writes `/proc/self/clear_refs`. A sampling thread reads `VmRSS`
+every 10 ms and the log prints the start and the peak of each shard. `time -v` and an independent
+`VmHWM` sample now agree. The figures are for the whole process, so they are exact for one shard
+only with `--jobs 1`.
+
+| Run | Wall time | User CPU (s) | System CPU (s) | `time -v` peak (GB) | `VmHWM` sample (GB) |
+|---|---|---|---|---|---|
+| `--jobs 1`, `SCIPPY_SHARD_LOG=1` | 14:46 | 840.2 | 26.8 | 8.04 | 8.04 |
+| Default parallel | 7:19 | 916.3 | 28.6 | 9.48 | 9.48 |
+
+The `.scip`, `--trace`, and stdout of the two runs are byte-identical. The git status and HEAD of
+the vault and the roots were the same before and after each run.
+
+No shard grew past its estimate. Fifteen small shards have a peak above their estimate, because
+their start figure already holds the heap that earlier shards left (0.5 to 1.2 GB at the end of
+the run). The growth of each (peak minus start) stays under the estimate. The parallel run is
+slower than the run at b8b522b (4:21) because pynix and semantic-views now each take most of the
+12 GiB budget and run nearly alone.

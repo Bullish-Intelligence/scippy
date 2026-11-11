@@ -230,14 +230,16 @@ depend on the number of workers.
 - `--memory-budget SIZE` (for example `8G`) sets the memory that the running shards may use
   together. The default is half of the physical memory, and at most 16G.
 - The core estimates the peak of a shard from the source bytes that its engine loads: the shard
-  and the code that it imports. The estimate is 300 MiB plus 1.3 GiB for each MiB, and the second
-  part stops at 7.7 GiB.
+  and the code that it imports. The estimate is 300 MiB plus 3,000 bytes for each byte of loaded
+  source, and the second part stops at 10 GiB. The largest measured peak is 8.08 GB.
 - The scheduler starts the largest shards first. It starts a shard only when the estimates of the
   running shards and of this shard stay under the budget. A shard over the budget runs alone.
 - A project with one shard, or no shards, runs on the calling thread.
 
-Set `SCIPPY_SHARD_LOG=1` to print the estimate and the peak resident memory of each shard. The
-peak is exact only with `--jobs 1`. `scripts/oracle/RESULTS.md` has the measurements.
+Set `SCIPPY_SHARD_LOG=1` to print the estimate, the start resident memory, and the peak resident
+memory of each shard. A sampling thread reads `VmRSS` every 10 ms, so the log does not change the
+high-water mark that `time -v` reports. The figures are for the whole process: they are exact for
+one shard only with `--jobs 1`. With more jobs, they include the other running shards. `scripts/oracle/RESULTS.md` has the measurements.
 
 ## Accuracy oracle
 
