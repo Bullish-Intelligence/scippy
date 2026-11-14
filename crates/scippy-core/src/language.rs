@@ -585,6 +585,12 @@ pub trait NativeAnalysis: Send + Sync {
 
 /// What a pack supplies so that the core can extract, resolve, and identify.
 pub trait Analysis: Send + Sync {
+    /// Return a key for all runtime inputs that affect the file graph.
+    /// The executable, source, path, dialect, and resolver globals are already included.
+    /// Return `None` when the pack cannot supply a complete key.
+    fn graph_cache_key(&self) -> Option<String> {
+        None
+    }
     /// The Tree-sitter grammar.
     fn grammar(&self) -> tree_sitter::Language;
     /// The rules of the resolver.

@@ -205,6 +205,9 @@ impl LanguagePack for PythonPack {
 }
 
 impl Analysis for PythonPack {
+    fn graph_cache_key(&self) -> Option<String> {
+        Some("python".to_owned())
+    }
     fn grammar(&self) -> tree_sitter::Language {
         tree_sitter_python::LANGUAGE.into()
     }

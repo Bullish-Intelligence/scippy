@@ -13,6 +13,7 @@
 //! The binding engine, the parse trees, and the SCIP protobuf types stay private.
 
 mod bindings;
+mod cache;
 mod emit;
 mod error;
 mod extract;
@@ -25,6 +26,12 @@ mod project;
 mod reconcile;
 mod report;
 mod schedule;
+mod snapshot;
+
+pub use snapshot::{
+    AnalysisDiagnostic, AnalysisDocument, AnalysisOccurrence, AnalysisReference, AnalysisSnapshot,
+    AnalysisSymbol, Metalayer, PublishedView, ReferenceOutcome,
+};
 
 pub use emit::SymbolKind;
 pub use error::ScippyError;
@@ -61,6 +68,8 @@ pub struct IndexRequest {
     /// The shards run together only while the sum of their memory estimates stays under this
     /// many bytes. A shard over the budget runs alone.
     pub memory_budget: u64,
+    /// Reuse file graphs from this disposable SQLite cache.
+    pub graph_cache: Option<PathBuf>,
 }
 
 impl IndexRequest {
@@ -75,6 +84,7 @@ impl IndexRequest {
             trace: None,
             jobs: schedule::default_jobs(),
             memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
+            graph_cache: None,
         }
     }
 }
@@ -84,5 +94,14 @@ pub fn index_project(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<IndexReport, ScippyError> {
-    pipeline::run(request, languages)
+    pipeline::run(request, languages, false).map(|(report, _)| report)
+}
+
+/// Index the project and return the facts used to write the SCIP file.
+pub fn index_project_with_snapshot(
+    request: &IndexRequest,
+    languages: &[&dyn LanguagePack],
+) -> Result<(IndexReport, AnalysisSnapshot), ScippyError> {
+    let (report, snapshot) = pipeline::run(request, languages, true)?;
+    Ok((report, snapshot.expect("snapshot was requested")))
 }

@@ -9,12 +9,16 @@ name = "scippy_core"
 path = "src/lib.rs"
 
 [dependencies]
-stack-graphs.workspace = true
+stack-graphs = { workspace = true, features = ["serde"] }
 tree-sitter-stack-graphs.workspace = true
 tree-sitter.workspace = true
 streaming-iterator = "0.1"
 protobuf.workspace = true
 scip.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+rusqlite = { version = "0.28", features = ["bundled"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -249,6 +249,9 @@ impl LanguagePack for TypeScriptPack {
 }
 
 impl Analysis for TypeScriptPack {
+    fn graph_cache_key(&self) -> Option<String> {
+        Some("typescript".to_owned())
+    }
     fn grammar(&self) -> tree_sitter::Language {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     }

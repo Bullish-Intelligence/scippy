@@ -89,6 +89,10 @@ pub struct MultiTargetStats {
 /// A location holds one or more reference nodes of the engine.
 #[derive(Clone, Debug, Default)]
 pub struct IndexReport {
+    /// File graphs loaded from the cache.
+    pub graph_cache_hits: usize,
+    /// File graphs built while the cache was enabled.
+    pub graph_cache_misses: usize,
     pub files_discovered: usize,
     /// Files that became documents.
     pub files_indexed: usize,

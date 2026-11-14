@@ -26,6 +26,7 @@ use crate::reconcile::{
 };
 use crate::report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
 use crate::schedule;
+use crate::snapshot::{AnalysisReference, AnalysisSnapshot};
 
 /// The SCIP scheme of every symbol that Scippy writes.
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
@@ -79,7 +80,8 @@ struct Declared {
 pub(crate) fn run(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
-) -> Result<IndexReport, ScippyError> {
+    capture: bool,
+) -> Result<(IndexReport, Option<AnalysisSnapshot>), ScippyError> {
     // A pack that is not enabled for this project takes no part in the run.
     let languages: Vec<&dyn LanguagePack> = languages
         .iter()
@@ -124,6 +126,7 @@ pub(crate) fn run(
     let mut stubs: Vec<Document> = Vec::new();
     let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut trace = Vec::new();
+    let mut references = capture.then(Vec::new);
 
     for (index, pack) in languages.iter().enumerate() {
         let files: Vec<&FoundFile> = found.files.iter().filter(|f| f.pack == index).collect();
@@ -157,6 +160,7 @@ pub(crate) fn run(
                 request,
                 &mut report,
                 &mut trace,
+                &mut references,
             )?,
             Engine::Native(native) => index_native_pack(
                 *pack,
@@ -168,6 +172,7 @@ pub(crate) fn run(
                 request,
                 &mut report,
                 &mut trace,
+                &mut references,
             )?,
         };
         documents.extend(indexed.documents);
@@ -214,15 +219,18 @@ pub(crate) fn run(
         }
     }
 
-    emit::write_index(
-        IndexData {
-            project_root: found.root,
-            documents,
-            external_symbols: external_symbols.into_values().collect(),
-        },
-        &request.output,
-    )?;
-    Ok(report)
+    let data = IndexData {
+        project_root: found.root,
+        documents,
+        external_symbols: external_symbols.into_values().collect(),
+    };
+    let snapshot = if let Some(references) = references {
+        Some(AnalysisSnapshot::new(&data, references, &report)?)
+    } else {
+        None
+    };
+    emit::write_index(data, &request.output)?;
+    Ok((report, snapshot))
 }
 
 /// What one pack gives back: its documents and the external symbols that they reference.
@@ -244,6 +252,7 @@ fn index_pack(
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
+    references: &mut Option<Vec<AnalysisReference>>,
 ) -> Result<PackIndex, ScippyError> {
     let paths: Vec<ProjectRelativePath> = files.iter().map(|f| f.path.clone()).collect();
     let manifests = analysis
@@ -328,6 +337,8 @@ fn index_pack(
     for result in results {
         let out = result?;
         report.files_skipped += out.report.files_skipped;
+        report.graph_cache_hits += out.report.graph_cache_hits;
+        report.graph_cache_misses += out.report.graph_cache_misses;
         report.diagnostics.extend(out.report.diagnostics);
         docs.extend(out.docs);
         for binding in out.bindings {
@@ -447,6 +458,9 @@ fn index_pack(
         let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
         for r in &reconciled {
             count(report, r);
+            if let Some(references) = references {
+                references.push(AnalysisReference::from_reconciled(r));
+            }
             if let BindingOutcome::Resolved(symbol) = &r.outcome {
                 if let Some(info) = externals.get(symbol) {
                     report.references_external += 1;
@@ -550,7 +564,12 @@ fn index_shard(
     group: &[usize],
 ) -> Result<ShardOutput, ScippyError> {
     let mut report = IndexReport::default();
-    let mut engine = BindingEngine::new(cx.pack.id(), cx.analysis, compiled)?;
+    let mut engine = BindingEngine::new(
+        cx.pack.id(),
+        cx.analysis,
+        compiled,
+        cx.request.graph_cache.as_deref(),
+    )?;
     let mut docs: Vec<(usize, Doc)> = Vec::new();
     for &at in group {
         let file = cx.files[at];
@@ -607,6 +626,11 @@ fn index_shard(
             });
         }
     }
+    if let Some(error) = engine.cache_error.take() {
+        return Err(ScippyError::Storage(error));
+    }
+    report.graph_cache_hits = engine.cache_hits;
+    report.graph_cache_misses = engine.cache_misses;
     let bindings = engine.resolve(ResolveLimits::default());
     Ok(ShardOutput {
         docs,
@@ -898,6 +922,7 @@ fn index_native_pack(
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
+    references: &mut Option<Vec<AnalysisReference>>,
 ) -> Result<PackIndex, ScippyError> {
     // Read the files that the pack accepts.
     let mut sources: Vec<NativeSource> = Vec::with_capacity(files.len());
@@ -1102,6 +1127,9 @@ fn index_native_pack(
         );
         for r in &reconciled {
             count(report, r);
+            if let Some(references) = references {
+                references.push(AnalysisReference::from_reconciled(r));
+            }
             if let BindingOutcome::Resolved(symbol) = &r.outcome {
                 if let Some(info) = externals.get(symbol) {
                     report.references_external += 1;

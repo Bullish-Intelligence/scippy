@@ -32,6 +32,8 @@ pub enum ScippyError {
     Io { path: PathBuf, source: io::Error },
     /// Protobuf serialization failed.
     Serialize(String),
+    /// The graph cache or metalayer database failed.
+    Storage(String),
 }
 
 impl fmt::Display for ScippyError {
@@ -63,6 +65,7 @@ impl fmt::Display for ScippyError {
             Self::Strict { errors } => write!(f, "strict mode: {errors} error diagnostic(s)"),
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Serialize(message) => write!(f, "serialization failed: {message}"),
+            Self::Storage(message) => write!(f, "storage failed: {message}"),
         }
     }
 }

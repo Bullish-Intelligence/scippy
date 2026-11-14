@@ -25,6 +25,38 @@ Each root is a repository of its own. The core resolves the code of each root wi
 engine of its own, and frees the engine after the root. A root sees the code of another root
 only through its manifest. The roots run in parallel (see "Parallel roots").
 
+## Metalayer experiment
+
+Scippy can persist a structured snapshot and reuse file graphs in two SQLite databases.
+Create the database directory, then run:
+
+```sh
+mkdir -p ~/.local/state/scippy
+scippy index PROJECT_ROOT --output index.scip \
+  --graph-cache ~/.local/state/scippy/graphs.sqlite \
+  --metalayer ~/.local/state/scippy/metalayer.sqlite
+```
+
+The graph cache stores each code file's stack graph and partial paths. The cache key covers the
+source, path, resolver settings, dialect, and executable. A new executable gets a new cache.
+The cache is disposable. It can grow until the user deletes it.
+
+Every run still parses the files and resolves the references of every root. It also runs native
+packs over the project. A file graph cache hit saves graph construction, not resolution.
+The program prints the cache hit and build counts.
+
+The metalayer stores the latest snapshot, including declarations, references, outcomes,
+diagnostics, source text, and the SCIP index. It atomically replaces the snapshot and the
+file-to-symbol relation. Each resolved reference supports that relation. Removing one reference
+keeps a relation that another reference supports. `Metalayer::read` reads both in one transaction.
+`index_project_with_snapshot` returns the structured snapshot to a Rust caller.
+
+The database is an experiment. It has no stable entity IDs, history, watcher, or query language.
+It refuses to publish a run that skips files or reports an error. The SCIP output and database
+have separate writes. A failed publication can leave a new SCIP file beside an older snapshot.
+Stop edits during indexing. The indexer reads live files and does not capture a filesystem snapshot.
+Keep both databases outside the project and its roots. The snapshot contains source text.
+
 ## Manifests
 
 The Python pack reads the `pyproject.toml` of the project root and of each root.
@@ -51,8 +83,7 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 
 - `crates/scippy-core` holds the language-neutral pipeline: the project walker with its
   input limits, the extractor, the binding engine adapter, the reconciler, symbol identity,
-  byte-span positions, and the SCIP emitter. Only `index_project`, the request and report
-  types, and the language-pack contract are public.
+  byte-span positions, the SCIP emitter, and the experimental metalayer API.
 - `crates/scippy-cli` provides the `scippy` command.
 - `languages/python` holds the Python pack: the declaration query, the manifest reader, the
   import-root policy, and the symbol policy. It uses the binding rules of the fork.

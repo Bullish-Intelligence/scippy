@@ -3,8 +3,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-use scippy_core::{IndexRequest, InputLimits, LanguagePack, index_project};
+use clap::{Args, Parser, Subcommand};
+use scippy_core::{
+    IndexRequest, InputLimits, LanguagePack, Metalayer, index_project, index_project_with_snapshot,
+};
 use scippy_loci::LociPack;
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
@@ -19,40 +21,49 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Index a project and write a SCIP file.
-    Index {
-        /// The project root directory.
-        project_root: PathBuf,
-        /// The SCIP file to write.
-        #[arg(long, short, default_value = "index.scip")]
-        output: PathBuf,
-        /// Skip a file larger than this many bytes. The default is 1 MiB. In a vault, it is the
-        /// largest `note_max_bytes`.
-        #[arg(long)]
-        max_file_bytes: Option<u64>,
-        /// Stop to accept files when the accepted files would exceed this many bytes.
-        /// The default is 32 MiB. In a vault, it is 4 GiB.
-        #[arg(long)]
-        max_total_bytes: Option<u64>,
-        /// The package name of the symbols. Each language pack has a default.
-        #[arg(long)]
-        package_name: Option<String>,
-        /// The package version of the symbols.
-        #[arg(long)]
-        package_version: Option<String>,
-        /// Write one line for each reference location to this file. It is a debugging report.
-        #[arg(long)]
-        trace: Option<PathBuf>,
-        /// Index this many shards at once. The default is the number of logical cores. The output is
-        /// the same for every value.
-        #[arg(long, short, value_parser = clap::value_parser!(u64).range(1..))]
-        jobs: Option<u64>,
-        /// Start a shard only while the memory estimates of the running shards stay under this
-        /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is 50G.
-        #[arg(long, value_parser = parse_size)]
-        memory_budget: Option<u64>,
-    },
+    Index(Box<IndexArgs>),
     /// List the built-in language packs.
     Languages,
+}
+
+#[derive(Args)]
+struct IndexArgs {
+    /// The project root directory.
+    project_root: PathBuf,
+    /// The SCIP file to write.
+    #[arg(long, short, default_value = "index.scip")]
+    output: PathBuf,
+    /// Skip a file larger than this many bytes. The default is 1 MiB. In a vault, it is the
+    /// largest `note_max_bytes`.
+    #[arg(long)]
+    max_file_bytes: Option<u64>,
+    /// Stop to accept files when the accepted files would exceed this many bytes.
+    /// The default is 32 MiB. In a vault, it is 4 GiB.
+    #[arg(long)]
+    max_total_bytes: Option<u64>,
+    /// The package name of the symbols. Each language pack has a default.
+    #[arg(long)]
+    package_name: Option<String>,
+    /// The package version of the symbols.
+    #[arg(long)]
+    package_version: Option<String>,
+    /// Write one line for each reference location to this file. It is a debugging report.
+    #[arg(long)]
+    trace: Option<PathBuf>,
+    /// Index this many shards at once. The default is the number of logical cores. The output is
+    /// the same for every value.
+    #[arg(long, short, value_parser = clap::value_parser!(u64).range(1..))]
+    jobs: Option<u64>,
+    /// Start a shard only while the memory estimates of the running shards stay under this
+    /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is 50G.
+    #[arg(long, value_parser = parse_size)]
+    memory_budget: Option<u64>,
+    /// Reuse file graphs in this SQLite database.
+    #[arg(long)]
+    graph_cache: Option<PathBuf>,
+    /// Publish an experimental metalayer snapshot to this SQLite database.
+    #[arg(long)]
+    metalayer: Option<PathBuf>,
 }
 
 /// Read a size such as `8G`, `512M`, `64K`, or a plain number of bytes.
@@ -88,17 +99,20 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Command::Index {
-            project_root,
-            output,
-            max_file_bytes,
-            max_total_bytes,
-            package_name,
-            package_version,
-            trace,
-            jobs,
-            memory_budget,
-        } => {
+        Command::Index(args) => {
+            let IndexArgs {
+                project_root,
+                output,
+                max_file_bytes,
+                max_total_bytes,
+                package_name,
+                package_version,
+                trace,
+                jobs,
+                memory_budget,
+                graph_cache,
+                metalayer,
+            } = *args;
             // A pack that is active for the project can suggest limits. A flag wins over it.
             let suggested = registry()
                 .iter()
@@ -113,14 +127,28 @@ fn main() -> ExitCode {
             request.package_name = package_name;
             request.package_version = package_version;
             request.trace = trace;
+            request.graph_cache = graph_cache;
             if let Some(jobs) = jobs {
                 request.jobs = usize::try_from(jobs).unwrap_or(usize::MAX);
             }
             if let Some(bytes) = memory_budget {
                 request.memory_budget = bytes;
             }
-            match index_project(&request, &registry()) {
-                Ok(report) => {
+            let indexed = if let Some(path) = metalayer {
+                index_project_with_snapshot(&request, &registry()).and_then(|(report, snapshot)| {
+                    if !snapshot.complete {
+                        for diagnostic in &report.diagnostics {
+                            eprintln!("{diagnostic}");
+                        }
+                    }
+                    let revision = Metalayer::open(path)?.publish(&snapshot)?;
+                    Ok((report, Some(revision)))
+                })
+            } else {
+                index_project(&request, &registry()).map(|report| (report, None))
+            };
+            match indexed {
+                Ok((report, revision)) => {
                     for diagnostic in &report.diagnostics {
                         eprintln!("{diagnostic}");
                     }
@@ -156,6 +184,15 @@ fn main() -> ExitCode {
                     }
                     for (kind, n) in &report.unjoined_end_kinds {
                         println!("unjoined end {kind}: {n}");
+                    }
+                    if request.graph_cache.is_some() {
+                        println!(
+                            "file graphs: {} cached, {} built",
+                            report.graph_cache_hits, report.graph_cache_misses
+                        );
+                    }
+                    if let Some(revision) = revision {
+                        println!("metalayer revision: {revision}");
                     }
                     ExitCode::SUCCESS
                 }

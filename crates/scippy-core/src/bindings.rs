@@ -17,6 +17,7 @@ use stack_graphs::stitching::{
 };
 use tree_sitter_stack_graphs::{BuildError, NoCancellation, StackGraphLanguage, Variables};
 
+use crate::cache::{self, CachedGraph, GraphCache};
 use crate::error::ScippyError;
 use crate::extract::SourceAnchor;
 use crate::language::{Analysis, BindingRules, SupportFile};
@@ -149,6 +150,8 @@ impl CompiledRules {
 }
 
 pub(crate) struct BindingEngine {
+    pack: &'static str,
+    cache_key: Option<String>,
     /// The compiled rules. The shards share them.
     languages: Rc<Vec<StackGraphLanguage>>,
     graph: StackGraph,
@@ -159,6 +162,10 @@ pub(crate) struct BindingEngine {
     external: HashSet<String>,
     /// The pack asks for shadow aware similar path detection in every stitcher.
     shadow_aware: bool,
+    cache: Option<GraphCache>,
+    pub cache_hits: usize,
+    pub cache_misses: usize,
+    pub cache_error: Option<String>,
 }
 
 impl BindingEngine {
@@ -167,10 +174,15 @@ impl BindingEngine {
         pack: &'static str,
         analysis: &dyn Analysis,
         compiled: &CompiledRules,
+        cache_path: Option<&std::path::Path>,
     ) -> Result<Self, ScippyError> {
         let rules = analysis.binding_rules();
         let bad = |reason: String| ScippyError::Pack { pack, reason };
+        let cache_key = analysis.graph_cache_key();
+        let cache_enabled = cache_key.is_some();
         let mut engine = Self {
+            pack,
+            cache_key,
             languages: Rc::clone(&compiled.languages),
             graph: StackGraph::new(),
             partials: PartialPaths::new(),
@@ -178,6 +190,14 @@ impl BindingEngine {
             files: Vec::new(),
             external: HashSet::new(),
             shadow_aware: rules.shadow_aware_similar_paths,
+            cache: cache_path
+                .filter(|_| cache_enabled)
+                .map(GraphCache::open)
+                .transpose()
+                .map_err(ScippyError::Storage)?,
+            cache_hits: 0,
+            cache_misses: 0,
+            cache_error: None,
         };
         engine.load_assets(&rules).map_err(bad)?;
         Ok(engine)
@@ -208,7 +228,7 @@ impl BindingEngine {
                     &NoCancellation,
                 )
                 .map_err(|e| format!("the asset source {} fails to build: {e}", asset.path))?;
-            self.add_partial_paths(file);
+            let _ = self.add_partial_paths(file);
             self.external.insert(asset.name);
         }
         Ok(())
@@ -227,6 +247,69 @@ impl BindingEngine {
         globals: &[(String, String)],
         resolve: bool,
     ) -> Result<(), BuildFailure> {
+        let cache_key = if self.cache.is_some() {
+            match cache::key(
+                self.pack,
+                self.cache_key
+                    .as_deref()
+                    .expect("cache requires a pack key"),
+                path.as_str(),
+                source,
+                globals,
+                dialect,
+                self.shadow_aware,
+            ) {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    self.cache_error = Some(error.clone());
+                    return Err(BuildFailure { message: error });
+                }
+            }
+        } else {
+            None
+        };
+        if let (Some(cache), Some(key)) = (&self.cache, &cache_key) {
+            match cache.get(key) {
+                Ok(Some(cached)) => {
+                    let loaded = cached
+                        .graph
+                        .load_into(&mut self.graph)
+                        .map_err(|e| e.to_string())
+                        .and_then(|()| {
+                            for path in &cached.paths {
+                                let path = path
+                                    .to_partial_path(&mut self.graph, &mut self.partials)
+                                    .map_err(|e| e.to_string())?;
+                                self.database.add_partial_path(
+                                    &self.graph,
+                                    &mut self.partials,
+                                    path,
+                                );
+                            }
+                            Ok(())
+                        });
+                    if let Err(error) = loaded {
+                        self.cache_error = Some(error.clone());
+                        return Err(BuildFailure { message: error });
+                    }
+                    let Some(file) = self.graph.get_file(path.as_str()) else {
+                        let error = format!("cached graph has no file {}", path.as_str());
+                        self.cache_error = Some(error.clone());
+                        return Err(BuildFailure { message: error });
+                    };
+                    if resolve {
+                        self.files.push((file, path.clone()));
+                    }
+                    self.cache_hits += 1;
+                    return Ok(());
+                }
+                Ok(None) => self.cache_misses += 1,
+                Err(error) => {
+                    self.cache_error = Some(error.clone());
+                    return Err(BuildFailure { message: error });
+                }
+            }
+        }
         let file = self.graph.get_or_create_file(path.as_str());
         let mut variables = Variables::new();
         let fail = |message: String| BuildFailure { message };
@@ -256,7 +339,27 @@ impl BindingEngine {
             Ok(Err(error)) => return Err(fail(error.to_string())),
             Err(_) => return Err(fail("the rules panicked".into())),
         }
-        self.add_partial_paths(file);
+        let paths = self.add_partial_paths(file);
+        if let (Some(cache), Some(key), Some(paths)) = (&self.cache, &cache_key, paths) {
+            let graph = stack_graphs::serde::StackGraph::from_graph_filter(
+                &self.graph,
+                &|_: &StackGraph, candidate: &Handle<File>| *candidate == file,
+            );
+            let paths = paths
+                .iter()
+                .map(|p| {
+                    stack_graphs::serde::PartialPath::from_partial_path(
+                        &self.graph,
+                        &mut self.partials,
+                        p,
+                    )
+                })
+                .collect();
+            if let Err(error) = cache.put(key, &CachedGraph { graph, paths }) {
+                self.cache_error = Some(error.clone());
+                return Err(BuildFailure { message: error });
+            }
+        }
         if resolve {
             self.files.push((file, path.clone()));
         }
@@ -295,11 +398,11 @@ impl BindingEngine {
             Ok(Err(error)) => return Err(fail(error.to_string())),
             Err(_) => return Err(fail("the analyzer panicked".into())),
         }
-        self.add_partial_paths(file);
+        let _ = self.add_partial_paths(file);
         Ok(())
     }
 
-    fn add_partial_paths(&mut self, file: Handle<File>) {
+    fn add_partial_paths(&mut self, file: Handle<File>) -> Option<Vec<PartialPath>> {
         let mut paths: Vec<PartialPath> = Vec::new();
         let result = ForwardPartialPathStitcher::find_minimal_partial_path_set_in_file(
             &self.graph,
@@ -310,10 +413,13 @@ impl BindingEngine {
             |_, _, path| paths.push(path.clone()),
         );
         if result.is_ok() {
-            for path in paths {
+            for path in &paths {
                 self.database
-                    .add_partial_path(&self.graph, &mut self.partials, path);
+                    .add_partial_path(&self.graph, &mut self.partials, path.clone());
             }
+            Some(paths)
+        } else {
+            None
         }
     }
 
