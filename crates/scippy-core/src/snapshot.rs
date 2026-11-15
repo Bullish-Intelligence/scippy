@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::bindings::Bound;
@@ -186,6 +186,11 @@ impl AnalysisSnapshot {
     }
 }
 
+/// Marks a database file as a Scippy read model. The bytes spell "SCPY".
+const APPLICATION_ID: i32 = 0x5343_5059;
+/// The storage format version that this code reads and writes.
+const SCHEMA_VERSION: i32 = 1;
+
 /// A local, experimental read model. Each publication replaces the complete snapshot.
 pub struct Metalayer {
     db: Connection,
@@ -193,14 +198,57 @@ pub struct Metalayer {
 
 impl Metalayer {
     /// Open or create the read model.
+    ///
+    /// The database has no migrations. Delete a database with another format and rebuild it.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ScippyError> {
-        let db = Connection::open(path).map_err(storage)?;
+        let mut db = Connection::open(path).map_err(storage)?;
         db.busy_timeout(Duration::from_secs(30)).map_err(storage)?;
-        db.execute_batch("PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, value BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS reference_support (path TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, target TEXT NOT NULL, PRIMARY KEY(path,start,end,target));
-            CREATE TABLE IF NOT EXISTS file_reference (path TEXT NOT NULL, target TEXT NOT NULL, supports INTEGER NOT NULL, PRIMARY KEY(path,target));")
+        db.execute_batch("PRAGMA journal_mode=WAL;")
             .map_err(storage)?;
+        // An immediate transaction makes concurrent first opens take turns.
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let application_id: i32 = tx
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
+            .map_err(storage)?;
+        let version: i32 = tx
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(storage)?;
+        let has_tables: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(storage)?;
+        if application_id == 0 && version == 0 {
+            if has_tables {
+                return Err(ScippyError::Storage(
+                    "the metalayer database has the old unversioned format; delete it and rebuild it"
+                        .into(),
+                ));
+            }
+            tx.execute_batch(&format!(
+                "PRAGMA application_id={APPLICATION_ID}; PRAGMA user_version={SCHEMA_VERSION};"
+            ))
+            .map_err(storage)?;
+        } else if application_id != APPLICATION_ID {
+            return Err(ScippyError::Storage(
+                "the file is not a Scippy metalayer database".into(),
+            ));
+        } else if version != SCHEMA_VERSION {
+            return Err(ScippyError::Storage(format!(
+                "the metalayer database has format version {version}, but this build reads version {SCHEMA_VERSION}; delete it and rebuild it"
+            )));
+        }
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, value BLOB NOT NULL);
+            CREATE TABLE IF NOT EXISTS reference_support (path TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, target TEXT NOT NULL, PRIMARY KEY(path,start,end,target));
+            CREATE TABLE IF NOT EXISTS file_reference (path TEXT NOT NULL, target TEXT NOT NULL, supports INTEGER NOT NULL, PRIMARY KEY(path,target));",
+        )
+        .map_err(storage)?;
+        tx.commit().map_err(storage)?;
         Ok(Self { db })
     }
 
@@ -213,7 +261,11 @@ impl Metalayer {
         }
         let value =
             serde_json::to_vec(snapshot).map_err(|e| ScippyError::Storage(e.to_string()))?;
-        let tx = self.db.transaction().map_err(storage)?;
+        // An immediate transaction takes the write lock before it reads the revision.
+        let tx = self
+            .db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
         let previous: i64 = tx
             .query_row("SELECT revision FROM snapshot WHERE id=1", [], |r| r.get(0))
             .optional()
@@ -243,35 +295,6 @@ impl Metalayer {
         .map_err(storage)?;
         tx.commit().map_err(storage)?;
         Ok(revision)
-    }
-
-    /// Read the latest complete snapshot.
-    pub fn latest(&self) -> Result<Option<(i64, AnalysisSnapshot)>, ScippyError> {
-        let row: Option<(i64, Vec<u8>)> = self
-            .db
-            .query_row("SELECT revision,value FROM snapshot WHERE id=1", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .optional()
-            .map_err(storage)?;
-        row.map(|(revision, bytes)| {
-            serde_json::from_slice(&bytes)
-                .map(|s| (revision, s))
-                .map_err(|e| ScippyError::Storage(e.to_string()))
-        })
-        .transpose()
-    }
-
-    /// List each file-to-symbol relationship and its number of supporting references.
-    pub fn file_references(&self) -> Result<Vec<(String, String, usize)>, ScippyError> {
-        let mut statement = self
-            .db
-            .prepare("SELECT path,target,supports FROM file_reference ORDER BY path,target")
-            .map_err(storage)?;
-        let rows = statement
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .map_err(storage)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(storage)
     }
 
     /// Read the snapshot and its relationships in one database transaction.
@@ -355,6 +378,128 @@ mod tests {
         let mut incomplete = snapshot("third");
         incomplete.complete = false;
         assert!(layer.publish(&incomplete).is_err());
-        assert_eq!(layer.latest().unwrap().unwrap().0, 1);
+        assert_eq!(layer.read().unwrap().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn eight_concurrent_publishers_all_succeed_with_distinct_revisions() {
+        use std::sync::{Arc, Barrier};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layer.sqlite");
+        let mut layers: Vec<_> = (0..8).map(|_| Metalayer::open(&path).unwrap()).collect();
+        let barrier = Arc::new(Barrier::new(8));
+        let handles: Vec<_> = layers
+            .drain(..)
+            .enumerate()
+            .map(|(i, mut layer)| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let snapshot = snapshot(&format!("t{i}"));
+                    barrier.wait();
+                    layer.publish(&snapshot)
+                })
+            })
+            .collect();
+        let mut revisions: Vec<i64> = handles
+            .into_iter()
+            .map(|h| h.join().unwrap().unwrap())
+            .collect();
+        revisions.sort_unstable();
+        assert_eq!(revisions, (1..=8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_reader_sees_one_revision_while_a_writer_publishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layer.sqlite");
+        let mut reader = Metalayer::open(&path).unwrap();
+        let mut writer = Metalayer::open(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            for i in 0..100 {
+                writer.publish(&snapshot(&format!("t{i}"))).unwrap();
+            }
+        });
+        let mut last = 0;
+        while last < 100 {
+            let Some(view) = reader.read().unwrap() else {
+                continue;
+            };
+            let expected = format!("t{}", view.revision - 1);
+            assert_eq!(
+                view.snapshot.references[0].outcome,
+                ReferenceOutcome::Resolved(expected.clone())
+            );
+            assert_eq!(view.file_references, vec![("a.py".into(), expected, 1)]);
+            last = view.revision;
+        }
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_new_database_gets_the_application_id_and_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layer.sqlite");
+        drop(Metalayer::open(&path).unwrap());
+        let db = Connection::open(&path).unwrap();
+        let id: i32 = db
+            .query_row("PRAGMA application_id", [], |r| r.get(0))
+            .unwrap();
+        let version: i32 = db
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!((id, version), (APPLICATION_ID, SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn reopening_a_current_database_keeps_its_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layer.sqlite");
+        Metalayer::open(&path)
+            .unwrap()
+            .publish(&snapshot("a"))
+            .unwrap();
+        let mut layer = Metalayer::open(&path).unwrap();
+        assert_eq!(layer.read().unwrap().unwrap().revision, 1);
+    }
+
+    fn open_error(path: &Path) -> String {
+        match Metalayer::open(path) {
+            Err(ScippyError::Storage(message)) => message,
+            _ => panic!("the open must fail with a storage error"),
+        }
+    }
+
+    #[test]
+    fn a_newer_database_version_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layer.sqlite");
+        drop(Metalayer::open(&path).unwrap());
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA user_version=99;")
+            .unwrap();
+        assert!(open_error(&path).contains("version 99"));
+    }
+
+    #[test]
+    fn a_database_with_another_application_id_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("other.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA application_id=1234; PRAGMA user_version=1;")
+            .unwrap();
+        assert!(open_error(&path).contains("not a Scippy"));
+    }
+
+    #[test]
+    fn an_unversioned_database_with_tables_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE snapshot (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL, value BLOB NOT NULL);")
+            .unwrap();
+        assert!(open_error(&path).contains("delete it and rebuild"));
     }
 }

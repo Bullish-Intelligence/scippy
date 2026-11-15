@@ -87,10 +87,10 @@ fn cli_publishes_and_keeps_the_last_revision_on_a_parse_failure() {
     assert_eq!(
         Metalayer::open(database)
             .unwrap()
-            .latest()
+            .read()
             .unwrap()
             .unwrap()
-            .0,
+            .revision,
         2
     );
 }
@@ -236,8 +236,10 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     );
     assert_eq!(layer.publish(&initial).unwrap(), 1);
     let a = layer
-        .file_references()
+        .read()
         .unwrap()
+        .unwrap()
+        .file_references
         .into_iter()
         .find(|(path, target, _)| path == "use.py" && target.contains("A#value"))
         .unwrap();
@@ -246,7 +248,8 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     let (warm, unchanged) = check(1);
     assert_eq!(warm.graph_cache_misses, 0);
     assert!(warm.graph_cache_hits >= 7);
-    assert_eq!(layer.latest().unwrap().unwrap(), (1, unchanged));
+    let view = layer.read().unwrap().unwrap();
+    assert_eq!((view.revision, view.snapshot), (1, unchanged));
 
     write(
         &root,
@@ -266,8 +269,10 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     assert_eq!(layer.publish(&next).unwrap(), 2);
     assert!(
         !layer
-            .file_references()
+            .read()
             .unwrap()
+            .unwrap()
+            .file_references
             .iter()
             .any(|(path, target, _)| path == "use.py" && target.contains("A#value"))
     );
@@ -280,8 +285,10 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     let (_, one) = check(3);
     layer.publish(&one).unwrap();
     let b = layer
-        .file_references()
+        .read()
         .unwrap()
+        .unwrap()
+        .file_references
         .into_iter()
         .find(|(path, target, _)| path == "use.py" && target.contains("B#value"))
         .unwrap();
@@ -298,20 +305,23 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     layer.publish(&removed).unwrap();
     assert!(
         !layer
-            .file_references()
+            .read()
             .unwrap()
+            .unwrap()
+            .file_references
             .iter()
             .any(|(path, target, _)| path == "use.py" && target.contains("B#value"))
     );
-    assert_eq!(layer.latest().unwrap().unwrap(), (4, removed));
+    let view = layer.read().unwrap().unwrap();
+    assert_eq!((view.revision, view.snapshot), (4, removed));
     drop(layer);
     assert_eq!(
         Metalayer::open(&database)
             .unwrap()
-            .latest()
+            .read()
             .unwrap()
             .unwrap()
-            .0,
+            .revision,
         4
     );
 }
