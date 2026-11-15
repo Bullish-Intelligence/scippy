@@ -40,6 +40,9 @@ scippy index PROJECT_ROOT --output index.scip \
 The graph cache stores each code file's stack graph and partial paths. The cache key covers the
 source, path, resolver settings, dialect, and executable. A new executable gets a new cache.
 The cache is disposable. It can grow until the user deletes it.
+Each row carries a checksum of its key and value. A row that fails the check is rebuilt.
+A cache error turns the cache off for the rest of the run. The run prints one warning and goes on
+without the cache. A damaged cache file moves to `<path>.bad`.
 
 Every run still parses the files and resolves the references of every root. It also runs native
 packs over the project. A file graph cache hit saves graph construction, not resolution.

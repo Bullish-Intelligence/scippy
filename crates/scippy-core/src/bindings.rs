@@ -8,6 +8,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use stack_graphs::arena::Handle;
 use stack_graphs::graph::{File, Node, SourceInfo, StackGraph, Symbol};
@@ -17,7 +18,7 @@ use stack_graphs::stitching::{
 };
 use tree_sitter_stack_graphs::{BuildError, NoCancellation, StackGraphLanguage, Variables};
 
-use crate::cache::{self, CachedGraph, GraphCache};
+use crate::cache::{CacheGate, CachedGraph, GraphCache};
 use crate::error::ScippyError;
 use crate::extract::SourceAnchor;
 use crate::language::{Analysis, BindingRules, SupportFile};
@@ -163,9 +164,10 @@ pub(crate) struct BindingEngine {
     /// The pack asks for shadow aware similar path detection in every stitcher.
     shadow_aware: bool,
     cache: Option<GraphCache>,
+    /// The run-wide cache state. A cache failure turns the cache off for all shards.
+    gate: Arc<CacheGate>,
     pub cache_hits: usize,
     pub cache_misses: usize,
-    pub cache_error: Option<String>,
 }
 
 impl BindingEngine {
@@ -174,7 +176,7 @@ impl BindingEngine {
         pack: &'static str,
         analysis: &dyn Analysis,
         compiled: &CompiledRules,
-        cache_path: Option<&std::path::Path>,
+        gate: &Arc<CacheGate>,
     ) -> Result<Self, ScippyError> {
         let rules = analysis.binding_rules();
         let bad = |reason: String| ScippyError::Pack { pack, reason };
@@ -190,14 +192,10 @@ impl BindingEngine {
             files: Vec::new(),
             external: HashSet::new(),
             shadow_aware: rules.shadow_aware_similar_paths,
-            cache: cache_path
-                .filter(|_| cache_enabled)
-                .map(GraphCache::open)
-                .transpose()
-                .map_err(ScippyError::Storage)?,
+            cache: if cache_enabled { gate.open() } else { None },
+            gate: Arc::clone(gate),
             cache_hits: 0,
             cache_misses: 0,
-            cache_error: None,
         };
         engine.load_assets(&rules).map_err(bad)?;
         Ok(engine)
@@ -247,8 +245,13 @@ impl BindingEngine {
         globals: &[(String, String)],
         resolve: bool,
     ) -> Result<(), BuildFailure> {
-        let cache_key = if self.cache.is_some() {
-            match cache::key(
+        // Another shard may have turned the cache off.
+        if !self.gate.is_on() {
+            self.cache = None;
+        }
+        let mut cache_key = None;
+        if let Some(cache) = &self.cache {
+            match cache.key(
                 self.pack,
                 self.cache_key
                     .as_deref()
@@ -259,15 +262,13 @@ impl BindingEngine {
                 dialect,
                 self.shadow_aware,
             ) {
-                Ok(key) => Some(key),
+                Ok(key) => cache_key = Some(key),
                 Err(error) => {
-                    self.cache_error = Some(error.clone());
-                    return Err(BuildFailure { message: error });
+                    self.gate.fail(&error);
+                    self.cache = None;
                 }
             }
-        } else {
-            None
-        };
+        }
         if let (Some(cache), Some(key)) = (&self.cache, &cache_key) {
             match cache.get(key) {
                 Ok(Some(cached)) => {
@@ -288,13 +289,17 @@ impl BindingEngine {
                             }
                             Ok(())
                         });
+                    // A failed load can leave part of the file in the graph. The engine cannot
+                    // rebuild the file, so it reports the file as failed.
                     if let Err(error) = loaded {
-                        self.cache_error = Some(error.clone());
+                        self.gate.fail(&error);
+                        self.cache = None;
                         return Err(BuildFailure { message: error });
                     }
                     let Some(file) = self.graph.get_file(path.as_str()) else {
                         let error = format!("cached graph has no file {}", path.as_str());
-                        self.cache_error = Some(error.clone());
+                        self.gate.fail(&error);
+                        self.cache = None;
                         return Err(BuildFailure { message: error });
                     };
                     if resolve {
@@ -305,8 +310,9 @@ impl BindingEngine {
                 }
                 Ok(None) => self.cache_misses += 1,
                 Err(error) => {
-                    self.cache_error = Some(error.clone());
-                    return Err(BuildFailure { message: error });
+                    self.gate.fail(&error);
+                    self.cache = None;
+                    cache_key = None;
                 }
             }
         }
@@ -356,8 +362,8 @@ impl BindingEngine {
                 })
                 .collect();
             if let Err(error) = cache.put(key, &CachedGraph { graph, paths }) {
-                self.cache_error = Some(error.clone());
-                return Err(BuildFailure { message: error });
+                self.gate.fail(&error);
+                self.cache = None;
             }
         }
         if resolve {

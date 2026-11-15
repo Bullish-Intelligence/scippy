@@ -400,3 +400,155 @@ fn a_failed_publish_keeps_the_old_output_file() {
     assert!(!failed.status.success());
     assert_eq!(fs::read(&output).unwrap(), b"old index");
 }
+
+fn write_files(root: &Path, count: usize) {
+    for n in 0..count {
+        write(
+            root,
+            &format!("m{n}.py"),
+            &format!("def f{n}():\n    return {n}\n\nf{n}()\n"),
+        );
+    }
+}
+
+fn run_cli(root: &Path, output: &Path, cache: Option<&Path>) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    command.args(["index", root.to_str().unwrap(), "--output"]);
+    command.arg(output);
+    if let Some(cache) = cache {
+        command.arg("--graph-cache").arg(cache);
+    }
+    command.output().unwrap()
+}
+
+fn warnings(output: &std::process::Output) -> usize {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| line.contains("graph cache"))
+        .count()
+}
+
+/// Run with a broken cache. The run must exit 0, warn once, and match a run with no cache.
+fn check_broken_cache(damage: impl Fn(&Path)) {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    fs::create_dir(&root).unwrap();
+    write_files(&root, 40);
+    let cache = scratch.path().join("graphs.sqlite");
+    let clean = scratch.path().join("clean.scip");
+    assert!(run_cli(&root, &clean, None).status.success());
+    let warm = run_cli(&root, &scratch.path().join("warm.scip"), Some(&cache));
+    assert!(warm.status.success());
+    assert_eq!(warnings(&warm), 0);
+    damage(&cache);
+    let broken = scratch.path().join("broken.scip");
+    let out = run_cli(&root, &broken, Some(&cache));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        warnings(&out),
+        1,
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::read(clean).unwrap(), fs::read(broken).unwrap());
+}
+
+#[test]
+fn a_truncated_cache_gives_one_warning_and_the_clean_output() {
+    check_broken_cache(|cache| {
+        let size = fs::metadata(cache).unwrap().len();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(cache)
+            .unwrap()
+            .set_len(size / 2)
+            .unwrap();
+    });
+}
+
+#[test]
+fn a_garbage_cache_moves_aside_and_gives_the_clean_output() {
+    check_broken_cache(|cache| fs::write(cache, vec![0x5a; 8192]).unwrap());
+}
+
+#[test]
+fn a_directory_as_the_cache_gives_one_warning_and_the_clean_output() {
+    check_broken_cache(|cache| {
+        fs::remove_file(cache).unwrap();
+        fs::create_dir(cache).unwrap();
+    });
+}
+
+#[test]
+fn swapped_cache_rows_are_rebuilt_and_give_the_clean_output() {
+    for swap_checksums in [false, true] {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("project");
+        fs::create_dir(&root).unwrap();
+        write_files(&root, 6);
+        let cache = scratch.path().join("graphs.sqlite");
+        let clean = scratch.path().join("clean.scip");
+        assert!(run_cli(&root, &clean, None).status.success());
+        assert!(
+            run_cli(&root, &scratch.path().join("warm.scip"), Some(&cache))
+                .status
+                .success()
+        );
+        let db = rusqlite::Connection::open(&cache).unwrap();
+        let rows: Vec<(String, Vec<u8>, String)> = db
+            .prepare("SELECT key, value, sum FROM file_graph_v2 ORDER BY key LIMIT 2")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows.len(), 2);
+        for (from, to) in [(0, 1), (1, 0)] {
+            let sum = &rows[if swap_checksums { from } else { to }].2;
+            db.execute(
+                "UPDATE file_graph_v2 SET value = ?1, sum = ?2 WHERE key = ?3",
+                rusqlite::params![rows[from].1, sum, rows[to].0],
+            )
+            .unwrap();
+        }
+        drop(db);
+        let swapped = scratch.path().join("swapped.scip");
+        let out = run_cli(&root, &swapped, Some(&cache));
+        assert!(out.status.success());
+        assert_eq!(warnings(&out), 0);
+        assert!(String::from_utf8_lossy(&out.stdout).contains("file graphs: 4 cached, 2 built"));
+        assert_eq!(fs::read(clean).unwrap(), fs::read(swapped).unwrap());
+    }
+}
+
+#[test]
+fn a_locked_cache_turns_the_cache_off_after_one_timeout() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    fs::create_dir(&root).unwrap();
+    write_files(&root, 8);
+    let cache = scratch.path().join("graphs.sqlite");
+    let start = std::time::Instant::now();
+    let (_, clean) = run(&root, scratch.path().join("clean.scip"), None);
+    let clean_time = start.elapsed();
+    run(&root, scratch.path().join("warm.scip"), Some(cache.clone()));
+    let lock = rusqlite::Connection::open(&cache).unwrap();
+    lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let mut request = IndexRequest::new(&root, scratch.path().join("locked.scip"));
+    request.graph_cache = Some(cache.clone());
+    request.graph_cache_timeout = std::time::Duration::from_secs(1);
+    let start = std::time::Instant::now();
+    let (_, locked) =
+        index_project_with_snapshot(&request, &[&PythonPack, &TypeScriptPack, &LociPack]).unwrap();
+    // Eight files at one timeout each would add eight seconds.
+    assert!(start.elapsed() < clean_time + std::time::Duration::from_secs(4));
+    assert_eq!(locked, clean);
+    assert_eq!(
+        fs::read(scratch.path().join("clean.scip")).unwrap(),
+        fs::read(scratch.path().join("locked.scip")).unwrap()
+    );
+}

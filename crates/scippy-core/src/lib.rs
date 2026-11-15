@@ -70,6 +70,8 @@ pub struct IndexRequest {
     pub memory_budget: u64,
     /// Reuse file graphs from this disposable SQLite cache.
     pub graph_cache: Option<PathBuf>,
+    /// How long a cache query waits for a locked cache file. A timeout turns the cache off.
+    pub graph_cache_timeout: std::time::Duration,
 }
 
 impl IndexRequest {
@@ -85,6 +87,7 @@ impl IndexRequest {
             jobs: schedule::default_jobs(),
             memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
             graph_cache: None,
+            graph_cache_timeout: std::time::Duration::from_secs(30),
         }
     }
 }

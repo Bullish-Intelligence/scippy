@@ -4,11 +4,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::IndexRequest;
 use crate::bindings::{
     BindingEngine, Bound, CompiledRules, Place, RawBinding, RawEnd, ResolveLimits,
 };
+use crate::cache::CacheGate;
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, Facts, SourceAnchor};
@@ -117,6 +119,10 @@ pub(crate) fn run(
         &extra_files,
     )?;
 
+    let cache = Arc::new(CacheGate::new(
+        request.graph_cache.as_deref(),
+        request.graph_cache_timeout,
+    ));
     let mut report = IndexReport {
         files_discovered: found.files_discovered,
         diagnostics: found.diagnostics,
@@ -159,6 +165,7 @@ pub(crate) fn run(
                 &shards,
                 &extra_files,
                 request,
+                &cache,
                 &mut report,
                 &mut trace,
                 &mut references,
@@ -253,6 +260,7 @@ fn index_pack(
     shards: &[ProjectRelativePath],
     extra_files: &[ExtraFile],
     request: &IndexRequest,
+    cache: &Arc<CacheGate>,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
     references: &mut Option<Vec<AnalysisReference>>,
@@ -296,6 +304,7 @@ fn index_pack(
         shards,
         members: &members,
         request,
+        cache,
     };
     let jobs: Vec<(u64, usize)> = groups
         .iter()
@@ -520,6 +529,8 @@ struct ShardContext<'a> {
     shards: &'a [ProjectRelativePath],
     members: &'a HashMap<&'a str, &'a [usize]>,
     request: &'a IndexRequest,
+    /// The state of the graph cache for the whole run.
+    cache: &'a Arc<CacheGate>,
 }
 
 /// The estimate of the peak memory of a shard is a fixed part for the builtins and the rules,
@@ -567,12 +578,7 @@ fn index_shard(
     group: &[usize],
 ) -> Result<ShardOutput, ScippyError> {
     let mut report = IndexReport::default();
-    let mut engine = BindingEngine::new(
-        cx.pack.id(),
-        cx.analysis,
-        compiled,
-        cx.request.graph_cache.as_deref(),
-    )?;
+    let mut engine = BindingEngine::new(cx.pack.id(), cx.analysis, compiled, cx.cache)?;
     let mut docs: Vec<(usize, Doc)> = Vec::new();
     for &at in group {
         let file = cx.files[at];
@@ -628,9 +634,6 @@ fn index_shard(
                 message: format!("ignored: {}", failure.message),
             });
         }
-    }
-    if let Some(error) = engine.cache_error.take() {
-        return Err(ScippyError::Storage(error));
     }
     report.graph_cache_hits = engine.cache_hits;
     report.graph_cache_misses = engine.cache_misses;

@@ -1198,6 +1198,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "protobuf",
+ "rusqlite",
  "scip",
  "scippy-core",
  "scippy-loci",
