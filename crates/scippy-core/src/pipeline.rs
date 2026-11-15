@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::IndexRequest;
@@ -24,9 +24,9 @@ use crate::project::{self, FoundFile, ProjectRelativePath, Router};
 use crate::reconcile::{
     BindingOutcome, DeclarationIndex, Reconciled, Targeting, UnresolvedReason, reconcile,
 };
-use crate::report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
+use crate::report::{Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage};
 use crate::schedule;
-use crate::snapshot::{AnalysisReference, AnalysisSnapshot, RunContext};
+use crate::snapshot::{AnalysisReference, AnalysisSnapshot, RunContext, sha256_hex};
 
 /// The SCIP scheme of every symbol that Scippy writes.
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
@@ -125,6 +125,7 @@ pub(crate) fn run(
         files_discovered: found.files_discovered,
         discovery_skipped: found.files_skipped,
         diagnostics: found.diagnostics,
+        lost_files: found.lost,
         ..Default::default()
     };
     report.diagnostics.extend(extra_diagnostics);
@@ -141,6 +142,9 @@ pub(crate) fn run(
         }
         let Some(engine) = pack.engine() else {
             report.files_skipped += files.len();
+            for file in &files {
+                lose(&mut report, &file.path, "unsupported-language");
+            }
             report.diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 stage: Stage::Discover,
@@ -200,6 +204,80 @@ pub(crate) fn run(
         }
     }
 
+    // The pack and the real path of each routed file.
+    let routed: HashMap<String, (String, Option<String>)> = found
+        .files
+        .iter()
+        .map(|f| {
+            (
+                f.path.as_str().to_owned(),
+                (
+                    languages[f.pack].id().to_owned(),
+                    f.real.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                ),
+            )
+        })
+        .collect();
+
+    // Read each indexed file again. A file that changed after the run read it has stale facts,
+    // so the run drops them and records the file as failed.
+    {
+        let lost: HashSet<&str> = report.lost_files.iter().map(|l| l.path.as_str()).collect();
+        let disk: HashMap<&str, PathBuf> = found
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.disk_path(&found.root)))
+            .collect();
+        let mut changed: Vec<(String, String)> = Vec::new();
+        for d in &documents {
+            // A stub has no text. A lost file has a document with no text of its own.
+            if d.language.is_empty() || lost.contains(d.path.as_str()) {
+                continue;
+            }
+            let Some(full) = disk.get(d.path.as_str()) else {
+                continue;
+            };
+            let read = sha256_hex(d.source.as_bytes());
+            if reread_hash(full, request.limits.max_file_bytes).as_deref() != Some(read.as_str()) {
+                changed.push((d.path.as_str().to_owned(), read));
+            }
+        }
+        for (path, sha256) in changed {
+            documents.retain(|d| d.path.as_str() != path);
+            if let Some(references) = &mut references {
+                references.retain(|r| r.path != path);
+            }
+            report.files_skipped += 1;
+            report.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                stage: Stage::Discover,
+                file: Some(path.clone()),
+                range: None,
+                code: "changed-during-run",
+                message: "the file changed while the run read it: the run dropped its facts"
+                    .to_string(),
+            });
+            report.lost_files.push(LostFile {
+                path,
+                pack: None,
+                real_path: None,
+                reason: "changed-during-run",
+                sha256: Some(sha256),
+            });
+        }
+    }
+    // Complete the list of the lost files: one entry for each path, in the order of the paths.
+    for lost in &mut report.lost_files {
+        if let Some((pack, real)) = routed.get(&lost.path) {
+            lost.pack.get_or_insert_with(|| pack.clone());
+            if lost.real_path.is_none() {
+                lost.real_path = real.clone();
+            }
+        }
+    }
+    report.lost_files.sort_by(|a, b| a.path.cmp(&b.path));
+    report.lost_files.dedup_by(|b, a| a.path == b.path);
+
     report.files_indexed = documents.len();
     report.occurrences = documents.iter().map(|d| d.occurrences.len()).sum();
 
@@ -238,19 +316,7 @@ pub(crate) fn run(
             "input_limits={:?};resolve_limits={:?};package_name={:?};package_version={:?}",
             request.limits, request.resolve_limits, request.package_name, request.package_version
         ),
-        files: found
-            .files
-            .iter()
-            .map(|f| {
-                (
-                    f.path.as_str().to_owned(),
-                    (
-                        languages[f.pack].id().to_owned(),
-                        f.real.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                    ),
-                )
-            })
-            .collect(),
+        files: routed,
     };
     let data = IndexData {
         project_root: found.root,
@@ -378,6 +444,8 @@ fn index_pack(
     for result in results {
         let out = result?;
         report.files_skipped += out.report.files_skipped;
+        report.files_shadowed += out.report.files_shadowed;
+        report.lost_files.extend(out.report.lost_files);
         report.graph_cache_hits += out.report.graph_cache_hits;
         report.graph_cache_misses += out.report.graph_cache_misses;
         report.diagnostics.extend(out.report.diagnostics);
@@ -845,7 +913,8 @@ fn load_file(
         message,
     };
     if let Some(winner) = model.shadowed_by(&file.path) {
-        report.files_skipped += 1;
+        report.files_shadowed += 1;
+        lose(report, &file.path, "shadowed-file");
         report.diagnostics.push(diagnostic(
             Stage::Identity,
             Severity::Warning,
@@ -862,6 +931,7 @@ fn load_file(
         Ok(source) => source,
         Err((code, message)) => {
             report.files_skipped += 1;
+            lose(report, &file.path, code);
             report.diagnostics.push(diagnostic(
                 Stage::Discover,
                 Severity::Warning,
@@ -903,6 +973,7 @@ fn load_file(
                 tree
             } else {
                 report.files_skipped += 1;
+                lose(report, &file.path, "syntax-error");
                 report.diagnostics.push(diagnostic(
                     Stage::Parse,
                     Severity::Warning,
@@ -925,6 +996,7 @@ fn load_file(
         resolve,
     ) {
         report.files_skipped += 1;
+        lose(report, &file.path, "bind-error");
         report.diagnostics.push(diagnostic(
             Stage::Bind,
             Severity::Warning,
@@ -981,6 +1053,7 @@ fn index_native_pack(
             }),
             Err((code, message)) => {
                 report.files_skipped += 1;
+                lose(report, &file.path, code);
                 report.diagnostics.push(Diagnostic {
                     severity: Severity::Warning,
                     stage: Stage::Discover,
@@ -1383,6 +1456,27 @@ fn declare_asset(
                 .push(warn("external-symbol-invalid", error.to_string())),
         }
     }
+}
+
+/// The SHA-256 of a file as it is now. `None` when the file is unreadable or over `max` bytes.
+fn reread_hash(full: &Path, max: u64) -> Option<String> {
+    let mut bytes = Vec::new();
+    File::open(full)
+        .and_then(|f| f.take(max + 1).read_to_end(&mut bytes))
+        .ok()?;
+    (bytes.len() as u64 <= max).then(|| sha256_hex(&bytes))
+}
+
+/// Record a file that the run accepted and did not index. The run fills the pack and the real
+/// path of the file at the end.
+fn lose(report: &mut IndexReport, path: &ProjectRelativePath, reason: &'static str) {
+    report.lost_files.push(LostFile {
+        path: path.as_str().to_owned(),
+        pack: None,
+        real_path: None,
+        reason,
+        sha256: None,
+    });
 }
 
 /// Read a file. Return a diagnostic code and message on failure.

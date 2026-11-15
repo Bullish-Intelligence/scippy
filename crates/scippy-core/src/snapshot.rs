@@ -127,26 +127,63 @@ impl AnalysisReference {
     }
 }
 
+/// A file that the run accepted and did not index.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisFile {
+    pub path: String,
+    /// The id of the language pack that accepts the file, when one pack does.
+    pub pack: Option<String>,
+    /// Where the run read a file that lies outside the project root.
+    pub real_path: Option<String>,
+    /// `skipped`, `failed`, or `shadowed`. It follows from `reason`: see [`file_status`].
+    pub status: String,
+    /// The code of the diagnostic that decided the status.
+    pub reason: String,
+    /// The SHA-256 of the bytes that the run read, when it read them.
+    pub sha256: Option<String>,
+}
+
+/// The status of a file that the run did not index, from the code that decided it.
+///
+/// - `shadowed`: another file shadows it, so no import reaches it. This is legal Python.
+/// - `failed`: Scippy accepted the file and an operation failed.
+/// - `skipped`: Scippy does not accept the file.
+pub fn file_status(reason: &str) -> &'static str {
+    match reason {
+        "shadowed-file" => "shadowed",
+        "unreadable-file" | "syntax-error" | "bind-error" | "changed-during-run" => "failed",
+        _ => "skipped",
+    }
+}
+
 /// The diagnostic codes that make a snapshot incomplete, although their severity is a warning.
-/// Each code names input that the run lost without a skipped file: a manifest, a support file,
-/// a dependency, or a file over a size limit.
-pub const INCOMPLETE_CODES: [&str; 4] = [
+/// Each code names input that the run lost without a file row: a manifest, a support file,
+/// a dependency, a file over a size limit that a pack found, or a path that has no valid name.
+pub const INCOMPLETE_CODES: [&str; 6] = [
     "support-file-error",
     "manifest-error",
     "root-name-collision",
     "file-too-large",
+    "non-utf8-path",
+    "invalid-path",
 ];
 
 /// The facts and diagnostics of one completed indexing run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisSnapshot {
     pub documents: Vec<AnalysisDocument>,
+    /// The accepted files that the run did not index, sorted by path. A file here can still have
+    /// a document, as a note that the run could not read has a document with no facts but its
+    /// module.
+    #[serde(default)]
+    pub lost_files: Vec<AnalysisFile>,
     pub references: Vec<AnalysisReference>,
     pub external_symbols: Vec<AnalysisSymbol>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
-    /// False when the run lost input. It is true only when the run skipped no file (at discovery
-    /// or later), raised no error diagnostic, and raised no diagnostic with a code in
-    /// [`INCOMPLETE_CODES`]. A bounded search does not change it: see `analysis_exact`.
+    /// False when the run lost input. It is true only when no file has the status `skipped` or
+    /// `failed`, no diagnostic has the severity `Error`, and no diagnostic has a code in
+    /// [`INCOMPLETE_CODES`]. A shadowed file does not change it. A bounded search does not
+    /// change it: see `analysis_exact`.
     pub input_complete: bool,
     /// False when a reference search stopped at a limit. A reference with the outcome `Bounded`
     /// has no target. A resolved reference with a `limited` mark keeps the nearest binding.
@@ -235,8 +272,25 @@ impl AnalysisSnapshot {
             .collect();
         references.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
         let bounded_references = references.iter().filter(|r| r.is_inexact()).count();
+        let lost_files: Vec<AnalysisFile> = report
+            .lost_files
+            .iter()
+            .map(|l| AnalysisFile {
+                path: l.path.clone(),
+                pack: l.pack.clone(),
+                real_path: l.real_path.clone(),
+                status: file_status(l.reason).to_owned(),
+                reason: l.reason.to_owned(),
+                sha256: l.sha256.clone(),
+            })
+            .collect();
+        let input_complete = !lost_files.iter().any(|f| f.status != "shadowed")
+            && !report.diagnostics.iter().any(|d| {
+                d.severity == crate::Severity::Error || INCOMPLETE_CODES.contains(&d.code)
+            });
         Ok(Self {
             documents,
+            lost_files,
             references,
             external_symbols: data.external_symbols.iter().map(symbol_info).collect(),
             diagnostics: report
@@ -251,11 +305,7 @@ impl AnalysisSnapshot {
                     message: d.message.clone(),
                 })
                 .collect(),
-            input_complete: report.files_skipped == 0
-                && report.discovery_skipped == 0
-                && !report.diagnostics.iter().any(|d| {
-                    d.severity == crate::Severity::Error || INCOMPLETE_CODES.contains(&d.code)
-                }),
+            input_complete,
             analysis_exact: bounded_references == 0,
             bounded_references,
             scip: emit::encode(data.clone())?,

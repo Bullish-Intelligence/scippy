@@ -41,7 +41,7 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 #[test]
-fn cli_publishes_and_keeps_the_last_revision_on_a_parse_failure() {
+fn cli_publishes_each_run_and_a_parse_failure_gives_a_failed_file() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
     fs::create_dir(&root).unwrap();
@@ -80,10 +80,20 @@ fn cli_publishes_and_keeps_the_last_revision_on_a_parse_failure() {
     assert!(String::from_utf8_lossy(&second.stdout).contains("file graphs: 1 cached, 0 built"));
     assert!(String::from_utf8_lossy(&second.stdout).contains("metalayer revision: 2"));
     write(&root, "module.py", "def broken(:\n");
+    // A syntax error loses one file. The run publishes it with the status `failed`.
     let failed = run();
-    assert!(!failed.status.success());
+    assert!(
+        failed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
     assert!(String::from_utf8_lossy(&failed.stderr).contains("syntax-error"));
-    assert_eq!(revision_of(&database), 2);
+    assert!(String::from_utf8_lossy(&failed.stdout).contains("metalayer revision: 3"));
+    let mut layer = Metalayer::open(database).unwrap();
+    let view = layer.view().unwrap().unwrap();
+    assert_eq!(view.revision().id, 3);
+    assert!(!view.revision().input_complete);
+    assert_eq!(view.files(None).unwrap()[0].path, "module.py");
 }
 
 fn revision_of(database: &Path) -> i64 {

@@ -1,6 +1,6 @@
 //! Publish one analysis as one revision.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
@@ -39,10 +39,21 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
+/// One row of the `file` table.
+struct FileRow<'a> {
+    pack: Option<&'a str>,
+    language: Option<&'a str>,
+    status: &'a str,
+    reason: Option<&'a str>,
+    sha256: Option<&'a str>,
+    size: Option<i64>,
+    real_path: Option<&'a str>,
+}
+
 /// One row of the input manifest, as the digest sees it.
 struct ManifestRow<'a> {
     path: &'a str,
-    status: &'static str,
+    status: &'a str,
     reason: Option<&'a str>,
     sha256: Option<&'a str>,
 }
@@ -131,8 +142,8 @@ pub(crate) fn publish(
     s: &AnalysisSnapshot,
     o: &PublishOptions,
 ) -> Result<Published, ScippyError> {
-    // This step keeps the old policy: the store refuses incomplete input.
-    if !s.input_complete {
+    // A strict run rejects incomplete input before it opens a transaction.
+    if o.strict && !s.input_complete {
         return Err(ScippyError::Incomplete);
     }
     let key = sha256_hex(s.project_root.as_bytes());
@@ -210,34 +221,74 @@ pub(crate) fn publish(
         .map_err(storage)?;
     }
 
-    // Files.
+    // Files. A lost file has a row with its status. A document without a lost record is indexed.
+    // A document that has a lost record keeps its facts under the row of the lost file.
     let mut documents: Vec<&scippy_core::AnalysisDocument> = s.documents.iter().collect();
     documents.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut files: HashMap<&str, i64> = HashMap::with_capacity(documents.len());
-    let mut manifest = Vec::with_capacity(documents.len());
+    let mut rows: BTreeMap<&str, FileRow<'_>> = BTreeMap::new();
+    for lost in &s.lost_files {
+        rows.entry(lost.path.as_str()).or_insert(FileRow {
+            pack: lost.pack.as_deref(),
+            language: None,
+            status: lost.status.as_str(),
+            reason: Some(lost.reason.as_str()),
+            sha256: lost.sha256.as_deref(),
+            size: None,
+            real_path: lost.real_path.as_deref(),
+        });
+    }
     for d in &documents {
-        let stub = d.sha256.is_none();
+        let language = (!d.language.is_empty()).then_some(d.language.as_str());
+        match rows.get_mut(d.path.as_str()) {
+            Some(row) => {
+                row.language = language;
+                if row.pack.is_none() {
+                    row.pack = d.pack.as_deref();
+                }
+            }
+            None => {
+                rows.insert(
+                    d.path.as_str(),
+                    FileRow {
+                        pack: d.pack.as_deref(),
+                        language,
+                        status: "indexed",
+                        reason: None,
+                        // A stub has no hash and no size.
+                        sha256: d.sha256.as_deref(),
+                        size: d.sha256.is_some().then_some(d.source.len() as i64),
+                        real_path: d.real_path.as_deref(),
+                    },
+                );
+            }
+        }
+    }
+    let mut files: HashMap<&str, i64> = HashMap::with_capacity(rows.len());
+    let mut manifest = Vec::with_capacity(rows.len());
+    for (path, row) in &rows {
         tx.prepare_cached(
             "INSERT INTO file (root_id, path, pack, language, status, reason, sha256, size, real_path)
-             VALUES (1, ?1, ?2, ?3, 'indexed', NULL, ?4, ?5, ?6)",
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .and_then(|mut st| {
             st.execute(params![
-                d.path,
-                d.pack,
-                (!d.language.is_empty()).then_some(&d.language),
-                d.sha256,
-                (!stub).then_some(d.source.len() as i64),
-                d.real_path,
+                path,
+                row.pack,
+                row.language,
+                row.status,
+                row.reason,
+                row.sha256,
+                row.size,
+                row.real_path,
             ])
         })
         .map_err(storage)?;
-        files.insert(d.path.as_str(), tx.last_insert_rowid());
+        files.insert(path, tx.last_insert_rowid());
         manifest.push(ManifestRow {
-            path: &d.path,
-            status: "indexed",
-            reason: None,
-            sha256: d.sha256.as_deref(),
+            path,
+            status: row.status,
+            reason: row.reason,
+            sha256: row.sha256,
         });
     }
 
@@ -389,7 +440,7 @@ pub(crate) fn publish(
     let input_complete: bool = tx
         .query_row(
             &format!(
-                "SELECT NOT EXISTS (SELECT 1 FROM file WHERE status <> 'indexed')
+                "SELECT NOT EXISTS (SELECT 1 FROM file WHERE status IN ('skipped','failed'))
                     AND NOT EXISTS (SELECT 1 FROM diagnostic
                                     WHERE severity = 'error' OR code IN ({codes}))"
             ),

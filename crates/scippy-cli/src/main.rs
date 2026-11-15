@@ -67,6 +67,10 @@ struct IndexArgs {
     /// Publish the analysis to this metalayer SQLite database.
     #[arg(long)]
     metalayer: Option<PathBuf>,
+    /// Fail when the run raises an error diagnostic. With `--metalayer`, also refuse to publish
+    /// when the run lost input. The database and the SCIP file stay as they were.
+    #[arg(long)]
+    strict: bool,
     /// Replace the root set of the metalayer database when it holds another project root.
     /// Without this flag, the run fails and keeps the database.
     #[arg(long, requires = "metalayer")]
@@ -201,6 +205,7 @@ fn main() -> ExitCode {
                 memory_budget,
                 graph_cache,
                 metalayer,
+                strict,
                 replace_root_set,
                 max_work,
                 max_queue_len,
@@ -221,6 +226,7 @@ fn main() -> ExitCode {
             request.package_version = package_version;
             request.trace = trace;
             request.graph_cache = graph_cache;
+            request.strict = strict;
             if let Some(jobs) = jobs {
                 request.jobs = usize::try_from(jobs).unwrap_or(usize::MAX);
             }
@@ -240,13 +246,15 @@ fn main() -> ExitCode {
             let indexed = if let Some(path) = metalayer {
                 // The SCIP file follows the publication. A failed publish keeps the old file.
                 index_project_for_publish(&request, &registry()).and_then(|(report, snapshot)| {
-                    if !snapshot.input_complete {
+                    // A strict run opens no database and writes no file for lost input.
+                    if strict && !snapshot.input_complete {
                         for diagnostic in &report.diagnostics {
                             eprintln!("{diagnostic}");
                         }
+                        return Err(ScippyError::Incomplete);
                     }
                     let options = PublishOptions {
-                        strict: false,
+                        strict,
                         replace_root_set,
                     };
                     let published = Metalayer::open(path)?.publish(&snapshot, &options)?;
@@ -267,10 +275,11 @@ fn main() -> ExitCode {
                         eprintln!("{diagnostic}");
                     }
                     println!(
-                        "files discovered: {}\nfiles indexed: {}\nfiles skipped: {}\ndeclarations: {}\noccurrences: {}\nreferences resolved: {}\nreferences external: {}\nreferences unresolved: {}\nreferences ambiguous: {}\nreferences bounded: {}",
+                        "files discovered: {}\nfiles indexed: {}\nfiles skipped: {}\nfiles shadowed: {}\ndeclarations: {}\noccurrences: {}\nreferences resolved: {}\nreferences external: {}\nreferences unresolved: {}\nreferences ambiguous: {}\nreferences bounded: {}",
                         report.files_discovered,
                         report.files_indexed,
                         report.files_skipped,
+                        report.files_shadowed,
                         report.declarations,
                         report.occurrences,
                         report.references_resolved,

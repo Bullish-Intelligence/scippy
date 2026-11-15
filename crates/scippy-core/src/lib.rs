@@ -29,8 +29,8 @@ mod schedule;
 mod snapshot;
 
 pub use snapshot::{
-    AnalysisDiagnostic, AnalysisDocument, AnalysisOccurrence, AnalysisReference, AnalysisSnapshot,
-    AnalysisSymbol, INCOMPLETE_CODES, ReferenceOutcome,
+    AnalysisDiagnostic, AnalysisDocument, AnalysisFile, AnalysisOccurrence, AnalysisReference,
+    AnalysisSnapshot, AnalysisSymbol, INCOMPLETE_CODES, ReferenceOutcome, file_status,
 };
 
 pub use bindings::ResolveLimits;
@@ -45,7 +45,9 @@ pub use language::{
     SupportFile, VirtualSymbol, WalkRules,
 };
 pub use project::{InputLimits, ProjectRelativePath};
-pub use report::{BoundedCounts, Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
+pub use report::{
+    BoundedCounts, Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage,
+};
 
 use std::path::PathBuf;
 

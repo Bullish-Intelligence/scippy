@@ -68,7 +68,7 @@ rebuilds it.
   reference location. It does not count when the target is a `local N` symbol, or when the
   location is the definition site of the same symbol. A same-file global target counts.
   A support that rests on a stopped search counts, and the column `limited` counts it too.
-- This step fills the `override` and `alias` edges and the kind `use` and `import` of the
+- This version fills the `override` and `alias` edges and the kinds `use` and `import` of the
   relation. Edges for inheritance, links, and embeds, and the reference kind, come later.
 - `Metalayer::view` starts one read transaction. Its methods read one revision. Integer ids
   stay inside the database. `Metalayer::open_read_only` never writes, creates, or rebuilds.
@@ -76,14 +76,29 @@ rebuilds it.
   version is refused.
 - `index_project_with_snapshot` returns the structured snapshot to a Rust caller.
 
+Every run publishes, with a status for each file. The `file` table is the input manifest:
+
+- `indexed`: the file became a document.
+- `skipped`: Scippy does not accept the file. The reason is one of `symlink-skipped`,
+  `file-too-large`, `input-limit-reached`, `unsupported-language`, `ambiguous-language`, and
+  `invalid-utf8`. A file after the total input limit has a row too.
+- `failed`: Scippy accepted the file and an operation failed. The reason is `unreadable-file`,
+  `syntax-error`, `bind-error`, or `changed-during-run`. At the end of the run, the pipeline
+  reads each indexed file again. A file whose SHA-256 changed is `failed` and keeps no facts.
+- `shadowed`: another file shadows it, so no import reaches it (`shadowed-file`). It is legal
+  Python. The report counts it in `files_shadowed`, not in `files_skipped`.
+
+A path with no valid UTF-8 name has no row. Its diagnostic (`non-utf8-path` or `invalid-path`)
+makes the input incomplete instead.
+
 The snapshot field `input_complete` is true only when the run lost no input. It is false when:
 
-- the run skipped a file, whether the walker or a later stage skipped it. A symbolic link, a
-  file over the size limit, a bad file name, and a Loci note over its size cap are skips;
+- a file has the status `skipped` or `failed`. A shadowed file does not count;
 - a diagnostic has the severity `Error`;
-- a diagnostic has the code `manifest-error`, `support-file-error`, `root-name-collision`, or
-  `file-too-large`. They report a `pyproject.toml` or `tsconfig.json` that cannot be used, a
-  dependency name that two roots share, and a file over a size limit.
+- a diagnostic has the code `manifest-error`, `support-file-error`, `root-name-collision`,
+  `file-too-large`, `non-utf8-path`, or `invalid-path`. They report a `pyproject.toml` or
+  `tsconfig.json` that cannot be used, a dependency name that two roots share, a note over a
+  size cap, and a path that has no valid name. These losses have no file row.
 
 The snapshot field `analysis_exact` is true only when no reference search stopped at a limit.
 It is independent of `input_complete`. A search that stops gives one of two results:
@@ -92,9 +107,14 @@ It is independent of `input_complete`. A search that stops gives one of two resu
 - the outcome `Resolved` with a `limited` mark: the nearest binding in the same document. Other
   ends can exist. This reference still supports the file-to-symbol relation.
 
-The field `bounded_references` counts both kinds. `Metalayer::publish` refuses a snapshot with
-`input_complete` false. It accepts a snapshot with `analysis_exact` false. The publish checks
-that both flags agree with the rows.
+The field `bounded_references` counts both kinds. `Metalayer::publish` accepts a snapshot with
+`input_complete` or `analysis_exact` false. It computes both flags from the rows and returns an
+error when the snapshot disagrees. The exit code is 0 when a run publishes lost input. The
+revision records the flags, and the CLI prints the diagnostics.
+
+`--strict` makes the run fail on an error diagnostic. With `--metalayer`, it also refuses lost
+input: the CLI opens no database and writes no file, and `ScippyError::Incomplete` is the error.
+The revision records `strict`.
 
 The database has no stable entity IDs, history, watcher, or query language.
 The CLI publishes first and then writes the SCIP file. A failed SCIP write reports the

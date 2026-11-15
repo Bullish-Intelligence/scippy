@@ -1,0 +1,257 @@
+//! Check the status of each file, the `--strict` flag, and the publish of a lossy run.
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use scippy_core::{AnalysisSnapshot, IndexReport, IndexRequest, index_project_with_snapshot};
+use scippy_loci::LociPack;
+use scippy_metalayer::{FileStatus, Metalayer, PublishOptions};
+use scippy_python::PythonPack;
+use scippy_typescript::TypeScriptPack;
+
+fn write(root: &Path, path: &str, text: &str) {
+    let path = root.join(path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, text).unwrap();
+}
+
+fn snapshot(
+    root: &Path,
+    configure: impl FnOnce(&mut IndexRequest),
+) -> (IndexReport, AnalysisSnapshot) {
+    let out = tempfile::tempdir().unwrap();
+    let mut request = IndexRequest::new(root, out.path().join("index.scip"));
+    configure(&mut request);
+    index_project_with_snapshot(&request, &[&PythonPack, &TypeScriptPack, &LociPack]).unwrap()
+}
+
+/// The rows as (path, status, reason).
+fn rows(snapshot: &AnalysisSnapshot) -> Vec<(&str, &str, &str)> {
+    snapshot
+        .lost_files
+        .iter()
+        .map(|f| (f.path.as_str(), f.status.as_str(), f.reason.as_str()))
+        .collect()
+}
+
+#[test]
+fn every_loss_has_a_file_row_and_the_counts_agree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    write(&root, "good.py", "def f():\n    return 1\n");
+    write(&root, "bad.py", "def broken(:\n");
+    write(&root, "a.py", "def f():\n    return 1\n");
+    write(&root, "a/__init__.py", "def f():\n    return 2\n");
+    write(&root, "big.py", &format!("x = '{}'\n", "y".repeat(400)));
+    fs::write(root.join("latin.py"), [0xff, 0xfe, b'\n']).unwrap();
+    std::os::unix::fs::symlink("good.py", root.join("link.py")).unwrap();
+    write(&root, "locked.py", "x = 1\n");
+    let locked = root.join("locked.py");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let unreadable = fs::read(&locked).is_err();
+    let (report, snapshot) = snapshot(&root, |r| r.limits.max_file_bytes = 200);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let mut expected = vec![
+        ("a.py", "shadowed", "shadowed-file"),
+        ("bad.py", "failed", "syntax-error"),
+        ("big.py", "skipped", "file-too-large"),
+        ("latin.py", "skipped", "invalid-utf8"),
+        ("link.py", "skipped", "symlink-skipped"),
+    ];
+    if unreadable {
+        expected.push(("locked.py", "failed", "unreadable-file"));
+    }
+    expected.sort_unstable();
+    assert_eq!(rows(&snapshot), expected);
+    assert!(!snapshot.input_complete);
+    // Every skipped or failed file has a row, and a shadowed file counts apart.
+    let lossy = snapshot
+        .lost_files
+        .iter()
+        .filter(|f| f.status != "shadowed")
+        .count();
+    assert_eq!(report.files_skipped + report.discovery_skipped, lossy);
+    assert_eq!(report.files_shadowed, 1);
+
+    // The database holds the same rows, and the input is incomplete.
+    let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
+    layer
+        .publish(&snapshot, &PublishOptions::default())
+        .unwrap();
+    let view = layer.view().unwrap().unwrap();
+    assert!(!view.revision().input_complete);
+    let status = |s| -> Vec<String> {
+        view.files(Some(s))
+            .unwrap()
+            .into_iter()
+            .map(|f| f.path)
+            .collect()
+    };
+    assert_eq!(status(FileStatus::Shadowed), ["a.py"]);
+    assert_eq!(status(FileStatus::Indexed), ["a/__init__.py", "good.py"]);
+    assert!(status(FileStatus::Failed).contains(&"bad.py".to_owned()));
+    assert!(status(FileStatus::Skipped).contains(&"link.py".to_owned()));
+}
+
+#[test]
+fn a_shadowed_file_leaves_the_input_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    write(&root, "a.py", "def f():\n    return 1\n");
+    write(&root, "a/__init__.py", "def f():\n    return 2\n");
+    let (report, snapshot) = snapshot(&root, |_| {});
+    assert_eq!(rows(&snapshot), [("a.py", "shadowed", "shadowed-file")]);
+    assert_eq!((report.files_skipped, report.files_shadowed), (0, 1));
+    assert!(snapshot.input_complete, "{:?}", snapshot.diagnostics);
+    let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
+    layer
+        .publish(&snapshot, &PublishOptions::default())
+        .unwrap();
+    assert!(layer.view().unwrap().unwrap().revision().input_complete);
+}
+
+#[test]
+fn the_files_after_the_total_limit_have_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    for name in ["a.py", "b.py", "c.py"] {
+        write(&root, name, &format!("x = '{}'\n", "y".repeat(20)));
+    }
+    let (report, snapshot) = snapshot(&root, |r| r.limits.max_total_bytes = 40);
+    assert_eq!(
+        rows(&snapshot),
+        [
+            ("b.py", "skipped", "input-limit-reached"),
+            ("c.py", "skipped", "input-limit-reached")
+        ]
+    );
+    assert_eq!(report.discovery_skipped, 2);
+    assert!(!snapshot.input_complete);
+}
+
+fn scippy(args: &[&str], paths: &[(&str, &Path)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    command.arg("index").args(args);
+    for (flag, path) in paths {
+        command.arg(flag).arg(path);
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn a_syntax_error_publishes_and_strict_rejects_it_and_keeps_every_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "good.py", "def f():\n    return 1\n\nf()\n");
+    let database = scratch.path().join("layer.sqlite");
+    let output = scratch.path().join("index.scip");
+    let paths: [(&str, &Path); 2] = [("-o", &output), ("--metalayer", &database)];
+    let index = |strict: bool| {
+        let mut args = vec![root.to_str().unwrap()];
+        if strict {
+            args.push("--strict");
+        }
+        scippy(&args, &paths)
+    };
+    assert!(index(true).status.success());
+    let kept_scip = fs::read(&output).unwrap();
+    let revision = |db: &Path| {
+        let mut layer = Metalayer::open_read_only(db).unwrap();
+        let view = layer.view().unwrap().unwrap();
+        (
+            view.revision().id,
+            view.revision().input_complete,
+            view.revision().strict,
+        )
+    };
+    assert_eq!(revision(&database), (1, true, true));
+    let kept_db = fs::read(&database).unwrap();
+
+    write(&root, "bad.py", "def broken(:\n");
+    // A strict run rejects the lost input. The database and the SCIP file stay as they were.
+    let strict = index(true);
+    assert!(!strict.status.success());
+    let stderr = String::from_utf8_lossy(&strict.stderr);
+    assert!(
+        stderr.contains("syntax-error") && stderr.contains("incomplete"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&output).unwrap(), kept_scip);
+    assert_eq!(fs::read(&database).unwrap(), kept_db);
+    assert_eq!(revision(&database), (1, true, true));
+
+    // A run without `--strict` publishes the lost input and exits with success.
+    let lax = index(false);
+    assert!(
+        lax.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lax.stderr)
+    );
+    assert!(String::from_utf8_lossy(&lax.stderr).contains("syntax-error"));
+    assert_eq!(revision(&database), (2, false, false));
+    let mut layer = Metalayer::open_read_only(&database).unwrap();
+    let view = layer.view().unwrap().unwrap();
+    let failed = view.files(Some(FileStatus::Failed)).unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(
+        (failed[0].path.as_str(), failed[0].reason.as_deref()),
+        ("bad.py", Some("syntax-error"))
+    );
+}
+
+#[test]
+fn a_strict_run_with_lost_input_opens_no_database_and_writes_no_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "bad.py", "def broken(:\n");
+    let database = scratch.path().join("layer.sqlite");
+    let output = scratch.path().join("index.scip");
+    let paths: [(&str, &Path); 2] = [("-o", &output), ("--metalayer", &database)];
+    let strict = scippy(&[root.to_str().unwrap(), "--strict"], &paths);
+    assert!(!strict.status.success());
+    assert!(!database.exists());
+    assert!(!output.exists());
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else if kind.is_file() {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+#[test]
+fn the_scippy_sources_publish() {
+    let repository: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("scippy");
+    for part in ["crates", "languages"] {
+        copy_tree(&repository.join(part), &root.join(part));
+    }
+    let database = scratch.path().join("layer.sqlite");
+    let output = scratch.path().join("index.scip");
+    let paths: [(&str, &Path); 2] = [("-o", &output), ("--metalayer", &database)];
+    let run = scippy(&[root.to_str().unwrap()], &paths);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let db = rusqlite::Connection::open(&database).unwrap();
+    let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    assert!(count("SELECT count(*) FROM file WHERE status = 'indexed'") > 10);
+    assert!(count("SELECT count(*) FROM reference") > 100);
+    assert!(count("SELECT count(*) FROM file_reference") > 10);
+    assert_eq!(count("SELECT count(*) FROM revision"), 1);
+}

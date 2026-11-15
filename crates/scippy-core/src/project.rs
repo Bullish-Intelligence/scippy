@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::ScippyError;
 use crate::language::{ExtraFile, ProjectFile};
-use crate::report::{Diagnostic, Severity, Stage};
+use crate::report::{Diagnostic, LostFile, Severity, Stage};
 
 /// What the walker needs from a language pack: the name and the file test.
 pub(crate) trait Router {
@@ -129,6 +129,8 @@ pub(crate) struct Discovery {
     /// Count of files that a pack accepts and the walker skipped. Each has a diagnostic.
     pub files_skipped: usize,
     pub diagnostics: Vec<Diagnostic>,
+    /// The skipped files that have a valid path.
+    pub lost: Vec<LostFile>,
 }
 
 /// Walk the project in a deterministic order and route each file to one pack.
@@ -165,6 +167,7 @@ pub(crate) fn discover(
             files_discovered: 0,
             files_skipped: 0,
             diagnostics: Vec::new(),
+            lost: Vec::new(),
         },
     };
     walk.directory(&root, "", None);
@@ -276,6 +279,8 @@ impl Walk<'_> {
             if kind.is_symlink() {
                 if let (Some(n), false) = (utf8, accepting.is_empty()) {
                     self.found.files_skipped += 1;
+                    let pack = (accepting.len() == 1).then(|| self.languages[accepting[0]].id());
+                    self.lose(format!("{prefix}{n}"), pack, None, "symlink-skipped");
                     self.warn(
                         Severity::Warning,
                         "symlink-skipped",
@@ -348,6 +353,12 @@ impl Walk<'_> {
         if accepting.len() > 1 {
             self.found.files_skipped += 1;
             let ids: Vec<_> = accepting.iter().map(|&i| self.languages[i].id()).collect();
+            self.lose(
+                relative.as_str().to_owned(),
+                None,
+                real.as_deref(),
+                "ambiguous-language",
+            );
             self.warn(
                 Severity::Error,
                 "ambiguous-language",
@@ -356,8 +367,15 @@ impl Walk<'_> {
             );
             return;
         }
+        let pack = Some(self.languages[accepting[0]].id());
         if size > self.limits.max_file_bytes {
             self.found.files_skipped += 1;
+            self.lose(
+                relative.as_str().to_owned(),
+                pack,
+                real.as_deref(),
+                "file-too-large",
+            );
             self.warn(
                 Severity::Warning,
                 "file-too-large",
@@ -371,11 +389,23 @@ impl Walk<'_> {
         }
         if self.limit_reached {
             self.found.files_skipped += 1;
+            self.lose(
+                relative.as_str().to_owned(),
+                pack,
+                real.as_deref(),
+                "input-limit-reached",
+            );
             return;
         }
         if self.total_bytes + size > self.limits.max_total_bytes {
             self.limit_reached = true;
             self.found.files_skipped += 1;
+            self.lose(
+                relative.as_str().to_owned(),
+                pack,
+                real.as_deref(),
+                "input-limit-reached",
+            );
             self.warn(
                 Severity::Error,
                 "input-limit-reached",
@@ -392,6 +422,23 @@ impl Walk<'_> {
             path: relative,
             pack: accepting[0],
             real,
+        });
+    }
+
+    /// Record a skipped file that has a valid path.
+    fn lose(
+        &mut self,
+        path: String,
+        pack: Option<&'static str>,
+        real: Option<&Path>,
+        reason: &'static str,
+    ) {
+        self.found.lost.push(LostFile {
+            path,
+            pack: pack.map(str::to_owned),
+            real_path: real.map(|p| p.to_string_lossy().into_owned()),
+            reason,
+            sha256: None,
         });
     }
 
@@ -416,6 +463,15 @@ impl Walk<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The lost files as (path, pack, reason).
+    fn lost(found: &Discovery) -> Vec<(&str, Option<&str>, &'static str)> {
+        found
+            .lost
+            .iter()
+            .map(|l| (l.path.as_str(), l.pack.as_deref(), l.reason))
+            .collect()
+    }
 
     struct Ext(&'static str, &'static str);
     impl Router for Ext {
@@ -513,6 +569,7 @@ mod tests {
         .unwrap();
         assert!(found.files.is_empty());
         assert_eq!(found.diagnostics[0].code, "ambiguous-language");
+        assert_eq!(lost(&found), [("a.py", None, "ambiguous-language")]);
     }
 
     #[test]
@@ -590,6 +647,10 @@ mod tests {
         .unwrap();
         assert_eq!(found.files.len(), 1);
         assert_eq!(found.diagnostics[0].code, "symlink-skipped");
+        assert_eq!(
+            lost(&found),
+            [("link.py", Some("python"), "symlink-skipped")]
+        );
     }
 
     #[test]
@@ -640,6 +701,7 @@ mod tests {
         assert_eq!(paths, ["small.py"]);
         assert_eq!(found.diagnostics.len(), 1);
         assert_eq!(found.diagnostics[0].code, "file-too-large");
+        assert_eq!(lost(&found), [("big.py", Some("python"), "file-too-large")]);
         assert_eq!(found.diagnostics[0].file.as_deref(), Some("big.py"));
     }
 
@@ -660,6 +722,16 @@ mod tests {
         // One diagnostic names the first file that the walker dropped.
         assert_eq!(found.diagnostics.len(), 1);
         assert_eq!(found.diagnostics[0].code, "input-limit-reached");
+        // The file that hit the limit and every later file have a row.
+        let reasons: Vec<_> = lost(&found).into_iter().map(|l| (l.0, l.2)).collect();
+        assert_eq!(
+            reasons,
+            [
+                ("c.py", "input-limit-reached"),
+                ("d.py", "input-limit-reached")
+            ]
+        );
+        assert_eq!(found.files_skipped, found.lost.len());
         assert_eq!(found.diagnostics[0].severity, Severity::Error);
         assert_eq!(found.diagnostics[0].file.as_deref(), Some("c.py"));
     }

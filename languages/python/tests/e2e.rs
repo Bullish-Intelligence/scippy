@@ -1279,10 +1279,11 @@ fn the_manifest_names_the_package_and_its_folder_sets_the_import_root() {
 #[test]
 fn a_package_shadows_a_module_of_the_same_name() {
     let indexed = index("collision");
-    // `a/__init__.py` wins, as in the Python import system. `a.py` is skipped. The run succeeds.
+    // `a/__init__.py` wins, as in the Python import system. `a.py` is shadowed. The run succeeds.
     assert!(indexed.document("a.py").is_none());
     assert!(indexed.document("a/__init__.py").is_some());
-    assert_eq!(indexed.report.files_skipped, 1);
+    assert_eq!(indexed.report.files_skipped, 0);
+    assert_eq!(indexed.report.files_shadowed, 1);
     assert_eq!(indexed.report.files_indexed, 2);
     let warning = indexed
         .report
@@ -1327,7 +1328,8 @@ fn a_shadowed_module_below_an_import_root_gets_the_same_policy() {
     let indexed = index_at(dir.path());
     assert!(indexed.document("src/util.py").is_none());
     assert!(indexed.document("src/solo.py").is_some());
-    assert_eq!(indexed.report.files_skipped, 1);
+    assert_eq!(indexed.report.files_skipped, 0);
+    assert_eq!(indexed.report.files_shadowed, 1);
     assert_eq!(
         indexed.symbols_of("src/main.py", "import helper", "helper"),
         [global("src/util/helper().")]

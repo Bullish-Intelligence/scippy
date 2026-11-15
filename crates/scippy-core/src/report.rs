@@ -52,6 +52,21 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+/// A file that the run accepted for indexing and did not index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LostFile {
+    /// The project-relative path.
+    pub path: String,
+    /// The id of the language pack that accepts the file, when one pack does.
+    pub pack: Option<String>,
+    /// Where the run read a file that lies outside the project root.
+    pub real_path: Option<String>,
+    /// The code of the diagnostic that decided the loss.
+    pub reason: &'static str,
+    /// The SHA-256 of the bytes that the run read, when it read them.
+    pub sha256: Option<String>,
+}
+
 /// What the policy made of the references that had two or more raw ends.
 ///
 /// The count is per unique reference location. A raw end is a definition node
@@ -111,6 +126,9 @@ pub struct IndexReport {
     pub files_indexed: usize,
     /// Files that the run read or tried to read, and then skipped.
     pub files_skipped: usize,
+    /// Files that another file shadows, so that no import reaches them. They are legal Python
+    /// and do not count as skipped.
+    pub files_shadowed: usize,
     /// Files that a pack accepts and the walker skipped before it read them: a symbolic link,
     /// a file over the size limit, a bad file name, or a file after the total limit.
     pub discovery_skipped: usize,
@@ -133,4 +151,7 @@ pub struct IndexReport {
     pub unjoined_end_kinds: BTreeMap<String, usize>,
     pub multi_target: MultiTargetStats,
     pub diagnostics: Vec<Diagnostic>,
+    /// Every accepted file that the run did not index, with its reason. A file skipped at
+    /// discovery is here too. The list is complete after the run.
+    pub lost_files: Vec<LostFile>,
 }

@@ -2,8 +2,8 @@ use std::path::Path;
 
 use rusqlite::Connection;
 use scippy_core::{
-    AnalysisDiagnostic, AnalysisDocument, AnalysisOccurrence, AnalysisReference, AnalysisSnapshot,
-    AnalysisSymbol, ReferenceOutcome, ScippyError,
+    AnalysisDiagnostic, AnalysisDocument, AnalysisFile, AnalysisOccurrence, AnalysisReference,
+    AnalysisSnapshot, AnalysisSymbol, ReferenceOutcome, ScippyError,
 };
 
 use crate::publish::sha256_hex;
@@ -42,6 +42,17 @@ fn document(path: &str, source: &str) -> AnalysisDocument {
     }
 }
 
+fn lost(path: &str, reason: &str) -> AnalysisFile {
+    AnalysisFile {
+        path: path.into(),
+        pack: Some("python".into()),
+        real_path: None,
+        status: scippy_core::file_status(reason).into(),
+        reason: reason.into(),
+        sha256: None,
+    }
+}
+
 fn reference(path: &str, start: u32, end: u32, outcome: ReferenceOutcome) -> AnalysisReference {
     AnalysisReference {
         path: path.into(),
@@ -59,6 +70,7 @@ fn resolved(target: &str) -> ReferenceOutcome {
 fn empty() -> AnalysisSnapshot {
     AnalysisSnapshot {
         documents: Vec::new(),
+        lost_files: Vec::new(),
         references: Vec::new(),
         external_symbols: Vec::new(),
         diagnostics: Vec::new(),
@@ -345,17 +357,90 @@ fn a_bounded_search_publishes_and_keeps_its_marks() {
 }
 
 #[test]
-fn incomplete_input_is_refused_and_the_flags_must_agree_with_the_rows() {
+fn a_failed_file_publishes_and_the_input_is_incomplete() {
     let dir = tempfile::tempdir().unwrap();
     let mut layer = layer(dir.path());
     let mut s = snapshot("s");
+    s.lost_files = vec![lost("bad.py", "syntax-error")];
     s.input_complete = false;
+    publish(&mut layer, &s);
+    let view = layer.view().unwrap().unwrap();
+    assert!(!view.revision().input_complete);
+    assert!(!view.revision().strict);
+    let failed = view.files(Some(FileStatus::Failed)).unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].path, "bad.py");
+    assert_eq!(failed[0].reason.as_deref(), Some("syntax-error"));
+    assert_eq!(failed[0].sha256, None);
+    let all: Vec<_> = view
+        .files(None)
+        .unwrap()
+        .into_iter()
+        .map(|f| (f.path, f.status))
+        .collect();
+    assert_eq!(
+        all,
+        vec![
+            ("a.py".to_string(), FileStatus::Indexed),
+            ("bad.py".to_string(), FileStatus::Failed)
+        ]
+    );
+}
+
+#[test]
+fn a_skipped_file_makes_the_input_incomplete_and_a_shadowed_file_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut shadowed = snapshot("s");
+    shadowed.lost_files = vec![lost("a/__init__.py", "shadowed-file")];
+    publish(&mut layer, &shadowed);
+    let view = layer.view().unwrap().unwrap();
+    assert!(view.revision().input_complete);
+    let rows = view.files(Some(FileStatus::Shadowed)).unwrap();
+    assert_eq!(rows[0].reason.as_deref(), Some("shadowed-file"));
+    drop(view);
+    let mut skipped = snapshot("s");
+    skipped.lost_files = vec![lost("link.py", "symlink-skipped")];
+    skipped.input_complete = false;
+    publish(&mut layer, &skipped);
+    let view = layer.view().unwrap().unwrap();
+    assert!(!view.revision().input_complete);
+    assert_eq!(view.files(Some(FileStatus::Skipped)).unwrap().len(), 1);
+}
+
+#[test]
+fn a_strict_publish_rejects_incomplete_input_and_keeps_the_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    publish(&mut layer, &snapshot("first"));
+    let mut bad = snapshot("second");
+    bad.lost_files = vec![lost("bad.py", "syntax-error")];
+    bad.input_complete = false;
+    let strict = PublishOptions {
+        strict: true,
+        replace_root_set: false,
+    };
     assert!(matches!(
-        layer.publish(&s, &PublishOptions::default()),
+        layer.publish(&bad, &strict),
         Err(ScippyError::Incomplete)
     ));
-    assert!(layer.view().unwrap().is_none());
-    // A snapshot that claims exactness over a bounded reference is a bug of the caller.
+    let view = layer.view().unwrap().unwrap();
+    assert_eq!(view.revision().id, 1);
+    assert_eq!(view.files(None).unwrap().len(), 1);
+    drop(view);
+    // Without strict, the same snapshot publishes.
+    assert_eq!(publish(&mut layer, &bad), 2);
+}
+
+#[test]
+fn the_flags_must_agree_with_the_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    // The snapshot claims complete input, but a file failed.
+    let mut liar = snapshot("s");
+    liar.lost_files = vec![lost("bad.py", "bind-error")];
+    assert!(layer.publish(&liar, &PublishOptions::default()).is_err());
+    // The snapshot claims exactness over a bounded reference.
     let mut liar = snapshot("s");
     liar.references = vec![reference(
         "a.py",
@@ -364,7 +449,67 @@ fn incomplete_input_is_refused_and_the_flags_must_agree_with_the_rows() {
         ReferenceOutcome::Bounded("work".into()),
     )];
     assert!(layer.publish(&liar, &PublishOptions::default()).is_err());
-    assert!(layer.view().unwrap().is_none());
+    // A diagnostic with a code of lost input makes the input incomplete.
+    let mut liar = snapshot("s");
+    liar.diagnostics = vec![AnalysisDiagnostic {
+        severity: "Warning".into(),
+        stage: "Discover".into(),
+        file: None,
+        range: None,
+        code: "manifest-error".into(),
+        message: "m".into(),
+    }];
+    assert!(layer.publish(&liar, &PublishOptions::default()).is_err());
+    liar.input_complete = false;
+    publish(&mut layer, &liar);
+}
+
+#[test]
+fn a_lost_file_keeps_the_facts_of_its_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = empty();
+    let mut note = document("note.md", "");
+    note.language = "Markdown".into();
+    note.pack = Some("loci".into());
+    note.symbols = vec![symbol("g note.")];
+    note.occurrences = vec![occurrence(0, 0, "g note.", "definition")];
+    s.documents = vec![note];
+    let mut row = lost("note.md", "invalid-utf8");
+    row.pack = Some("loci".into());
+    s.lost_files = vec![row];
+    s.input_complete = false;
+    publish(&mut layer, &s);
+    let view = layer.view().unwrap().unwrap();
+    let files = view.files(None).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].status, FileStatus::Skipped);
+    assert_eq!(files[0].sha256, None);
+    assert_eq!(view.occurrences("note.md").unwrap().len(), 1);
+}
+
+#[test]
+fn the_digest_covers_the_status_and_the_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let digest = |layer: &mut Metalayer, reason: &str| {
+        let mut s = snapshot("a");
+        s.lost_files = vec![lost("x.py", reason)];
+        s.input_complete = reason == "shadowed-file";
+        publish(layer, &s);
+        layer
+            .view()
+            .unwrap()
+            .unwrap()
+            .revision()
+            .input_digest
+            .clone()
+    };
+    let shadowed = digest(&mut layer, "shadowed-file");
+    let syntax = digest(&mut layer, "syntax-error");
+    assert_ne!(shadowed, syntax);
+    assert_ne!(syntax, digest(&mut layer, "bind-error"));
+    assert_eq!(syntax, digest(&mut layer, "syntax-error"));
 }
 
 #[test]
