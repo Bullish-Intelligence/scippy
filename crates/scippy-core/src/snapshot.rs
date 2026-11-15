@@ -115,6 +115,16 @@ impl AnalysisReference {
     }
 }
 
+/// The diagnostic codes that make a snapshot incomplete, although their severity is a warning.
+/// Each code names input that the run lost without a skipped file: a manifest, a support file,
+/// a dependency, or a file over a size limit.
+pub const INCOMPLETE_CODES: [&str; 4] = [
+    "support-file-error",
+    "manifest-error",
+    "root-name-collision",
+    "file-too-large",
+];
+
 /// The facts and diagnostics of one completed indexing run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnalysisSnapshot {
@@ -122,8 +132,13 @@ pub struct AnalysisSnapshot {
     pub references: Vec<AnalysisReference>,
     pub external_symbols: Vec<AnalysisSymbol>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
-    /// False when the run skipped files or raised an error.
+    /// False when the run lost input. It is true only when the run skipped no file (at discovery
+    /// or later), raised no error diagnostic, and raised no diagnostic with a code in
+    /// [`INCOMPLETE_CODES`]. A bounded search does not change it: see `bounded_references`.
     pub complete: bool,
+    /// The count of references whose search hit a work bound. They have no target.
+    #[serde(default)]
+    pub bounded_references: usize,
     /// The SCIP index from the same run.
     pub scip: Vec<u8>,
 }
@@ -161,6 +176,10 @@ impl AnalysisSnapshot {
             })
             .collect();
         references.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
+        let bounded_references = references
+            .iter()
+            .filter(|r| matches!(r.outcome, ReferenceOutcome::Bounded(_)))
+            .count();
         Ok(Self {
             documents,
             references,
@@ -178,9 +197,11 @@ impl AnalysisSnapshot {
                 })
                 .collect(),
             complete: report.files_skipped == 0
+                && report.discovery_skipped == 0
                 && !report.diagnostics.iter().any(|d| {
-                    d.severity == crate::Severity::Error || d.code == "support-file-error"
+                    d.severity == crate::Severity::Error || INCOMPLETE_CODES.contains(&d.code)
                 }),
+            bounded_references,
             scip: emit::encode(data.clone())?,
         })
     }
@@ -356,6 +377,7 @@ mod tests {
             external_symbols: Vec::new(),
             diagnostics: Vec::new(),
             complete: true,
+            bounded_references: 0,
             scip: Vec::new(),
         }
     }

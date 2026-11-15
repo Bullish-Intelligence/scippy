@@ -150,9 +150,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use scippy_core::{
-    Analysis, BindingRules, Builtins, DeclKind, Descriptor, ExternalAsset, ExternalIdentity,
-    ExtractionSpec, Identity, LanguagePack, Manifest, Package, ProjectModel, ProjectRelativePath,
-    Reach, ReferenceKind, Scope, SymbolKind,
+    Analysis, BindingRules, Builtins, DeclKind, Descriptor, Diagnostic, ExternalAsset,
+    ExternalIdentity, ExtractionSpec, Identity, LanguagePack, Manifest, Package, ProjectModel,
+    ProjectRelativePath, Reach, ReferenceKind, Scope, Severity, Stage, SymbolKind,
 };
 
 mod manifest;
@@ -257,6 +257,64 @@ impl Analysis for PythonPack {
         manifests: &[Manifest],
     ) -> Box<dyn ProjectModel> {
         Box::new(PythonModel::new(files, manifests))
+    }
+
+    fn input_problems(
+        &self,
+        _root: &Path,
+        files: &[ProjectRelativePath],
+        manifests: &[Manifest],
+    ) -> Vec<Diagnostic> {
+        let paths: Vec<&str> = files.iter().map(ProjectRelativePath::as_str).collect();
+        let problem = |file: Option<String>, code, message| Diagnostic {
+            severity: Severity::Warning,
+            stage: Stage::Discover,
+            file,
+            range: None,
+            code,
+            message,
+        };
+        let mut out = Vec::new();
+        let mut projects = Vec::new();
+        for manifest in manifests {
+            match Project::read(&manifest.folder, &manifest.text, &paths) {
+                Some(project) => projects.push(project),
+                None => out.push(problem(
+                    Some(match manifest.folder.as_str() {
+                        "" => "pyproject.toml".to_string(),
+                        folder => format!("{folder}/pyproject.toml"),
+                    }),
+                    "manifest-error",
+                    "ignored: the manifest is not valid TOML".to_string(),
+                )),
+            }
+        }
+        // A dependency name that two roots share names no root, so the link is lost.
+        for project in &projects {
+            for name in &project.dependencies {
+                let owners: Vec<&str> = projects
+                    .iter()
+                    .filter(|p| {
+                        !p.folder.is_empty()
+                            && p.folder != project.folder
+                            && p.name.as_ref() == Some(name)
+                    })
+                    .map(|p| p.folder.as_str())
+                    .collect();
+                if owners.len() > 1 {
+                    out.push(problem(
+                        None,
+                        "root-name-collision",
+                        format!(
+                            "the dependency {name} of {:?} names more than one root: {}",
+                            project.folder,
+                            owners.join(", ")
+                        ),
+                    ));
+                }
+            }
+        }
+        out
     }
 }
 

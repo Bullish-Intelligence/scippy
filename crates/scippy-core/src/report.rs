@@ -98,6 +98,9 @@ pub struct IndexReport {
     pub files_indexed: usize,
     /// Files that the run read or tried to read, and then skipped.
     pub files_skipped: usize,
+    /// Files that a pack accepts and the walker skipped before it read them: a symbolic link,
+    /// a file over the size limit, a bad file name, or a file after the total limit.
+    pub discovery_skipped: usize,
     pub declarations: usize,
     /// Occurrences written to the index.
     pub occurrences: usize,

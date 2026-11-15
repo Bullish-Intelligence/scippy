@@ -129,9 +129,9 @@
 use std::path::Path;
 
 use scippy_core::{
-    Analysis, BindingRules, Builtins, DeclKind, Descriptor, Dialect, ExtractionSpec, Identity,
-    LanguagePack, Manifest, Package, ProjectModel, ProjectRelativePath, Reach, ReferenceKind,
-    Scope, SupportFile, SymbolKind,
+    Analysis, BindingRules, Builtins, DeclKind, Descriptor, Diagnostic, Dialect, ExtractionSpec,
+    Identity, LanguagePack, Manifest, Package, ProjectModel, ProjectRelativePath, Reach,
+    ReferenceKind, Scope, Severity, Stage, SupportFile, SymbolKind,
 };
 use tree_sitter_stack_graphs::FileAnalyzer;
 use tree_sitter_stack_graphs_typescript as rules;
@@ -336,6 +336,28 @@ impl Analysis for TypeScriptPack {
             });
         }
         out
+    }
+
+    fn input_problems(
+        &self,
+        root: &Path,
+        _files: &[ProjectRelativePath],
+        _manifests: &[Manifest],
+    ) -> Vec<Diagnostic> {
+        let message = match std::fs::read_to_string(root.join("tsconfig.json")) {
+            Ok(text) if reduce_tsconfig(&text).is_some() => return Vec::new(),
+            Ok(_) => "ignored: tsconfig.json is not valid JSON".to_string(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+            Err(e) => format!("ignored: tsconfig.json cannot be read: {e}"),
+        };
+        vec![Diagnostic {
+            severity: Severity::Warning,
+            stage: Stage::Discover,
+            file: Some("tsconfig.json".to_string()),
+            range: None,
+            code: "support-file-error",
+            message,
+        }]
     }
 
     fn project_model(

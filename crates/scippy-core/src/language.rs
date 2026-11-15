@@ -613,6 +613,19 @@ pub trait Analysis: Send + Sync {
         files: &[ProjectRelativePath],
         manifests: &[Manifest],
     ) -> Box<dyn ProjectModel>;
+    /// Report input that the pack cannot use, such as a manifest that does not parse.
+    /// Each diagnostic names a code that makes the snapshot incomplete: see
+    /// `INCOMPLETE_CODES`. `root` is the project root. `manifests` holds each
+    /// manifest that the core read. The default reports nothing.
+    fn input_problems(
+        &self,
+        root: &Path,
+        files: &[ProjectRelativePath],
+        manifests: &[Manifest],
+    ) -> Vec<Diagnostic> {
+        let _ = (root, files, manifests);
+        Vec::new()
+    }
     /// Repair source text that the grammar rejects but the language accepts.
     ///
     /// The core calls this for a file that has a syntax error. The pack returns the text with

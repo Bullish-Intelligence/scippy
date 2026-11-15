@@ -126,6 +126,8 @@ pub(crate) struct Discovery {
     pub all_files: Vec<ProjectFile>,
     /// Count of all regular files that the walker saw.
     pub files_discovered: usize,
+    /// Count of files that a pack accepts and the walker skipped. Each has a diagnostic.
+    pub files_skipped: usize,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -161,6 +163,7 @@ pub(crate) fn discover(
             files: Vec::new(),
             all_files: Vec::new(),
             files_discovered: 0,
+            files_skipped: 0,
             diagnostics: Vec::new(),
         },
     };
@@ -252,12 +255,15 @@ impl Walk<'_> {
                 }
                 match utf8 {
                     Some(n) => self.directory(&path, &format!("{prefix}{n}/"), owner),
-                    None => self.warn(
-                        Severity::Warning,
-                        "non-utf8-path",
-                        None,
-                        format!("skipped directory with a non-UTF-8 name: {name:?}"),
-                    ),
+                    None => {
+                        self.found.files_skipped += 1;
+                        self.warn(
+                            Severity::Warning,
+                            "non-utf8-path",
+                            None,
+                            format!("skipped directory with a non-UTF-8 name: {name:?}"),
+                        );
+                    }
                 }
                 continue;
             }
@@ -269,6 +275,7 @@ impl Walk<'_> {
 
             if kind.is_symlink() {
                 if let (Some(n), false) = (utf8, accepting.is_empty()) {
+                    self.found.files_skipped += 1;
                     self.warn(
                         Severity::Warning,
                         "symlink-skipped",
@@ -298,6 +305,7 @@ impl Walk<'_> {
                 continue;
             }
             let Some(n) = utf8 else {
+                self.found.files_skipped += 1;
                 self.warn(
                     Severity::Warning,
                     "non-utf8-path",
@@ -310,6 +318,7 @@ impl Walk<'_> {
             let relative = match ProjectRelativePath::new(&relative) {
                 Ok(relative) => relative,
                 Err(e) => {
+                    self.found.files_skipped += 1;
                     self.warn(Severity::Warning, "invalid-path", None, e.to_string());
                     continue;
                 }
@@ -337,6 +346,7 @@ impl Walk<'_> {
             return;
         }
         if accepting.len() > 1 {
+            self.found.files_skipped += 1;
             let ids: Vec<_> = accepting.iter().map(|&i| self.languages[i].id()).collect();
             self.warn(
                 Severity::Error,
@@ -347,6 +357,7 @@ impl Walk<'_> {
             return;
         }
         if size > self.limits.max_file_bytes {
+            self.found.files_skipped += 1;
             self.warn(
                 Severity::Warning,
                 "file-too-large",
@@ -359,10 +370,12 @@ impl Walk<'_> {
             return;
         }
         if self.limit_reached {
+            self.found.files_skipped += 1;
             return;
         }
         if self.total_bytes + size > self.limits.max_total_bytes {
             self.limit_reached = true;
+            self.found.files_skipped += 1;
             self.warn(
                 Severity::Error,
                 "input-limit-reached",

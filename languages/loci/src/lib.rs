@@ -189,16 +189,22 @@ impl LanguagePack for LociPack {
     fn input_limits(&self, root: &Path) -> Option<InputLimits> {
         let settings = Settings::read(root).ok().flatten()?;
         // A file of a vault is a note. The cap of the vault and of its roots is the limit of a file.
-        let notes = settings
-            .roots
-            .iter()
-            .map(|r| r.note_max_bytes)
-            .chain([settings.note_max_bytes]);
         Some(InputLimits {
-            max_file_bytes: notes.max().unwrap_or(settings.note_max_bytes),
+            max_file_bytes: vault_walker_cap(&settings),
             max_total_bytes: VAULT_MAX_TOTAL_BYTES,
         })
     }
+}
+
+/// The size limit of one file in the walker: the largest note cap of the vault and its roots.
+fn vault_walker_cap(settings: &Settings) -> u64 {
+    settings
+        .roots
+        .iter()
+        .map(|r| r.note_max_bytes)
+        .chain([settings.note_max_bytes])
+        .max()
+        .unwrap_or(settings.note_max_bytes)
 }
 
 /// The total input limit when a vault is active: 4 GiB. A vault has far more text than code.
@@ -324,6 +330,19 @@ impl NativeAnalysis for LociPack {
             }
         };
         let classified = classify(&files, &settings, listing);
+        // The walker already warns about a file over the largest cap. Warn about the rest.
+        let walker_cap = vault_walker_cap(&settings);
+        for (path, size, cap) in classified.skipped.iter().chain(&listing.skipped) {
+            if *size <= walker_cap {
+                output.diagnostics.push(Diagnostic {
+                    file: Some(path.clone()),
+                    ..warn(
+                        "file-too-large",
+                        format!("skipped: {size} bytes exceed the limit of {cap} bytes"),
+                    )
+                });
+            }
+        }
         let wanted: HashSet<&str> = classified
             .sources
             .iter()

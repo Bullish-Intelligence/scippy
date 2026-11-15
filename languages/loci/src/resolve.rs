@@ -138,6 +138,9 @@ pub struct Classified {
     pub link_targets: Vec<String>,
     /// The extra roots: name and `stem_visible`.
     pub roots: Vec<(String, bool)>,
+    /// The notes and claimed files over the size cap, dropped from every tier.
+    /// `(path, size, cap)`.
+    pub skipped: Vec<(String, u64, u64)>,
 }
 
 /// Say whether a file or one of its folders matches an exclude glob.
@@ -196,6 +199,8 @@ pub fn classify(
         if (is_md && include.is_match(path)) || (claimed && !is_manifest(path)) {
             // A note, or a file that an analyzer claims, over the size cap is in neither tier.
             if *size > settings.note_max_bytes {
+                out.skipped
+                    .push((path.clone(), *size, settings.note_max_bytes));
                 continue;
             }
             out.sources.push(path.clone());

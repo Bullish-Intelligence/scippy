@@ -428,6 +428,9 @@ pub struct RootListing {
     pub link_targets: Vec<(String, u64)>,
     /// A fault that does not stop the run: `root_unavailable`, `root_list_failed`.
     pub diagnostic: Option<&'static str>,
+    /// The notes and claimed files over the size cap, dropped from every tier.
+    /// `(vault path, size, cap)`.
+    pub skipped: Vec<(String, u64, u64)>,
 }
 
 /// The tracked paths of a git root, sorted, or `None` when `git` fails.
@@ -599,7 +602,9 @@ pub fn list_root(
         };
         if meta.len() > cap {
             // A claim of the root takes code. A big file stays an attachment.
-            if !(is_note || vault_claimed) {
+            if is_note || vault_claimed {
+                out.skipped.push((vault_path, meta.len(), cap));
+            } else {
                 out.link_targets.push((vault_path, meta.len()));
             }
             continue;
@@ -627,6 +632,8 @@ pub struct Listing {
     pub link_targets: Vec<(String, u64)>,
     /// `(root name, fault code)` for each root that could not be listed.
     pub diagnostics: Vec<(String, &'static str)>,
+    /// The notes and claimed files over the size cap. `(vault path, size, cap)`.
+    pub skipped: Vec<(String, u64, u64)>,
 }
 
 impl Listing {
@@ -638,6 +645,7 @@ impl Listing {
             let one = list_root(spec, &settings.ignore, &vault_claims);
             all.sources.extend(one.sources);
             all.link_targets.extend(one.link_targets);
+            all.skipped.extend(one.skipped);
             if let Some(code) = one.diagnostic {
                 all.diagnostics.push((spec.name.clone(), code));
             }
