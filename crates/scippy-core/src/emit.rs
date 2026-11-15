@@ -113,6 +113,12 @@ pub(crate) fn write_index(index: IndexData, output: &Path) -> Result<(), ScippyE
     write_atomic(output, &bytes)
 }
 
+/// Write SCIP bytes to `output` through a temporary file and a rename.
+/// A failure leaves no truncated file at `output`.
+pub fn write_scip(output: &Path, bytes: &[u8]) -> Result<(), ScippyError> {
+    write_atomic(output, bytes)
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ScippyError> {
     let io = |source| ScippyError::Io {
         path: path.to_path_buf(),

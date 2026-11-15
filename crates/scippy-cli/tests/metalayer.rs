@@ -315,3 +315,88 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
         4
     );
 }
+
+fn scippy_index(root: &Path, flags: &[(&str, &Path)]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    command.arg("index").arg(root);
+    for (flag, path) in flags {
+        command.arg(flag).arg(path);
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn output_and_metalayer_on_one_path_fail_and_keep_the_database() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "module.py", "x = 1\n");
+    let database = scratch.path().join("layer.sqlite");
+    let first = scippy_index(
+        &root,
+        &[
+            ("-o", &scratch.path().join("a.scip")),
+            ("--metalayer", &database),
+        ],
+    );
+    assert!(first.status.success());
+    let before = fs::read(&database).unwrap();
+    let clash = scippy_index(&root, &[("-o", &database), ("--metalayer", &database)]);
+    assert!(!clash.status.success());
+    assert!(String::from_utf8_lossy(&clash.stderr).contains("name the same file"));
+    assert_eq!(fs::read(&database).unwrap(), before);
+}
+
+#[test]
+fn output_and_graph_cache_on_one_path_fail() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "module.py", "x = 1\n");
+    let path = scratch.path().join("shared.sqlite");
+    let clash = scippy_index(&root, &[("-o", &path), ("--graph-cache", &path)]);
+    assert!(!clash.status.success());
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_path_that_reaches_the_same_file_through_dots_fails() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "module.py", "x = 1\n");
+    fs::create_dir(scratch.path().join("sub")).unwrap();
+    let plain = scratch.path().join("layer.sqlite");
+    let dotted = scratch.path().join("sub/../layer.sqlite");
+    let clash = scippy_index(&root, &[("-o", &dotted), ("--metalayer", &plain)]);
+    assert!(!clash.status.success());
+}
+
+#[test]
+fn a_trace_on_a_sqlite_sidecar_path_fails() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "module.py", "x = 1\n");
+    let database = scratch.path().join("layer.sqlite");
+    let wal = scratch.path().join("layer.sqlite-wal");
+    let clash = scippy_index(
+        &root,
+        &[
+            ("-o", &scratch.path().join("a.scip")),
+            ("--metalayer", &database),
+            ("--trace", &wal),
+        ],
+    );
+    assert!(!clash.status.success());
+    assert!(String::from_utf8_lossy(&clash.stderr).contains("SQLite"));
+}
+
+#[test]
+fn a_failed_publish_keeps_the_old_output_file() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "module.py", "x = 1\n");
+    let output = scratch.path().join("index.scip");
+    fs::write(&output, b"old index").unwrap();
+    let missing = scratch.path().join("missing/layer.sqlite");
+    let failed = scippy_index(&root, &[("-o", &output), ("--metalayer", &missing)]);
+    assert!(!failed.status.success());
+    assert_eq!(fs::read(&output).unwrap(), b"old index");
+}

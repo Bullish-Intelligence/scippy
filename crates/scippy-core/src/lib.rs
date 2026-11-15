@@ -33,7 +33,7 @@ pub use snapshot::{
     AnalysisSymbol, Metalayer, PublishedView, ReferenceOutcome,
 };
 
-pub use emit::SymbolKind;
+pub use emit::{SymbolKind, write_scip};
 pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
 pub use language::{
@@ -94,7 +94,7 @@ pub fn index_project(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<IndexReport, ScippyError> {
-    pipeline::run(request, languages, false).map(|(report, _)| report)
+    pipeline::run(request, languages, false, true).map(|(report, _)| report)
 }
 
 /// Index the project and return the facts used to write the SCIP file.
@@ -102,6 +102,16 @@ pub fn index_project_with_snapshot(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<(IndexReport, AnalysisSnapshot), ScippyError> {
-    let (report, snapshot) = pipeline::run(request, languages, true)?;
+    let (report, snapshot) = pipeline::run(request, languages, true, true)?;
+    Ok((report, snapshot.expect("snapshot was requested")))
+}
+
+/// Index the project like [`index_project_with_snapshot`], but do not write `request.output`.
+/// The caller writes `snapshot.scip` with [`write_scip`] when it chooses.
+pub fn index_project_for_publish(
+    request: &IndexRequest,
+    languages: &[&dyn LanguagePack],
+) -> Result<(IndexReport, AnalysisSnapshot), ScippyError> {
+    let (report, snapshot) = pipeline::run(request, languages, true, false)?;
     Ok((report, snapshot.expect("snapshot was requested")))
 }

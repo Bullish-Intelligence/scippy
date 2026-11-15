@@ -81,6 +81,7 @@ pub(crate) fn run(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
     capture: bool,
+    write_output: bool,
 ) -> Result<(IndexReport, Option<AnalysisSnapshot>), ScippyError> {
     // A pack that is not enabled for this project takes no part in the run.
     let languages: Vec<&dyn LanguagePack> = languages
@@ -229,7 +230,9 @@ pub(crate) fn run(
     } else {
         None
     };
-    emit::write_index(data, &request.output)?;
+    if write_output {
+        emit::write_index(data, &request.output)?;
+    }
     Ok((report, snapshot))
 }
 

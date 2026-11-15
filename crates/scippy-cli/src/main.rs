@@ -1,11 +1,13 @@
 //! The `scippy` command.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use scippy_core::{
-    IndexRequest, InputLimits, LanguagePack, Metalayer, index_project, index_project_with_snapshot,
+    IndexRequest, InputLimits, LanguagePack, Metalayer, index_project, index_project_for_publish,
+    write_scip,
 };
 use scippy_loci::LociPack;
 use scippy_python::PythonPack;
@@ -86,6 +88,73 @@ fn parse_size(text: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("`{text}` is too large"))
 }
 
+/// Make a path absolute and resolve the links of its longest existing parent.
+/// The file at the path may not exist yet.
+fn resolve(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut tail: Vec<OsString> = Vec::new();
+    let mut head = absolute.as_path();
+    loop {
+        if let Ok(real) = head.canonicalize() {
+            return tail.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (head.parent(), head.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                head = parent;
+            }
+            _ => return absolute,
+        }
+    }
+}
+
+/// The path with `suffix` added to its file name.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+/// Refuse two output paths that name the same file. A SQLite database also owns the
+/// `-wal`, `-shm`, and `-journal` files beside it.
+fn check_paths(args: &IndexArgs) -> Result<(), String> {
+    let mut named: Vec<(&str, PathBuf)> = vec![("--output", resolve(&args.output))];
+    if let Some(path) = &args.trace {
+        named.push(("--trace", resolve(path)));
+    }
+    if let Some(path) = &args.metalayer {
+        named.push(("--metalayer", resolve(path)));
+    }
+    if let Some(path) = &args.graph_cache {
+        named.push(("--graph-cache", resolve(path)));
+    }
+    for (i, (first, a)) in named.iter().enumerate() {
+        for (second, b) in &named[i + 1..] {
+            if a == b {
+                return Err(format!(
+                    "{first} and {second} name the same file: {}",
+                    a.display()
+                ));
+            }
+        }
+    }
+    for (database, base) in &named {
+        if *database != "--metalayer" && *database != "--graph-cache" {
+            continue;
+        }
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let sidecar = with_suffix(base, suffix);
+            if let Some((other, _)) = named.iter().find(|(_, path)| *path == sidecar) {
+                return Err(format!(
+                    "{other} names a SQLite file of the {database} database: {}",
+                    sidecar.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The static registry of built-in language packs.
 fn registry() -> [&'static dyn LanguagePack; 3] {
     [&PythonPack, &TypeScriptPack, &LociPack]
@@ -100,6 +169,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Index(args) => {
+            if let Err(message) = check_paths(&args) {
+                eprintln!("scippy: {message}");
+                return ExitCode::FAILURE;
+            }
             let IndexArgs {
                 project_root,
                 output,
@@ -135,13 +208,15 @@ fn main() -> ExitCode {
                 request.memory_budget = bytes;
             }
             let indexed = if let Some(path) = metalayer {
-                index_project_with_snapshot(&request, &registry()).and_then(|(report, snapshot)| {
+                // The SCIP file follows the publication. A failed publish keeps the old file.
+                index_project_for_publish(&request, &registry()).and_then(|(report, snapshot)| {
                     if !snapshot.complete {
                         for diagnostic in &report.diagnostics {
                             eprintln!("{diagnostic}");
                         }
                     }
                     let revision = Metalayer::open(path)?.publish(&snapshot)?;
+                    write_scip(&request.output, &snapshot.scip)?;
                     Ok((report, Some(revision)))
                 })
             } else {
