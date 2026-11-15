@@ -4,10 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use scippy_core::{
-    AnalysisSnapshot, IndexRequest, Metalayer, ReferenceOutcome, index_project_with_snapshot,
-};
+use scippy_core::{AnalysisSnapshot, IndexRequest, ReferenceOutcome, index_project_with_snapshot};
 use scippy_loci::LociPack;
+use scippy_metalayer::{Metalayer, PublishOptions, RelationQuery};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
@@ -84,15 +83,38 @@ fn cli_publishes_and_keeps_the_last_revision_on_a_parse_failure() {
     let failed = run();
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("syntax-error"));
-    assert_eq!(
-        Metalayer::open(database)
-            .unwrap()
-            .read()
-            .unwrap()
-            .unwrap()
-            .revision,
-        2
-    );
+    assert_eq!(revision_of(&database), 2);
+}
+
+fn revision_of(database: &Path) -> i64 {
+    Metalayer::open(database)
+        .unwrap()
+        .view()
+        .unwrap()
+        .unwrap()
+        .revision()
+        .id
+}
+
+/// The count of supports that `path` has for a target that contains `part`.
+fn supports(layer: &mut Metalayer, path: &str, part: &str) -> Option<u32> {
+    let view = layer.view().unwrap().unwrap();
+    let query = RelationQuery {
+        path: Some(path.to_owned()),
+        ..Default::default()
+    };
+    view.file_references(query)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.target.symbol.contains(part))
+        .map(|r| r.supports)
+}
+
+fn publish(layer: &mut Metalayer, snapshot: &AnalysisSnapshot) -> i64 {
+    layer
+        .publish(snapshot, &PublishOptions::default())
+        .unwrap()
+        .revision
 }
 
 #[test]
@@ -234,22 +256,22 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     assert!(
         matches!(outcome(&initial, "use.py", "print(item.value)", "value"), ReferenceOutcome::Resolved(s) if s.contains("A#value"))
     );
-    assert_eq!(layer.publish(&initial).unwrap(), 1);
-    let a = layer
-        .read()
-        .unwrap()
-        .unwrap()
-        .file_references
-        .into_iter()
-        .find(|(path, target, _)| path == "use.py" && target.contains("A#value"))
-        .unwrap();
-    assert_eq!(a.2, 2);
+    assert_eq!(publish(&mut layer, &initial), 1);
+    assert_eq!(supports(&mut layer, "use.py", "A#value"), Some(2));
 
     let (warm, unchanged) = check(1);
     assert_eq!(warm.graph_cache_misses, 0);
     assert!(warm.graph_cache_hits >= 7);
-    let view = layer.read().unwrap().unwrap();
-    assert_eq!((view.revision, view.snapshot), (1, unchanged));
+    {
+        let view = layer.view().unwrap().unwrap();
+        assert_eq!(view.revision().id, 1);
+        // The facts of the published revision equal the facts of the warm run.
+        assert_eq!(view.files(None).unwrap().len(), unchanged.documents.len());
+        assert_eq!(
+            view.references(Default::default()).unwrap().len(),
+            unchanged.references.len()
+        );
+    }
 
     write(
         &root,
@@ -266,16 +288,8 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
         outcome(&next, "use.py", "missing()", "missing"),
         ReferenceOutcome::Resolved(_)
     ));
-    assert_eq!(layer.publish(&next).unwrap(), 2);
-    assert!(
-        !layer
-            .read()
-            .unwrap()
-            .unwrap()
-            .file_references
-            .iter()
-            .any(|(path, target, _)| path == "use.py" && target.contains("A#value"))
-    );
+    assert_eq!(publish(&mut layer, &next), 2);
+    assert_eq!(supports(&mut layer, "use.py", "A#value"), None);
 
     write(
         &root,
@@ -283,16 +297,8 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
         "from lib import make, missing\nitem = make()\nprint(item.value)\nmissing()\n",
     );
     let (_, one) = check(3);
-    layer.publish(&one).unwrap();
-    let b = layer
-        .read()
-        .unwrap()
-        .unwrap()
-        .file_references
-        .into_iter()
-        .find(|(path, target, _)| path == "use.py" && target.contains("B#value"))
-        .unwrap();
-    assert_eq!(b.2, 1);
+    publish(&mut layer, &one);
+    assert_eq!(supports(&mut layer, "use.py", "B#value"), Some(1));
 
     write(
         &root,
@@ -302,28 +308,69 @@ fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     write(&root, "target.md", "# Renamed\n");
     fs::remove_file(root.join("b.py")).unwrap();
     let (_, removed) = check(4);
-    layer.publish(&removed).unwrap();
-    assert!(
-        !layer
-            .read()
-            .unwrap()
-            .unwrap()
-            .file_references
-            .iter()
-            .any(|(path, target, _)| path == "use.py" && target.contains("B#value"))
-    );
-    let view = layer.read().unwrap().unwrap();
-    assert_eq!((view.revision, view.snapshot), (4, removed));
+    publish(&mut layer, &removed);
+    assert_eq!(supports(&mut layer, "use.py", "B#value"), None);
+    assert_eq!(layer.view().unwrap().unwrap().revision().id, 4);
     drop(layer);
+    assert_eq!(revision_of(&database), 4);
+    let db = rusqlite::Connection::open(&database).unwrap();
+    let count = |sql: &str| db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
     assert_eq!(
-        Metalayer::open(&database)
-            .unwrap()
-            .read()
-            .unwrap()
-            .unwrap()
-            .revision,
-        4
+        count("SELECT count(*) FROM file"),
+        removed.documents.len() as i64
     );
+    assert_eq!(
+        count("SELECT count(*) FROM reference"),
+        removed.references.len() as i64
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM occurrence"),
+        removed
+            .documents
+            .iter()
+            .map(|d| d.occurrences.len())
+            .sum::<usize>() as i64
+    );
+}
+
+#[test]
+fn another_project_root_is_refused_until_the_flag_replaces_it() {
+    let scratch = tempfile::tempdir().unwrap();
+    let first = scratch.path().join("first");
+    let second = scratch.path().join("second");
+    write(&first, "a.py", "x = 1\n");
+    write(&second, "b.py", "y = 2\n");
+    let database = scratch.path().join("layer.sqlite");
+    let output = scratch.path().join("index.scip");
+    let index = |root: &Path, replace: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+        command
+            .arg("index")
+            .arg(root)
+            .arg("-o")
+            .arg(&output)
+            .arg("--metalayer")
+            .arg(&database);
+        if replace {
+            command.arg("--replace-root-set");
+        }
+        command.output().unwrap()
+    };
+    assert!(index(&first, false).status.success());
+    let scip = fs::read(&output).unwrap();
+    let refused = index(&second, false);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("root set"));
+    assert_eq!(revision_of(&database), 1);
+    assert_eq!(fs::read(&output).unwrap(), scip);
+    let replaced = index(&second, true);
+    assert!(
+        replaced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+    assert_eq!(revision_of(&database), 2);
 }
 
 fn scippy_index(root: &Path, flags: &[(&str, &Path)]) -> std::process::Output {

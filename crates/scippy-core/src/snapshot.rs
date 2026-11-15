@@ -1,10 +1,9 @@
-//! Structured analysis and an experimental SQLite read model.
+//! The structured analysis of one run. The crate `scippy-metalayer` stores it.
 
-use std::path::Path;
-use std::time::Duration;
+use std::collections::HashMap;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::emit::{self, IndexData, Role, SymbolInfo};
 use crate::error::ScippyError;
@@ -16,6 +15,16 @@ use crate::report::IndexReport;
 pub struct AnalysisDocument {
     pub path: String,
     pub language: String,
+    /// The id of the language pack that indexed the file. It is `None` for a stub document.
+    #[serde(default)]
+    pub pack: Option<String>,
+    /// Where the run read a file that lies outside the project root. `None` for a file below it.
+    #[serde(default)]
+    pub real_path: Option<String>,
+    /// The SHA-256 of the bytes that the run read, as lowercase hex. It is `None` for a stub
+    /// document, which has no text of its own.
+    #[serde(default)]
+    pub sha256: Option<String>,
     pub source: String,
     pub occurrences: Vec<AnalysisOccurrence>,
     pub symbols: Vec<AnalysisSymbol>,
@@ -148,6 +157,39 @@ pub struct AnalysisSnapshot {
     pub bounded_references: usize,
     /// The SCIP index from the same run.
     pub scip: Vec<u8>,
+    /// The version of the tool that made the run.
+    #[serde(default)]
+    pub tool_version: String,
+    /// The canonical absolute path of the project root.
+    #[serde(default)]
+    pub project_root: String,
+    /// The virtual folders that the run resolved as separate shards, sorted.
+    #[serde(default)]
+    pub shards: Vec<String>,
+    /// The settings of the run that change the analysis: the input limits, the resolve limits,
+    /// and the package overrides. It is text with a fixed order.
+    #[serde(default)]
+    pub options: String,
+}
+
+/// What the pipeline knows about a run, beyond the facts.
+pub(crate) struct RunContext {
+    pub project_root: String,
+    pub shards: Vec<String>,
+    pub options: String,
+    /// For each document path: the pack id and the real path of a file outside the root.
+    pub files: HashMap<String, (String, Option<String>)>,
+}
+
+/// The SHA-256 of `bytes` as lowercase hex.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
 }
 
 impl AnalysisSnapshot {
@@ -155,31 +197,40 @@ impl AnalysisSnapshot {
         data: &IndexData,
         mut references: Vec<AnalysisReference>,
         report: &IndexReport,
+        context: RunContext,
     ) -> Result<Self, ScippyError> {
         let documents = data
             .documents
             .iter()
-            .map(|d| AnalysisDocument {
-                path: d.path.as_str().to_owned(),
-                language: d.language.clone(),
-                source: d.source.clone(),
-                occurrences: d
-                    .occurrences
-                    .iter()
-                    .map(|o| AnalysisOccurrence {
-                        start: o.start_byte,
-                        end: o.end_byte,
-                        symbol: o.symbol.as_str().to_owned(),
-                        role: match o.role {
-                            Role::Reference => "reference",
-                            Role::Definition => "definition",
-                            Role::Import => "import",
-                            Role::ReadAccess => "read",
-                        }
-                        .to_owned(),
-                    })
-                    .collect(),
-                symbols: d.symbols.iter().map(symbol_info).collect(),
+            .map(|d| {
+                // A stub document has no language and no text.
+                let stub = d.language.is_empty();
+                let file = context.files.get(d.path.as_str());
+                AnalysisDocument {
+                    path: d.path.as_str().to_owned(),
+                    language: d.language.clone(),
+                    pack: file.map(|f| f.0.clone()),
+                    real_path: file.and_then(|f| f.1.clone()),
+                    sha256: (!stub).then(|| sha256_hex(d.source.as_bytes())),
+                    source: d.source.clone(),
+                    occurrences: d
+                        .occurrences
+                        .iter()
+                        .map(|o| AnalysisOccurrence {
+                            start: o.start_byte,
+                            end: o.end_byte,
+                            symbol: o.symbol.as_str().to_owned(),
+                            role: match o.role {
+                                Role::Reference => "reference",
+                                Role::Definition => "definition",
+                                Role::Import => "import",
+                                Role::ReadAccess => "read",
+                            }
+                            .to_owned(),
+                        })
+                        .collect(),
+                    symbols: d.symbols.iter().map(symbol_info).collect(),
+                }
             })
             .collect();
         references.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
@@ -208,186 +259,17 @@ impl AnalysisSnapshot {
             analysis_exact: bounded_references == 0,
             bounded_references,
             scip: emit::encode(data.clone())?,
+            tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+            project_root: context.project_root,
+            shards: context.shards,
+            options: context.options,
         })
     }
-}
-
-/// Marks a database file as a Scippy read model. The bytes spell "SCPY".
-const APPLICATION_ID: i32 = 0x5343_5059;
-/// The storage format version that this code reads and writes.
-const SCHEMA_VERSION: i32 = 2;
-
-/// A local, experimental read model. Each publication replaces the complete snapshot.
-pub struct Metalayer {
-    db: Connection,
-}
-
-impl Metalayer {
-    /// Open or create the read model.
-    ///
-    /// The database has no migrations. Delete a database with another format and rebuild it.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, ScippyError> {
-        let mut db = Connection::open(path).map_err(storage)?;
-        db.busy_timeout(Duration::from_secs(30)).map_err(storage)?;
-        db.execute_batch("PRAGMA journal_mode=WAL;")
-            .map_err(storage)?;
-        // An immediate transaction makes concurrent first opens take turns.
-        let tx = db
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage)?;
-        let application_id: i32 = tx
-            .query_row("PRAGMA application_id", [], |r| r.get(0))
-            .map_err(storage)?;
-        let version: i32 = tx
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(storage)?;
-        let has_tables: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table')",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(storage)?;
-        if application_id == 0 && version == 0 {
-            if has_tables {
-                return Err(ScippyError::Storage(
-                    "the metalayer database has the old unversioned format; delete it and rebuild it"
-                        .into(),
-                ));
-            }
-            tx.execute_batch(&format!(
-                "PRAGMA application_id={APPLICATION_ID}; PRAGMA user_version={SCHEMA_VERSION};"
-            ))
-            .map_err(storage)?;
-        } else if application_id != APPLICATION_ID {
-            return Err(ScippyError::Storage(
-                "the file is not a Scippy metalayer database".into(),
-            ));
-        } else if version != SCHEMA_VERSION {
-            return Err(ScippyError::Storage(format!(
-                "the metalayer database has format version {version}, but this build reads version {SCHEMA_VERSION}; delete it and rebuild it"
-            )));
-        }
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, value BLOB NOT NULL);
-            CREATE TABLE IF NOT EXISTS reference_support (path TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, target TEXT NOT NULL, PRIMARY KEY(path,start,end,target));
-            CREATE TABLE IF NOT EXISTS file_reference (path TEXT NOT NULL, target TEXT NOT NULL, supports INTEGER NOT NULL, PRIMARY KEY(path,target));",
-        )
-        .map_err(storage)?;
-        tx.commit().map_err(storage)?;
-        Ok(Self { db })
-    }
-
-    /// Atomically replace the snapshot and its derived file-reference relation.
-    pub fn publish(&mut self, snapshot: &AnalysisSnapshot) -> Result<i64, ScippyError> {
-        if !snapshot.input_complete {
-            return Err(ScippyError::Storage(
-                "cannot publish an incomplete analysis".into(),
-            ));
-        }
-        let value =
-            serde_json::to_vec(snapshot).map_err(|e| ScippyError::Storage(e.to_string()))?;
-        // An immediate transaction takes the write lock before it reads the revision.
-        let tx = self
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage)?;
-        let previous: i64 = tx
-            .query_row("SELECT revision FROM snapshot WHERE id=1", [], |r| r.get(0))
-            .optional()
-            .map_err(storage)?
-            .unwrap_or(0);
-        let revision = previous
-            .checked_add(1)
-            .ok_or_else(|| ScippyError::Storage("revision overflow".into()))?;
-        tx.execute("DELETE FROM reference_support", [])
-            .map_err(storage)?;
-        for reference in &snapshot.references {
-            if let ReferenceOutcome::Resolved(target) = &reference.outcome {
-                tx.execute(
-                    "INSERT OR IGNORE INTO reference_support VALUES (?1, ?2, ?3, ?4)",
-                    params![reference.path, reference.start, reference.end, target],
-                )
-                .map_err(storage)?;
-            }
-        }
-        tx.execute("DELETE FROM file_reference", [])
-            .map_err(storage)?;
-        tx.execute("INSERT INTO file_reference SELECT path, target, count(*) FROM reference_support GROUP BY path,target", []).map_err(storage)?;
-        tx.execute(
-            "INSERT OR REPLACE INTO snapshot VALUES (1, ?1, ?2)",
-            params![revision, value],
-        )
-        .map_err(storage)?;
-        tx.commit().map_err(storage)?;
-        Ok(revision)
-    }
-
-    /// Read the snapshot and its relationships in one database transaction.
-    pub fn read(&mut self) -> Result<Option<PublishedView>, ScippyError> {
-        let tx = self.db.transaction().map_err(storage)?;
-        let row: Option<(i64, Vec<u8>)> = tx
-            .query_row("SELECT revision,value FROM snapshot WHERE id=1", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .optional()
-            .map_err(storage)?;
-        let Some((revision, bytes)) = row else {
-            return Ok(None);
-        };
-        let snapshot =
-            serde_json::from_slice(&bytes).map_err(|e| ScippyError::Storage(e.to_string()))?;
-        let references = {
-            let mut statement = tx
-                .prepare("SELECT path,target,supports FROM file_reference ORDER BY path,target")
-                .map_err(storage)?;
-            let rows = statement
-                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-                .map_err(storage)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(storage)?
-        };
-        tx.commit().map_err(storage)?;
-        Ok(Some(PublishedView {
-            revision,
-            snapshot,
-            file_references: references,
-        }))
-    }
-}
-
-/// Facts and derived relationships from one published revision.
-pub struct PublishedView {
-    pub revision: i64,
-    pub snapshot: AnalysisSnapshot,
-    pub file_references: Vec<(String, String, usize)>,
-}
-
-fn storage(error: rusqlite::Error) -> ScippyError {
-    ScippyError::Storage(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn snapshot(target: &str) -> AnalysisSnapshot {
-        AnalysisSnapshot {
-            documents: Vec::new(),
-            references: vec![AnalysisReference {
-                path: "a.py".into(),
-                start: 0,
-                end: 1,
-                outcome: ReferenceOutcome::Resolved(target.into()),
-                limited: None,
-            }],
-            external_symbols: Vec::new(),
-            diagnostics: Vec::new(),
-            input_complete: true,
-            analysis_exact: true,
-            bounded_references: 0,
-            scip: Vec::new(),
-        }
-    }
 
     fn reference(outcome: ReferenceOutcome, limited: Option<&str>) -> AnalysisReference {
         AnalysisReference {
@@ -400,170 +282,20 @@ mod tests {
     }
 
     #[test]
-    fn a_bounded_search_makes_the_analysis_inexact_but_the_input_complete() {
+    fn a_bounded_search_makes_the_reference_inexact() {
         let bounded = reference(ReferenceOutcome::Bounded("work".into()), None);
         let kept = reference(ReferenceOutcome::Resolved("s".into()), Some("work"));
         let exact = reference(ReferenceOutcome::Resolved("s".into()), None);
         assert!(bounded.is_inexact());
         assert!(kept.is_inexact());
         assert!(!exact.is_inexact());
-        // A snapshot with both kinds publishes, and the stored value keeps the marks.
-        let mut inexact = snapshot("first");
-        let mut kept_elsewhere = kept.clone();
-        kept_elsewhere.start = 2;
-        kept_elsewhere.end = 3;
-        inexact.references = vec![bounded, kept, kept_elsewhere, exact];
-        inexact.bounded_references = 3;
-        inexact.analysis_exact = false;
-        let dir = tempfile::tempdir().unwrap();
-        let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
-        layer.publish(&inexact).unwrap();
-        let view = layer.read().unwrap().unwrap();
-        assert_eq!(view.snapshot, inexact);
-        // The kept references still support the file relation.
-        assert_eq!(view.file_references, vec![("a.py".into(), "s".into(), 2)]);
     }
 
     #[test]
-    fn a_failed_publication_keeps_the_previous_snapshot_and_relations() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
-        let first = snapshot("first");
-        layer.publish(&first).unwrap();
-        layer.db.execute_batch("CREATE TRIGGER reject_publish BEFORE INSERT ON file_reference BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
-        assert!(layer.publish(&snapshot("second")).is_err());
-        let view = layer.read().unwrap().unwrap();
-        assert_eq!(view.revision, 1);
-        assert_eq!(view.snapshot, first);
+    fn the_hash_is_lowercase_hex_sha256() {
         assert_eq!(
-            view.file_references,
-            vec![("a.py".into(), "first".into(), 1)]
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        let mut incomplete = snapshot("third");
-        incomplete.input_complete = false;
-        assert!(layer.publish(&incomplete).is_err());
-        assert_eq!(layer.read().unwrap().unwrap().revision, 1);
-    }
-
-    #[test]
-    fn eight_concurrent_publishers_all_succeed_with_distinct_revisions() {
-        use std::sync::{Arc, Barrier};
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("layer.sqlite");
-        let mut layers: Vec<_> = (0..8).map(|_| Metalayer::open(&path).unwrap()).collect();
-        let barrier = Arc::new(Barrier::new(8));
-        let handles: Vec<_> = layers
-            .drain(..)
-            .enumerate()
-            .map(|(i, mut layer)| {
-                let barrier = Arc::clone(&barrier);
-                std::thread::spawn(move || {
-                    let snapshot = snapshot(&format!("t{i}"));
-                    barrier.wait();
-                    layer.publish(&snapshot)
-                })
-            })
-            .collect();
-        let mut revisions: Vec<i64> = handles
-            .into_iter()
-            .map(|h| h.join().unwrap().unwrap())
-            .collect();
-        revisions.sort_unstable();
-        assert_eq!(revisions, (1..=8).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn a_reader_sees_one_revision_while_a_writer_publishes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("layer.sqlite");
-        let mut reader = Metalayer::open(&path).unwrap();
-        let mut writer = Metalayer::open(&path).unwrap();
-        let handle = std::thread::spawn(move || {
-            for i in 0..100 {
-                writer.publish(&snapshot(&format!("t{i}"))).unwrap();
-            }
-        });
-        let mut last = 0;
-        while last < 100 {
-            let Some(view) = reader.read().unwrap() else {
-                continue;
-            };
-            let expected = format!("t{}", view.revision - 1);
-            assert_eq!(
-                view.snapshot.references[0].outcome,
-                ReferenceOutcome::Resolved(expected.clone())
-            );
-            assert_eq!(view.file_references, vec![("a.py".into(), expected, 1)]);
-            last = view.revision;
-        }
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn a_new_database_gets_the_application_id_and_version() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("layer.sqlite");
-        drop(Metalayer::open(&path).unwrap());
-        let db = Connection::open(&path).unwrap();
-        let id: i32 = db
-            .query_row("PRAGMA application_id", [], |r| r.get(0))
-            .unwrap();
-        let version: i32 = db
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!((id, version), (APPLICATION_ID, SCHEMA_VERSION));
-    }
-
-    #[test]
-    fn reopening_a_current_database_keeps_its_data() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("layer.sqlite");
-        Metalayer::open(&path)
-            .unwrap()
-            .publish(&snapshot("a"))
-            .unwrap();
-        let mut layer = Metalayer::open(&path).unwrap();
-        assert_eq!(layer.read().unwrap().unwrap().revision, 1);
-    }
-
-    fn open_error(path: &Path) -> String {
-        match Metalayer::open(path) {
-            Err(ScippyError::Storage(message)) => message,
-            _ => panic!("the open must fail with a storage error"),
-        }
-    }
-
-    #[test]
-    fn a_newer_database_version_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("layer.sqlite");
-        drop(Metalayer::open(&path).unwrap());
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch("PRAGMA user_version=99;")
-            .unwrap();
-        assert!(open_error(&path).contains("version 99"));
-    }
-
-    #[test]
-    fn a_database_with_another_application_id_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("other.sqlite");
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch("PRAGMA application_id=1234; PRAGMA user_version=1;")
-            .unwrap();
-        assert!(open_error(&path).contains("not a Scippy"));
-    }
-
-    #[test]
-    fn an_unversioned_database_with_tables_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("old.sqlite");
-        Connection::open(&path)
-            .unwrap()
-            .execute_batch("CREATE TABLE snapshot (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL, value BLOB NOT NULL);")
-            .unwrap();
-        assert!(open_error(&path).contains("delete it and rebuild"));
     }
 }

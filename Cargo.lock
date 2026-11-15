@@ -1202,6 +1202,7 @@ dependencies = [
  "scip",
  "scippy-core",
  "scippy-loci",
+ "scippy-metalayer",
  "scippy-python",
  "scippy-typescript",
  "tempfile",
@@ -1241,6 +1242,16 @@ dependencies = [
  "toml",
  "unicode-general-category",
  "unicode-normalization",
+]
+
+[[package]]
+name = "scippy-metalayer"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "scippy-core",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

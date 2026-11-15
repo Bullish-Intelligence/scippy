@@ -4,9 +4,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use scippy_core::{
-    IndexRequest, Metalayer, ReferenceOutcome, ResolveLimits, index_project_with_snapshot,
-};
+use scippy_core::{IndexRequest, ReferenceOutcome, ResolveLimits, index_project_with_snapshot};
+use scippy_metalayer::{Metalayer, PublishOptions};
 use scippy_python::PythonPack;
 
 const SOURCE: &str = "import os\n\n\nclass Base:\n    def run(self):\n        return os.getcwd()\n\n\nclass Child(Base):\n    def go(self):\n        return self.run()\n\n\ndef make():\n    return Child()\n\n\nmake().go()\n";
@@ -62,7 +61,13 @@ fn a_tiny_work_limit_bounds_the_references_and_the_snapshot_still_publishes() {
     assert!(snapshot.input_complete, "{:?}", snapshot.diagnostics);
     let scratch = tempfile::tempdir().unwrap();
     let mut layer = Metalayer::open(scratch.path().join("meta.sqlite")).unwrap();
-    assert_eq!(layer.publish(&snapshot).unwrap(), 1);
+    let published = layer
+        .publish(&snapshot, &PublishOptions::default())
+        .unwrap();
+    assert_eq!(published.revision, 1);
+    let view = layer.view().unwrap().unwrap();
+    assert!(!view.revision().analysis_exact);
+    assert!(view.revision().input_complete);
 }
 
 #[test]

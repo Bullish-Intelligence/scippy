@@ -1,0 +1,17 @@
+[package]
+name = "scippy-metalayer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "scippy_metalayer"
+path = "src/lib.rs"
+
+[dependencies]
+scippy-core = { path = "../scippy-core" }
+rusqlite = { version = "0.28", features = ["bundled"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile.workspace = true

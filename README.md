@@ -27,7 +27,7 @@ only through its manifest. The roots run in parallel (see "Parallel roots").
 
 ## Metalayer experiment
 
-Scippy can persist a structured snapshot and reuse file graphs in two SQLite databases.
+Scippy can persist the facts of a run and reuse file graphs in two SQLite databases.
 Create the database directory, then run:
 
 ```sh
@@ -48,11 +48,33 @@ Every run still parses the files and resolves the references of every root. It a
 packs over the project. A file graph cache hit saves graph construction, not resolution.
 The program prints the cache hit and build counts.
 
-The metalayer stores the latest snapshot, including declarations, references, outcomes,
-diagnostics, source text, and the SCIP index. It atomically replaces the snapshot and the
-file-to-symbol relation. Each resolved reference supports that relation. Removing one reference
-keeps a relation that another reference supports. `Metalayer::read` reads both in one transaction.
-`index_project_with_snapshot` returns the structured snapshot to a Rust caller.
+The metalayer is a set of typed SQLite tables of the facts of the latest run. The crate
+`scippy-metalayer` owns it. The design is in `METALAYER_SCHEMA.md` and ADR-012. The SCIP file
+stays the canonical output. The database is derived from the same run and a version change
+rebuilds it.
+
+- One database holds one root set. The key of the root set is the canonical path of the project
+  root. The shards of a run are recorded in `root_member` and rewritten on each publish.
+  A run on another project root fails and keeps the database. Add `--replace-root-set` to
+  replace the root set.
+- Each publish replaces all facts and commits one revision. The database keeps the latest
+  revision only. The revision holds the input digest, the tool version, the SHA-256 of the SCIP
+  bytes, and the flags `input_complete` and `analysis_exact`.
+- The tables are `file`, `symbol`, `occurrence`, `reference`, `reference_candidate`, `edge`,
+  `diagnostic`, and the relation `file_reference`. A reference row exists for every outcome:
+  resolved, ambiguous, unresolved, and bounded. Spans are UTF-8 byte offsets. The store holds no
+  source text. `View::source` reads a file again and checks its SHA-256.
+- `file_reference` has one row for each file, target symbol, and kind. A support is one resolved
+  reference location. It does not count when the target is a `local N` symbol, or when the
+  location is the definition site of the same symbol. A same-file global target counts.
+  A support that rests on a stopped search counts, and the column `limited` counts it too.
+- This step fills the `override` and `alias` edges and the kind `use` and `import` of the
+  relation. Edges for inheritance, links, and embeds, and the reference kind, come later.
+- `Metalayer::view` starts one read transaction. Its methods read one revision. Integer ids
+  stay inside the database. `Metalayer::open_read_only` never writes, creates, or rebuilds.
+- A database with an older format version is dropped and rebuilt. A database with a newer
+  version is refused.
+- `index_project_with_snapshot` returns the structured snapshot to a Rust caller.
 
 The snapshot field `input_complete` is true only when the run lost no input. It is false when:
 
@@ -71,13 +93,14 @@ It is independent of `input_complete`. A search that stops gives one of two resu
   ends can exist. This reference still supports the file-to-symbol relation.
 
 The field `bounded_references` counts both kinds. `Metalayer::publish` refuses a snapshot with
-`input_complete` false. It accepts a snapshot with `analysis_exact` false.
+`input_complete` false. It accepts a snapshot with `analysis_exact` false. The publish checks
+that both flags agree with the rows.
 
-The database is an experiment. It has no stable entity IDs, history, watcher, or query language.
-It refuses to publish a run that skips files or reports an error. The SCIP output and database
-have separate writes. A failed publication can leave a new SCIP file beside an older snapshot.
+The database has no stable entity IDs, history, watcher, or query language.
+The CLI publishes first and then writes the SCIP file. A failed SCIP write reports the
+revision that the database already committed.
 Stop edits during indexing. The indexer reads live files and does not capture a filesystem snapshot.
-Keep both databases outside the project and its roots. The snapshot contains source text.
+Keep both databases outside the project and its roots.
 
 ## Manifests
 
@@ -105,7 +128,8 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 
 - `crates/scippy-core` holds the language-neutral pipeline: the project walker with its
   input limits, the extractor, the binding engine adapter, the reconciler, symbol identity,
-  byte-span positions, the SCIP emitter, and the experimental metalayer API.
+  byte-span positions, the SCIP emitter, and the structured analysis snapshot.
+- `crates/scippy-metalayer` holds the metalayer store and its read API.
 - `crates/scippy-cli` provides the `scippy` command.
 - `languages/python` holds the Python pack: the declaration query, the manifest reader, the
   import-root policy, and the symbol policy. It uses the binding rules of the fork.

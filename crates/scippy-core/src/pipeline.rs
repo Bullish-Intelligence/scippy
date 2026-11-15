@@ -26,7 +26,7 @@ use crate::reconcile::{
 };
 use crate::report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
 use crate::schedule;
-use crate::snapshot::{AnalysisReference, AnalysisSnapshot};
+use crate::snapshot::{AnalysisReference, AnalysisSnapshot, RunContext};
 
 /// The SCIP scheme of every symbol that Scippy writes.
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
@@ -226,13 +226,39 @@ pub(crate) fn run(
         }
     }
 
+    let context = RunContext {
+        project_root: found.root.to_string_lossy().into_owned(),
+        shards: {
+            let mut names: Vec<String> = shards.iter().map(|s| s.as_str().to_owned()).collect();
+            names.sort();
+            names.dedup();
+            names
+        },
+        options: format!(
+            "input_limits={:?};resolve_limits={:?};package_name={:?};package_version={:?}",
+            request.limits, request.resolve_limits, request.package_name, request.package_version
+        ),
+        files: found
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.as_str().to_owned(),
+                    (
+                        languages[f.pack].id().to_owned(),
+                        f.real.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                    ),
+                )
+            })
+            .collect(),
+    };
     let data = IndexData {
         project_root: found.root,
         documents,
         external_symbols: external_symbols.into_values().collect(),
     };
     let snapshot = if let Some(references) = references {
-        Some(AnalysisSnapshot::new(&data, references, &report)?)
+        Some(AnalysisSnapshot::new(&data, references, &report, context)?)
     } else {
         None
     };

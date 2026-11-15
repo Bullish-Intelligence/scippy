@@ -6,10 +6,11 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use scippy_core::{
-    IndexRequest, InputLimits, LanguagePack, Metalayer, index_project, index_project_for_publish,
+    IndexRequest, InputLimits, LanguagePack, ScippyError, index_project, index_project_for_publish,
     write_scip,
 };
 use scippy_loci::LociPack;
+use scippy_metalayer::{Metalayer, PublishOptions};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
@@ -63,9 +64,13 @@ struct IndexArgs {
     /// Reuse file graphs in this SQLite database.
     #[arg(long)]
     graph_cache: Option<PathBuf>,
-    /// Publish an experimental metalayer snapshot to this SQLite database.
+    /// Publish the analysis to this metalayer SQLite database.
     #[arg(long)]
     metalayer: Option<PathBuf>,
+    /// Replace the root set of the metalayer database when it holds another project root.
+    /// Without this flag, the run fails and keeps the database.
+    #[arg(long, requires = "metalayer")]
+    replace_root_set: bool,
     /// Stop the search for one reference after this many units of work. The reference has no
     /// target. The default is in `ResolveLimits`.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
@@ -196,6 +201,7 @@ fn main() -> ExitCode {
                 memory_budget,
                 graph_cache,
                 metalayer,
+                replace_root_set,
                 max_work,
                 max_queue_len,
                 max_arena_cells,
@@ -239,9 +245,18 @@ fn main() -> ExitCode {
                             eprintln!("{diagnostic}");
                         }
                     }
-                    let revision = Metalayer::open(path)?.publish(&snapshot)?;
-                    write_scip(&request.output, &snapshot.scip)?;
-                    Ok((report, Some(revision)))
+                    let options = PublishOptions {
+                        strict: false,
+                        replace_root_set,
+                    };
+                    let published = Metalayer::open(path)?.publish(&snapshot, &options)?;
+                    write_scip(&request.output, &snapshot.scip).map_err(|e| {
+                        ScippyError::Storage(format!(
+                            "revision {} is committed, but the SCIP file failed: {e}",
+                            published.revision
+                        ))
+                    })?;
+                    Ok((report, Some(published.revision)))
                 })
             } else {
                 index_project(&request, &registry()).map(|report| (report, None))

@@ -34,6 +34,10 @@ pub enum ScippyError {
     Serialize(String),
     /// The graph cache or metalayer database failed.
     Storage(String),
+    /// The input is incomplete, and the store refuses to publish it.
+    Incomplete,
+    /// The metalayer database holds another root set. Use `--replace-root-set` to replace it.
+    RootSetMismatch { stored: String, requested: String },
 }
 
 impl fmt::Display for ScippyError {
@@ -66,6 +70,11 @@ impl fmt::Display for ScippyError {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Serialize(message) => write!(f, "serialization failed: {message}"),
             Self::Storage(message) => write!(f, "storage failed: {message}"),
+            Self::Incomplete => write!(f, "the analysis is incomplete: it lost input"),
+            Self::RootSetMismatch { stored, requested } => write!(
+                f,
+                "the metalayer database holds the root set {stored}, not {requested}"
+            ),
         }
     }
 }

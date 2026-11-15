@@ -30,7 +30,7 @@ mod snapshot;
 
 pub use snapshot::{
     AnalysisDiagnostic, AnalysisDocument, AnalysisOccurrence, AnalysisReference, AnalysisSnapshot,
-    AnalysisSymbol, INCOMPLETE_CODES, Metalayer, PublishedView, ReferenceOutcome,
+    AnalysisSymbol, INCOMPLETE_CODES, ReferenceOutcome,
 };
 
 pub use bindings::ResolveLimits;

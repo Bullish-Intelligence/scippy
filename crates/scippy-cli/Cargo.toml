@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 scippy-core = { path = "../scippy-core" }
+scippy-metalayer = { path = "../scippy-metalayer" }
 scippy-python = { path = "../../languages/python" }
 scippy-typescript = { path = "../../languages/typescript" }
 scippy-loci = { path = "../../languages/loci" }
