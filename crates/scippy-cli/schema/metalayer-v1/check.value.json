@@ -2,6 +2,36 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scippy.invalid/schema/metalayer-v1/check.value.json",
   "title": "The value of `metalayer check`",
-  "description": "A stub. The lane that builds the command replaces this file.",
-  "type": "object"
+  "description": "Whether the index is fresh. `fresh` is true when `changed`, `missing`, `stale`, and `new` are empty and `scip.state` is not `changed` or `missing`. A stale file is also counted in `ok`, `changed`, or `missing`. `new` is empty without `--discover`.",
+  "type": "object",
+  "required": ["fresh", "counts", "changed", "missing", "stale", "new", "scip"],
+  "properties": {
+    "fresh": {"type": "boolean"},
+    "counts": {
+      "type": "object",
+      "required": ["ok", "changed", "missing", "stale", "new", "unchecked"],
+      "properties": {
+        "ok": {"type": "integer", "minimum": 0},
+        "changed": {"type": "integer", "minimum": 0},
+        "missing": {"type": "integer", "minimum": 0},
+        "stale": {"type": "integer", "minimum": 0},
+        "new": {"type": "integer", "minimum": 0},
+        "unchecked": {"type": "integer", "minimum": 0}
+      }
+    },
+    "changed": {"$ref": "#/$defs/paths"},
+    "missing": {"$ref": "#/$defs/paths"},
+    "stale": {"$ref": "#/$defs/paths"},
+    "new": {"$ref": "#/$defs/paths"},
+    "scip": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"type": "string", "examples": ["ok", "changed", "missing", "not_checked"]}
+      }
+    }
+  },
+  "$defs": {
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "Project paths, sorted."}
+  }
 }

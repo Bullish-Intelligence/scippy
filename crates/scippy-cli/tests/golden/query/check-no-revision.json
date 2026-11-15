@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "check",
+  "ok": false,
+  "error": {
+    "kind": "no-revision",
+    "message": "the database holds no revision; run `scippy index --metalayer` first"
+  }
+}

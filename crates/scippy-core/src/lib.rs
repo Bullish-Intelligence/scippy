@@ -46,6 +46,7 @@ pub use language::{
     NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind, ReferenceRole,
     Scope, SupportFile, VirtualSymbol, WalkRules,
 };
+pub use pipeline::discover_files;
 pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{
     BoundedCounts, Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage,

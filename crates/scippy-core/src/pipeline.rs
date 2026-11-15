@@ -1783,6 +1783,40 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
     }
 }
 
+/// List the files that the walk of [`run`] accepts, in walk order. It reads no file content and
+/// writes nothing. `request.output` and `request.limits` act as in a run. Only the packs that
+/// are enabled for `request.root` take part.
+pub fn discover_files(
+    request: &IndexRequest,
+    languages: &[&dyn LanguagePack],
+) -> Result<Vec<ProjectRelativePath>, ScippyError> {
+    let languages: Vec<&dyn LanguagePack> = languages
+        .iter()
+        .copied()
+        .filter(|p| p.enabled(&request.root))
+        .collect();
+    let routes: Vec<PackRoute> = languages
+        .iter()
+        .map(|p| PackRoute {
+            pack: *p,
+            rules: p.walk_rules(&request.root),
+        })
+        .collect();
+    let routers: Vec<&dyn Router> = routes.iter().map(|r| r as &dyn Router).collect();
+    let extra: Vec<ExtraFile> = languages
+        .iter()
+        .flat_map(|p| p.extra_files(&request.root).files)
+        .collect();
+    let found = project::discover(
+        &request.root,
+        &request.output,
+        &routers,
+        request.limits,
+        &extra,
+    )?;
+    Ok(found.files.into_iter().map(|f| f.path).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

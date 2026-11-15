@@ -4,10 +4,14 @@
 //! design is in `METALAYER_QUERY.md`, section 7.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fmt::Write;
+use std::fs::File;
+use std::io::{ErrorKind, Read};
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use scippy_core::ScippyError;
+use sha2::{Digest, Sha256};
 
 use crate::schema::{APPLICATION_ID, storage};
 use crate::{FileRecord, Metalayer, SymbolRef, View};
@@ -164,6 +168,91 @@ impl View<'_> {
     }
 }
 
+// ---- The file check: is the index fresh (`check`, section 6) ----
+
+/// What a file on disk is, compared with the size and the SHA-256 that the manifest stores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FileState {
+    /// The file exists, and its size and hash equal the stored values.
+    Ok,
+    /// The file exists with another size or another hash.
+    Changed,
+    /// The file does not exist.
+    Missing,
+    /// The manifest stores no hash for the file, so nothing can be compared.
+    Unchecked,
+}
+
+/// Compare the file at `path` with a stored size and a stored SHA-256.
+///
+/// The function compares the size first, and hashes the content only when the sizes agree.
+/// It hashes in a stream and never holds the whole file. A stored size of `None` skips the
+/// size test. A file that is not a regular file counts as missing.
+pub fn compare_file(
+    path: &Path,
+    size: Option<u64>,
+    sha256: &str,
+) -> Result<FileState, ScippyError> {
+    let io = |source| ScippyError::Io {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(FileState::Missing),
+        Err(e) => return Err(io(e)),
+    };
+    let meta = file.metadata().map_err(io)?;
+    if !meta.is_file() {
+        return Ok(FileState::Missing);
+    }
+    if size.is_some_and(|size| size != meta.len()) {
+        return Ok(FileState::Changed);
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer).map_err(io)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let digest = hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        });
+    Ok(if digest == sha256 {
+        FileState::Ok
+    } else {
+        FileState::Changed
+    })
+}
+
+impl View<'_> {
+    /// Compare one manifest file with the disk. A file inside the project root is read at
+    /// `project_root/path`. A file outside it is read at its `real_path`. A file with no stored
+    /// hash gives `Unchecked`.
+    pub fn file_state(
+        &self,
+        project_root: &Path,
+        file: &FileRecord,
+    ) -> Result<FileState, ScippyError> {
+        let Some(sha256) = file.sha256.as_deref() else {
+            return Ok(FileState::Unchecked);
+        };
+        let path = match &file.real_path {
+            Some(real) => PathBuf::from(real),
+            None => project_root.join(&file.path),
+        };
+        compare_file(&path, file.size, sha256)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +312,49 @@ mod tests {
             view.symbol(&SymbolRef::global("g none."))
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn file_state_compares_the_size_and_then_the_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut layer = layer(dir.path());
+        publish(&mut layer, &rich());
+        let view = layer.view().unwrap().unwrap();
+        let mut file = view.file("a.py").unwrap().unwrap();
+        let on_disk = dir.path().join("a.py");
+        let text = "x = 1\n";
+        // The SHA-256 of the text, as the stored hash.
+        let digest = {
+            let mut hasher = Sha256::new();
+            hasher.update(text.as_bytes());
+            hasher.finalize().iter().fold(String::new(), |mut out, b| {
+                let _ = write!(out, "{b:02x}");
+                out
+            })
+        };
+        file.sha256 = Some(digest);
+        file.size = Some(text.len() as u64);
+        assert_eq!(
+            view.file_state(dir.path(), &file).unwrap(),
+            FileState::Missing
+        );
+        std::fs::write(&on_disk, text).unwrap();
+        assert_eq!(view.file_state(dir.path(), &file).unwrap(), FileState::Ok);
+        std::fs::write(&on_disk, "x = 22\n").unwrap();
+        assert_eq!(
+            view.file_state(dir.path(), &file).unwrap(),
+            FileState::Changed
+        );
+        std::fs::write(&on_disk, "x = 2\n").unwrap();
+        assert_eq!(
+            view.file_state(dir.path(), &file).unwrap(),
+            FileState::Changed
+        );
+        file.sha256 = None;
+        assert_eq!(
+            view.file_state(dir.path(), &file).unwrap(),
+            FileState::Unchecked
         );
     }
 }
