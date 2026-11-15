@@ -2,7 +2,7 @@
 /target/
 
 # devenv local state
-devenv.lock
+# devenv.lock stays tracked. Testee needs it.
 .devenv/
 .direnv/
 .devenv.flake.nix
