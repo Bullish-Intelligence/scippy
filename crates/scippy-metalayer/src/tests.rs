@@ -37,6 +37,7 @@ fn document(path: &str, source: &str) -> AnalysisDocument {
         real_path: None,
         sha256: Some(sha256_hex(source.as_bytes())),
         source: source.into(),
+        stale: false,
         occurrences: Vec::new(),
         symbols: Vec::new(),
     }

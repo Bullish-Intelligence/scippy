@@ -484,7 +484,8 @@ pub struct ProjectFile {
 #[derive(Clone, Debug)]
 pub struct NativeSource {
     pub path: ProjectRelativePath,
-    pub text: String,
+    /// The text that the run read once. Every stage of the run shares it.
+    pub text: std::sync::Arc<str>,
 }
 
 /// What the core gives a native pack.

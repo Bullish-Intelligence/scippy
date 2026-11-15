@@ -154,4 +154,7 @@ pub struct IndexReport {
     /// Every accepted file that the run did not index, with its reason. A file skipped at
     /// discovery is here too. The list is complete after the run.
     pub lost_files: Vec<LostFile>,
+    /// The indexed files whose content on disk differs, at the end of the run, from the content
+    /// that the run read once and indexed. The facts of such a file stay. Sorted by path.
+    pub stale_files: Vec<String>,
 }

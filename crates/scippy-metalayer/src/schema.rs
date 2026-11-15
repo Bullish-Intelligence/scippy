@@ -9,7 +9,7 @@ use scippy_core::ScippyError;
 /// Marks a database file as a Scippy read model. The bytes spell "SCPY".
 pub(crate) const APPLICATION_ID: i32 = 0x5343_5059;
 /// The storage format version that this code reads and writes.
-pub(crate) const SCHEMA_VERSION: i32 = 4;
+pub(crate) const SCHEMA_VERSION: i32 = 5;
 
 /// The tables and views. The design is in `METALAYER_SCHEMA.md`, section 3.
 pub(crate) const DDL: &str = "
@@ -46,6 +46,7 @@ CREATE TABLE file (
   reason TEXT,
   sha256 TEXT, size INTEGER,
   real_path TEXT,
+  stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0,1)),
   UNIQUE (root_id, path),
   CHECK ((status = 'indexed') = (reason IS NULL))
 );

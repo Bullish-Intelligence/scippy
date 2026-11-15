@@ -84,7 +84,7 @@ pub(crate) struct Document {
     pub language: String,
     /// The text that the occurrence spans refer to. It is not written to the index.
     /// It may stay empty when the document has no occurrences.
-    pub source: String,
+    pub source: std::sync::Arc<str>,
     pub occurrences: Vec<Occurrence>,
     pub symbols: Vec<SymbolInfo>,
 }

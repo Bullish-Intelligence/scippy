@@ -106,10 +106,16 @@ Every run publishes, with a status for each file. The `file` table is the input 
   `file-too-large`, `input-limit-reached`, `unsupported-language`, `ambiguous-language`, and
   `invalid-utf8`. A file after the total input limit has a row too.
 - `failed`: Scippy accepted the file and an operation failed. The reason is `unreadable-file`,
-  `syntax-error`, `bind-error`, or `changed-during-run`. At the end of the run, the pipeline
-  reads each indexed file again. A file whose SHA-256 changed is `failed` and keeps no facts.
+  `syntax-error`, or `bind-error`.
 - `shadowed`: another file shadows it, so no import reaches it (`shadowed-file`). It is legal
   Python. The report counts it in `files_shadowed`, not in `files_skipped`.
+
+The run reads each input file once, at its first use. The shards, the dependency loads, the
+native packs, the snapshot text, and the SHA-256 of the manifest all use that one read. At the
+end of the run, the pipeline hashes each indexed file on disk. A file whose hash differs from
+the read is `stale`: the `file` row has `stale = 1`, and the diagnostic `stale-file` names it.
+A stale file is indexed, not lost. Its facts come from the one read, so they agree with each
+other and with the stored `sha256`. A stale file does not change `input_complete`.
 
 A path with no valid UTF-8 name has no row. Its diagnostic (`non-utf8-path` or `invalid-path`)
 makes the input incomplete instead.
@@ -142,7 +148,10 @@ The revision records `strict`.
 The database has no stable entity IDs, history, watcher, or query language.
 The CLI publishes first and then writes the SCIP file. A failed SCIP write reports the
 revision that the database already committed.
-Stop edits during indexing. The indexer reads live files and does not capture a filesystem snapshot.
+An edit during indexing does not mix two versions of a file. The indexer reads live files and
+does not capture a filesystem snapshot, but it reads each file once. The manifests
+(`pyproject.toml`, `package.json`, `tsconfig.json`), the Loci configuration, and the binary
+check of the Loci listing are separate reads. They are not project sources in the snapshot.
 Keep both databases outside the project and its roots.
 
 ## Manifests

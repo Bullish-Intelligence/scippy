@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::IndexRequest;
@@ -26,9 +26,8 @@ use crate::reconcile::{
 };
 use crate::report::{Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage};
 use crate::schedule;
-use crate::snapshot::{
-    AnalysisEdge, AnalysisReference, AnalysisSnapshot, Capture, RunContext, sha256_hex,
-};
+use crate::snapshot::{AnalysisEdge, AnalysisReference, AnalysisSnapshot, Capture, RunContext};
+use crate::source::SourceStore;
 
 /// The SCIP scheme of every symbol that Scippy writes.
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
@@ -63,7 +62,8 @@ impl Router for PackRoute<'_> {
 /// A document that parsed and built.
 struct Doc {
     path: ProjectRelativePath,
-    source: String,
+    /// The text that the source store read once. Every stage shares it.
+    source: Arc<str>,
     facts: Facts,
     /// The declarations with their symbols, in anchor order.
     declared: Vec<Declared>,
@@ -119,6 +119,12 @@ pub(crate) fn run(
         &extra_files,
     )?;
 
+    let store = SourceStore::new(
+        &found.root,
+        &found.files,
+        request.limits.max_file_bytes,
+        request.read_hook.clone(),
+    );
     let cache = Arc::new(CacheGate::new(
         request.graph_cache.as_deref(),
         request.graph_cache_timeout,
@@ -170,6 +176,7 @@ pub(crate) fn run(
                 &files,
                 &shards,
                 &extra_files,
+                &store,
                 request,
                 &cache,
                 &mut report,
@@ -183,6 +190,7 @@ pub(crate) fn run(
                 &files,
                 &found.all_files,
                 extra_states[index].as_deref(),
+                &store,
                 request,
                 &mut report,
                 &mut trace,
@@ -222,53 +230,23 @@ pub(crate) fn run(
         })
         .collect();
 
-    // Read each indexed file again. A file that changed after the run read it has stale facts,
-    // so the run drops them and records the file as failed.
-    {
-        let lost: HashSet<&str> = report.lost_files.iter().map(|l| l.path.as_str()).collect();
-        let disk: HashMap<&str, PathBuf> = found
-            .files
+    // Check each indexed file against the disk once more. The run indexed the content that it
+    // read first, so a file that changed since is stale, not lost. The facts stay.
+    report.stale_files = store.stale(
+        documents
             .iter()
-            .map(|f| (f.path.as_str(), f.disk_path(&found.root)))
-            .collect();
-        let mut changed: Vec<(String, String)> = Vec::new();
-        for d in &documents {
-            // A stub has no text. A lost file has a document with no text of its own.
-            if d.language.is_empty() || lost.contains(d.path.as_str()) {
-                continue;
-            }
-            let Some(full) = disk.get(d.path.as_str()) else {
-                continue;
-            };
-            let read = sha256_hex(d.source.as_bytes());
-            if reread_hash(full, request.limits.max_file_bytes).as_deref() != Some(read.as_str()) {
-                changed.push((d.path.as_str().to_owned(), read));
-            }
-        }
-        for (path, sha256) in changed {
-            documents.retain(|d| d.path.as_str() != path);
-            if let Some(capture) = &mut capture {
-                capture.references.retain(|r| r.path != path);
-                capture.edges.retain(|e| e.path != path);
-            }
-            report.files_skipped += 1;
-            report.diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                stage: Stage::Discover,
-                file: Some(path.clone()),
-                range: None,
-                code: "changed-during-run",
-                message: "the file changed while the run read it: the run dropped its facts"
-                    .to_string(),
-            });
-            report.lost_files.push(LostFile {
-                path,
-                pack: None,
-                real_path: None,
-                reason: "changed-during-run",
-                sha256: Some(sha256),
-            });
-        }
+            .filter(|d| !d.language.is_empty())
+            .map(|d| d.path.as_str()),
+    );
+    for path in &report.stale_files {
+        report.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            stage: Stage::Discover,
+            file: Some(path.clone()),
+            range: None,
+            code: "stale-file",
+            message: "the file on disk differs from the content that the run indexed".to_string(),
+        });
     }
     // Complete the list of the lost files: one entry for each path, in the order of the paths.
     for lost in &mut report.lost_files {
@@ -354,6 +332,7 @@ fn index_pack(
     files: &[&FoundFile],
     shards: &[ProjectRelativePath],
     extra_files: &[ExtraFile],
+    store: &SourceStore,
     request: &IndexRequest,
     cache: &Arc<CacheGate>,
     report: &mut IndexReport,
@@ -398,6 +377,7 @@ fn index_pack(
         extractors: &extractors,
         model: &*model,
         root,
+        store,
         files,
         paths: &paths,
         shards,
@@ -627,6 +607,8 @@ struct ShardContext<'a> {
     extractors: &'a [Extractor],
     model: &'a dyn ProjectModel,
     root: &'a Path,
+    /// The content of every file. A shard never reads a file from disk.
+    store: &'a SourceStore,
     files: &'a [&'a FoundFile],
     paths: &'a [ProjectRelativePath],
     shards: &'a [ProjectRelativePath],
@@ -690,9 +672,8 @@ fn index_shard(
             cx.extractors,
             cx.model,
             &mut engine,
-            cx.root,
+            cx.store,
             file,
-            cx.request,
             &mut report,
             true,
         ) {
@@ -711,9 +692,8 @@ fn index_shard(
                     cx.extractors,
                     cx.model,
                     &mut engine,
-                    cx.root,
+                    cx.store,
                     file,
-                    cx.request,
                     &mut scratch,
                     false,
                 );
@@ -904,9 +884,8 @@ fn load_file(
     extractors: &[Extractor],
     model: &dyn ProjectModel,
     engine: &mut BindingEngine,
-    root: &Path,
+    store: &SourceStore,
     file: &FoundFile,
-    request: &IndexRequest,
     report: &mut IndexReport,
     resolve: bool,
 ) -> Option<Doc> {
@@ -933,9 +912,10 @@ fn load_file(
         ));
         return None;
     }
-    let source = match read_source(&file.disk_path(root), request.limits.max_file_bytes) {
-        Ok(source) => source,
+    let source = match store.get(file) {
+        Ok(stored) => Arc::clone(&stored.text),
         Err((code, message)) => {
+            let (code, message) = (*code, message.clone());
             report.files_skipped += 1;
             lose(report, &file.path, code);
             report.diagnostics.push(diagnostic(
@@ -1044,6 +1024,7 @@ fn index_native_pack(
     files: &[&FoundFile],
     all_files: &[ProjectFile],
     extra: Option<&(dyn std::any::Any + Send + Sync)>,
+    store: &SourceStore,
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
@@ -1052,10 +1033,10 @@ fn index_native_pack(
     // Read the files that the pack accepts.
     let mut sources: Vec<NativeSource> = Vec::with_capacity(files.len());
     for file in files {
-        match read_source(&file.disk_path(root), request.limits.max_file_bytes) {
-            Ok(text) => sources.push(NativeSource {
+        match store.get(file) {
+            Ok(stored) => sources.push(NativeSource {
                 path: file.path.clone(),
-                text,
+                text: Arc::clone(&stored.text),
             }),
             Err((code, message)) => {
                 report.files_skipped += 1;
@@ -1066,7 +1047,7 @@ fn index_native_pack(
                     file: Some(file.path.as_str().to_string()),
                     range: None,
                     code,
-                    message,
+                    message: message.clone(),
                 });
             }
         }
@@ -1104,15 +1085,15 @@ fn index_native_pack(
         package.version = version.clone();
     }
     let mut builder = IdentityBuilder::new(SCHEME, package);
-    let mut texts: HashMap<ProjectRelativePath, String> =
+    let mut texts: HashMap<ProjectRelativePath, Arc<str>> =
         sources.into_iter().map(|s| (s.path, s.text)).collect();
 
     // Stage F: assign identities. Each document gets its facts from the declarations of the pack.
     let mut index = DeclarationIndex::default();
     let mut docs: Vec<(Doc, &NativeDocument)> = Vec::with_capacity(output.documents.len());
     for native_doc in &output.documents {
-        let source = if native_doc.stub {
-            String::new()
+        let source: Arc<str> = if native_doc.stub {
+            Arc::from("")
         } else {
             texts.remove(&native_doc.path).unwrap_or_default()
         };
@@ -1501,15 +1482,6 @@ fn declare_asset(
     }
 }
 
-/// The SHA-256 of a file as it is now. `None` when the file is unreadable or over `max` bytes.
-fn reread_hash(full: &Path, max: u64) -> Option<String> {
-    let mut bytes = Vec::new();
-    File::open(full)
-        .and_then(|f| f.take(max + 1).read_to_end(&mut bytes))
-        .ok()?;
-    (bytes.len() as u64 <= max).then(|| sha256_hex(&bytes))
-}
-
 /// Record a file that the run accepted and did not index. The run fills the pack and the real
 /// path of the file at the end.
 fn lose(report: &mut IndexReport, path: &ProjectRelativePath, reason: &'static str) {
@@ -1520,23 +1492,6 @@ fn lose(report: &mut IndexReport, path: &ProjectRelativePath, reason: &'static s
         reason,
         sha256: None,
     });
-}
-
-/// Read a file. Return a diagnostic code and message on failure.
-fn read_source(full: &Path, max: u64) -> Result<String, (&'static str, String)> {
-    let mut bytes = Vec::new();
-    File::open(full)
-        .and_then(|f| f.take(max + 1).read_to_end(&mut bytes))
-        .map_err(|e| ("unreadable-file", format!("skipped: {e}")))?;
-    if bytes.len() as u64 > max {
-        // The file grew after the walker measured it.
-        return Err((
-            "file-too-large",
-            format!("skipped: the file exceeds the limit of {max} bytes"),
-        ));
-    }
-    String::from_utf8(bytes)
-        .map_err(|_| ("invalid-utf8", "skipped: the file is not UTF-8".to_string()))
 }
 
 /// The indexes of the declarations that can hold other declarations.

@@ -112,7 +112,7 @@ impl<'a> View<'a> {
         let mut statement = self
             .tx
             .prepare(
-                "SELECT path, status, reason, pack, sha256, size FROM file
+                "SELECT path, status, reason, pack, sha256, size, stale FROM file
                  WHERE ?1 IS NULL OR status = ?1 ORDER BY path",
             )
             .map_err(storage)?;
@@ -125,12 +125,13 @@ impl<'a> View<'a> {
                     r.get(3)?,
                     r.get(4)?,
                     r.get::<_, Option<u64>>(5)?,
+                    r.get::<_, bool>(6)?,
                 ))
             })
             .map_err(storage)?;
         let mut files = Vec::new();
         for row in rows {
-            let (path, status, reason, pack, sha256, size) = row.map_err(storage)?;
+            let (path, status, reason, pack, sha256, size, stale) = row.map_err(storage)?;
             files.push(FileRecord {
                 path,
                 status: FileStatus::parse(&status)?,
@@ -138,6 +139,7 @@ impl<'a> View<'a> {
                 pack,
                 sha256,
                 size,
+                stale,
             });
         }
         Ok(files)

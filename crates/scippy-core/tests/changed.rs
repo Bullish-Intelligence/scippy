@@ -1,16 +1,27 @@
-//! A file that changes while the run reads it becomes a failed file with no facts.
+//! A file that changes while the run works keeps its facts from the first read. The run reads
+//! each file once. At the end it reports the file as stale.
 
 use std::path::Path;
 
 use scippy_core::{
     DeclKind, Descriptor, Engine, Identity, IndexRequest, LanguagePack, NativeAnalysis,
     NativeDeclaration, NativeDocument, NativeInput, NativeOutput, Package, ProjectModel,
-    ProjectRelativePath, Reach, Scope, SymbolKind, file_status, index_project_with_snapshot,
+    ProjectRelativePath, Reach, Scope, SymbolKind, index_project_with_snapshot,
 };
 
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// A native pack that declares one heading for each file. While it analyzes, it rewrites the
-/// file `moving.txt`, as an editor does.
-struct Moving;
+/// file `moving.txt`, as an editor does. It records the text that it got for each file.
+struct Moving {
+    seen: std::sync::Mutex<Vec<(String, String)>>,
+}
 
 struct Model;
 
@@ -75,6 +86,10 @@ impl NativeAnalysis for Moving {
         std::fs::write(input.root.join("moving.txt"), "changed after the read\n").unwrap();
         let mut out = NativeOutput::default();
         for source in input.sources {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((source.path.as_str().to_owned(), source.text.to_string()));
             out.documents.push(NativeDocument {
                 path: source.path.clone(),
                 stub: false,
@@ -93,35 +108,43 @@ impl NativeAnalysis for Moving {
 }
 
 #[test]
-fn a_file_that_changes_during_the_run_is_failed_and_loses_its_facts() {
+fn a_file_that_changes_during_the_run_keeps_its_first_content_and_is_stale() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("moving.txt"), "head one\n").unwrap();
     std::fs::write(root.join("steady.txt"), "head two\n").unwrap();
     let request = IndexRequest::new(&root, dir.path().join("index.scip"));
-    let (report, snapshot) = index_project_with_snapshot(&request, &[&Moving]).unwrap();
+    let pack = Moving {
+        seen: Default::default(),
+    };
+    let (report, snapshot) = index_project_with_snapshot(&request, &[&pack]).unwrap();
 
-    assert_eq!(report.files_indexed, 1);
-    assert_eq!(report.files_skipped, 1);
+    // The pack got the first content, and the run kept both files.
+    let seen = pack.seen.lock().unwrap().clone();
+    assert!(seen.contains(&("moving.txt".to_owned(), "head one\n".to_owned())));
+    assert_eq!(report.files_indexed, 2);
+    assert_eq!(report.files_skipped, 0);
+    assert!(snapshot.lost_files.is_empty());
     let paths: Vec<_> = snapshot.documents.iter().map(|d| d.path.as_str()).collect();
-    assert_eq!(paths, ["steady.txt"]);
-    assert_eq!(snapshot.lost_files.len(), 1);
-    let lost = &snapshot.lost_files[0];
-    assert_eq!(lost.path, "moving.txt");
-    assert_eq!(lost.reason, "changed-during-run");
-    assert_eq!(lost.status, "failed");
-    assert_eq!(lost.status, file_status("changed-during-run"));
-    assert_eq!(lost.pack.as_deref(), Some("moving"));
-    // The hash is the hash of the bytes that the run read: "head one\n".
-    assert_eq!(lost.sha256.as_deref().map(str::len), Some(64));
-    assert!(!snapshot.input_complete);
+    assert_eq!(paths, ["moving.txt", "steady.txt"]);
+    let moving = &snapshot.documents[0];
+    assert_eq!(moving.source, "head one\n");
+    assert_eq!(
+        moving.sha256.as_deref(),
+        Some(sha256_hex("head one\n").as_str())
+    );
+    assert!(moving.stale);
+    assert!(!snapshot.documents[1].stale);
+    assert_eq!(report.stale_files, ["moving.txt"]);
+    // The file is not lost: the input stays complete.
+    assert!(snapshot.input_complete, "{:?}", snapshot.diagnostics);
     let diagnostic = snapshot
         .diagnostics
         .iter()
-        .find(|d| d.code == "changed-during-run")
+        .find(|d| d.code == "stale-file")
         .expect("a diagnostic");
     assert_eq!(diagnostic.file.as_deref(), Some("moving.txt"));
-    // The SCIP index holds no document for the file either.
-    assert!(!snapshot.scip.windows(10).any(|w| w == b"moving.txt"));
+    // The SCIP index holds the document.
+    assert!(snapshot.scip.windows(10).any(|w| w == b"moving.txt"));
 }

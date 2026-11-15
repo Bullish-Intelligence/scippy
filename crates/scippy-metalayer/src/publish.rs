@@ -48,6 +48,8 @@ struct FileRow<'a> {
     sha256: Option<&'a str>,
     size: Option<i64>,
     real_path: Option<&'a str>,
+    /// The file on disk differs from the content that the run indexed.
+    stale: bool,
 }
 
 /// One row of the input manifest, as the digest sees it.
@@ -235,6 +237,7 @@ pub(crate) fn publish(
             sha256: lost.sha256.as_deref(),
             size: None,
             real_path: lost.real_path.as_deref(),
+            stale: false,
         });
     }
     for d in &documents {
@@ -258,6 +261,7 @@ pub(crate) fn publish(
                         sha256: d.sha256.as_deref(),
                         size: d.sha256.is_some().then_some(d.source.len() as i64),
                         real_path: d.real_path.as_deref(),
+                        stale: d.stale,
                     },
                 );
             }
@@ -267,8 +271,8 @@ pub(crate) fn publish(
     let mut manifest = Vec::with_capacity(rows.len());
     for (path, row) in &rows {
         tx.prepare_cached(
-            "INSERT INTO file (root_id, path, pack, language, status, reason, sha256, size, real_path)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO file (root_id, path, pack, language, status, reason, sha256, size, real_path, stale)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .and_then(|mut st| {
             st.execute(params![
@@ -280,6 +284,7 @@ pub(crate) fn publish(
                 row.sha256,
                 row.size,
                 row.real_path,
+                row.stale,
             ])
         })
         .map_err(storage)?;

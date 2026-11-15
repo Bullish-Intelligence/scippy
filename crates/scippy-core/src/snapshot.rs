@@ -27,6 +27,10 @@ pub struct AnalysisDocument {
     #[serde(default)]
     pub sha256: Option<String>,
     pub source: String,
+    /// True when the file on disk differs, at the end of the run, from `source`. The facts come
+    /// from `source`, which the run read once. The file is not lost.
+    #[serde(default)]
+    pub stale: bool,
     pub occurrences: Vec<AnalysisOccurrence>,
     pub symbols: Vec<AnalysisSymbol>,
 }
@@ -198,7 +202,7 @@ pub struct AnalysisFile {
 pub fn file_status(reason: &str) -> &'static str {
     match reason {
         "shadowed-file" => "shadowed",
-        "unreadable-file" | "syntax-error" | "bind-error" | "changed-during-run" => "failed",
+        "unreadable-file" | "syntax-error" | "bind-error" => "failed",
         _ => "skipped",
     }
 }
@@ -286,6 +290,8 @@ impl AnalysisSnapshot {
         report: &IndexReport,
         context: RunContext,
     ) -> Result<Self, ScippyError> {
+        let stale: std::collections::HashSet<&str> =
+            report.stale_files.iter().map(String::as_str).collect();
         let documents = data
             .documents
             .iter()
@@ -299,7 +305,8 @@ impl AnalysisSnapshot {
                     pack: file.map(|f| f.0.clone()),
                     real_path: file.and_then(|f| f.1.clone()),
                     sha256: (!stub).then(|| sha256_hex(d.source.as_bytes())),
-                    source: d.source.clone(),
+                    source: d.source.to_string(),
+                    stale: stale.contains(d.path.as_str()),
                     occurrences: d
                         .occurrences
                         .iter()

@@ -27,6 +27,7 @@ mod reconcile;
 mod report;
 mod schedule;
 mod snapshot;
+mod source;
 
 pub use snapshot::{
     AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisOccurrence,
@@ -49,6 +50,8 @@ pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{
     BoundedCounts, Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage,
 };
+#[doc(hidden)]
+pub use source::ReadHook;
 
 use std::path::PathBuf;
 
@@ -82,6 +85,9 @@ pub struct IndexRequest {
     /// Limits for the work of the search for each reference. A bounded search has no target.
     /// They do not change the graph cache.
     pub resolve_limits: ResolveLimits,
+    /// A test hook. The run calls it after it reads a project source file. See [`ReadHook`].
+    #[doc(hidden)]
+    pub read_hook: Option<ReadHook>,
 }
 
 impl IndexRequest {
@@ -100,6 +106,7 @@ impl IndexRequest {
             graph_cache_max_bytes: cache::DEFAULT_MAX_BYTES,
             graph_cache_timeout: std::time::Duration::from_secs(30),
             resolve_limits: ResolveLimits::default(),
+            read_hook: None,
         }
     }
 }

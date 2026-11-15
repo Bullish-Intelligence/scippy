@@ -154,6 +154,9 @@ pub struct FileRecord {
     pub pack: Option<String>,
     pub sha256: Option<String>,
     pub size: Option<u64>,
+    /// The file on disk differed from the indexed content at the end of the run. The facts
+    /// come from the indexed content. The file is not lost, and `input_complete` ignores it.
+    pub stale: bool,
 }
 
 /// An occurrence. The span is in UTF-8 bytes.
