@@ -64,6 +64,8 @@ pub(crate) enum UnresolvedReason {
     NotAddressable,
     /// The language pack refused every declaration that the ends joined.
     NotTargetable,
+    /// The reference names a file that the pack skipped. A native pack sets it, not the join.
+    TargetSkipped,
 }
 
 /// The normalized outcome of one reference location.

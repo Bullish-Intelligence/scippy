@@ -119,6 +119,7 @@ impl AnalysisReference {
                     UnresolvedReason::NoDeclaration => "no-declaration",
                     UnresolvedReason::NotAddressable => "not-addressable",
                     UnresolvedReason::NotTargetable => "not-targetable",
+                    UnresolvedReason::TargetSkipped => "target-skipped",
                 }
                 .to_owned(),
             ),
@@ -161,7 +162,7 @@ pub struct AnalysisEdge {
     /// The kind of link in the language of the pack, such as `wikilink`.
     pub link_kind: Option<String>,
     pub label: Option<String>,
-    /// For a link: `resolved`, `missing`, or `ambiguous`.
+    /// For a link: `resolved`, `missing`, `ambiguous`, or `skipped-target`.
     pub state: Option<String>,
     /// For a link: `resolved`, `missing`, or `none`.
     pub anchor_state: Option<String>,

@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use scippy_core::{
-    AnalysisSnapshot, IndexReport, IndexRequest, LanguagePack, index_project_with_snapshot,
+    AnalysisSnapshot, IndexReport, IndexRequest, LanguagePack, ReferenceOutcome,
+    index_project_with_snapshot,
 };
 use scippy_loci::LociPack;
-use scippy_metalayer::{FileStatus, Metalayer, PublishOptions};
+use scippy_metalayer::{FileStatus, Metalayer, Outcome, PublishOptions, ReferenceQuery};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
@@ -355,24 +356,64 @@ fn two_roots_with_one_name_publish_an_incomplete_run() {
     assert!(!layer.view().unwrap().unwrap().revision().input_complete);
 }
 
-#[test]
-fn a_note_over_the_note_limit_is_skipped_and_its_link_stays_missing() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("vault");
+/// A vault with the note limit of 100 bytes. `Big.md` is over the limit. `files` are more notes.
+fn limited_vault(root: &Path, files: &[(&str, &str)]) {
     write(
-        &root,
+        root,
         ".loci/vault.toml",
         "schema = 1\nid = \"x\"\n[policy]\nnote_max_bytes = 100\n",
     );
-    write(&root, "Small.md", "See [[Big]].\n");
+    for (path, text) in files {
+        write(root, path, text);
+    }
     write(
-        &root,
+        root,
         "Big.md",
-        &format!("# Big\n\n{}\n", "word ".repeat(60)),
+        &format!("# Big\n\n## H\n\n{}\n", "word ".repeat(60)),
     );
+}
+
+fn limited_snapshot(root: &Path) -> AnalysisSnapshot {
     // The command line takes the file limit from the pack. Do the same here.
-    let limits = LociPack.input_limits(&root).unwrap();
-    let (_, snapshot) = snapshot(&root, |r| r.limits.max_file_bytes = limits.max_file_bytes);
+    let limits = LociPack.input_limits(root).unwrap();
+    snapshot(root, |r| r.limits.max_file_bytes = limits.max_file_bytes).1
+}
+
+/// The links as (state, anchor state), in the order of the source.
+fn link_states(snapshot: &AnalysisSnapshot) -> Vec<(&str, &str)> {
+    snapshot
+        .edges
+        .iter()
+        .filter(|e| e.kind == "link")
+        .map(|e| {
+            (
+                e.state.as_deref().unwrap(),
+                e.anchor_state.as_deref().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// The outcomes of the references of one note, in the order of the source.
+fn outcomes<'a>(snapshot: &'a AnalysisSnapshot, path: &str) -> Vec<&'a ReferenceOutcome> {
+    snapshot
+        .references
+        .iter()
+        .filter(|r| r.path == path)
+        .map(|r| &r.outcome)
+        .collect()
+}
+
+fn target_skipped() -> ReferenceOutcome {
+    ReferenceOutcome::Unresolved("target-skipped".into())
+}
+
+#[test]
+fn a_note_over_the_note_limit_is_skipped_and_its_link_is_a_skipped_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    limited_vault(&root, &[("Small.md", "See [[Big]].\n")]);
+    let snapshot = limited_snapshot(&root);
     let found: Vec<_> = snapshot
         .diagnostics
         .iter()
@@ -382,13 +423,13 @@ fn a_note_over_the_note_limit_is_skipped_and_its_link_stays_missing() {
     assert_eq!(found[0].file.as_deref(), Some("Big.md"));
     assert!(!snapshot.input_complete);
     assert_eq!(rows(&snapshot), [("Big.md", "skipped", "file-too-large")]);
-    // Today the link to the skipped note has the state `missing`. Only the diagnostic and
-    // the incomplete flag tell the reader that the note exists.
-    let link: Vec<_> = snapshot.edges.iter().filter(|e| e.kind == "link").collect();
-    assert_eq!(link.len(), 1, "{link:?}");
-    assert_eq!(link[0].state.as_deref(), Some("missing"));
+    // The link to the skipped note is not a link to a note that does not exist.
+    assert_eq!(link_states(&snapshot), [("skipped-target", "none")]);
+    assert_eq!(outcomes(&snapshot, "Small.md"), [&target_skipped()]);
+    // The skipped note gets no document and no stub.
+    assert!(snapshot.documents.iter().all(|d| d.path != "Big.md"));
 
-    // The run publishes, and the metalayer holds the skipped status.
+    // The run publishes, and the metalayer holds the skipped status and the new values.
     let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
     layer
         .publish(&snapshot, &PublishOptions::default())
@@ -400,5 +441,134 @@ fn a_note_over_the_note_limit_is_skipped_and_its_link_stays_missing() {
     assert_eq!(
         (skipped[0].path.as_str(), skipped[0].reason.as_deref()),
         ("Big.md", Some("file-too-large"))
+    );
+    let edges = view.edges(None).unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].state.as_deref(), Some("skipped-target"));
+    let references = view.references(ReferenceQuery::default()).unwrap();
+    assert_eq!(references.len(), 1);
+    assert_eq!(
+        references[0].outcome,
+        Outcome::Unresolved("target-skipped".into())
+    );
+}
+
+#[test]
+fn an_anchor_link_to_a_skipped_note_has_an_unchecked_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    limited_vault(&root, &[("Small.md", "See [[Big#H]] and [[Big#^b]].\n")]);
+    let snapshot = limited_snapshot(&root);
+    // The note is not read, so its anchors are unknown. The link is not `missing`.
+    assert_eq!(
+        link_states(&snapshot),
+        [
+            ("skipped-target", "unchecked"),
+            ("skipped-target", "unchecked")
+        ]
+    );
+    assert_eq!(
+        outcomes(&snapshot, "Small.md"),
+        [&target_skipped(), &target_skipped()]
+    );
+}
+
+#[test]
+fn an_alias_of_a_skipped_note_stays_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    limited_vault(&root, &[("Small.md", "See [[Nick]].\n")]);
+    // The alias is in the front matter of the skipped note. Scippy does not read it.
+    write(
+        &root,
+        "Big.md",
+        &format!("---\naliases: [Nick]\n---\n{}\n", "word ".repeat(60)),
+    );
+    let snapshot = limited_snapshot(&root);
+    assert_eq!(rows(&snapshot), [("Big.md", "skipped", "file-too-large")]);
+    assert_eq!(link_states(&snapshot), [("missing", "none")]);
+    assert_eq!(
+        outcomes(&snapshot, "Small.md"),
+        [&ReferenceOutcome::Unresolved("no-path".into())]
+    );
+}
+
+#[test]
+fn a_skipped_note_takes_part_in_name_resolution_as_an_indexed_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    limited_vault(
+        &root,
+        &[
+            // The shortest path of `Big` is `Big.md` at the root. A folder path is explicit.
+            ("Small.md", "[[Big]] [[Notes/Big]] [[Dup]] [[Dup]]\n"),
+            ("Notes/Big.md", "# Big\n"),
+            ("Notes/Dup.md", "# Dup\n"),
+            ("Other/Dup.md", "# Dup\n"),
+        ],
+    );
+    let snapshot = limited_snapshot(&root);
+    // `[[Big]]` reaches the skipped note at the root. `[[Notes/Big]]` reaches the indexed note.
+    // `[[Dup]]` is a tie of two indexed notes, as before.
+    let states = link_states(&snapshot);
+    assert_eq!(states[0], ("skipped-target", "none"));
+    assert_eq!(states[1], ("resolved", "none"));
+    assert_eq!(states[2], ("ambiguous", "none"));
+    let small = outcomes(&snapshot, "Small.md");
+    assert_eq!(small[0], &target_skipped());
+    assert!(matches!(small[1], ReferenceOutcome::Resolved(_)));
+    assert!(matches!(small[2], ReferenceOutcome::Ambiguous(c) if c.len() == 2));
+}
+
+#[test]
+fn a_tie_with_a_skipped_note_is_ambiguous_and_names_no_skipped_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    // `Big.md` at the root is skipped. `Notes/Big.md` is indexed. The name `Big` finds the
+    // shortest path first, so a tie needs two notes at the same depth.
+    limited_vault(
+        &root,
+        &[
+            ("Small.md", "[[Dup]] [[Mid]]\n"),
+            ("A/Dup.md", &format!("# Dup\n{}\n", "word ".repeat(60))),
+            ("B/Dup.md", "# Dup\n"),
+            ("C/Mid.md", &format!("# Mid\n{}\n", "word ".repeat(60))),
+            ("D/Mid.md", &format!("# Mid\n{}\n", "word ".repeat(60))),
+        ],
+    );
+    let snapshot = limited_snapshot(&root);
+    // Loci gives `ambiguous` for two notes with the same name. A skipped note is one of them.
+    assert_eq!(
+        link_states(&snapshot),
+        [("ambiguous", "none"), ("ambiguous", "none")]
+    );
+    // One indexed note and one skipped note: the link has no single target to name.
+    // Two skipped notes: no target at all.
+    assert_eq!(
+        outcomes(&snapshot, "Small.md"),
+        [&target_skipped(), &target_skipped()]
+    );
+    // The skipped notes get no stub.
+    let paths: Vec<_> = snapshot.documents.iter().map(|d| d.path.as_str()).collect();
+    assert!(!paths.contains(&"A/Dup.md"), "{paths:?}");
+    assert!(!paths.contains(&"C/Mid.md"), "{paths:?}");
+}
+
+#[test]
+fn a_dangling_link_stays_missing_beside_a_skipped_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    limited_vault(&root, &[("Small.md", "[[Nowhere]] [[Big]]\n")]);
+    let snapshot = limited_snapshot(&root);
+    assert_eq!(
+        link_states(&snapshot),
+        [("missing", "none"), ("skipped-target", "none")]
+    );
+    assert_eq!(
+        outcomes(&snapshot, "Small.md"),
+        [
+            &ReferenceOutcome::Unresolved("no-path".into()),
+            &target_skipped()
+        ]
     );
 }

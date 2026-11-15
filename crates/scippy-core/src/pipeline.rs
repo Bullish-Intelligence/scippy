@@ -1236,13 +1236,28 @@ fn index_native_pack(
     for (doc, native_doc) in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let targeting = Targeting::new(&*model, Vec::new());
-        let reconciled = reconcile(
+        let mut reconciled = reconcile(
             &index,
             bindings,
             &HashSet::new(),
             &HashSet::new(),
             &targeting,
         );
+        // A reference to a skipped file has no end. The pack says so, and the reason is more exact.
+        let skipped: HashSet<(u32, u32)> = native_doc
+            .references
+            .iter()
+            .filter(|r| r.target_skipped)
+            .map(|r| r.span)
+            .collect();
+        for r in &mut reconciled {
+            let span = (r.reference.start_byte, r.reference.end_byte);
+            if skipped.contains(&span)
+                && r.outcome == BindingOutcome::Unresolved(UnresolvedReason::NoPath)
+            {
+                r.outcome = BindingOutcome::Unresolved(UnresolvedReason::TargetSkipped);
+            }
+        }
         for r in &reconciled {
             count(report, r);
             if let Some(capture) = capture {
@@ -1667,6 +1682,7 @@ fn reason_code(reason: UnresolvedReason) -> &'static str {
         UnresolvedReason::NoDeclaration => "no-declaration",
         UnresolvedReason::NotAddressable => "not-addressable",
         UnresolvedReason::NotTargetable => "not-targetable",
+        UnresolvedReason::TargetSkipped => "target-skipped",
     }
 }
 

@@ -116,6 +116,7 @@ impl NativeAnalysis for Fake {
                                 ReferenceRole::Reference
                             },
                             targets,
+                            target_skipped: false,
                         });
                     }
                     (Some("tag"), Some(name)) => {
@@ -136,6 +137,7 @@ impl NativeAnalysis for Fake {
                             span,
                             role: ReferenceRole::Reference,
                             targets: vec![NativeTarget::Virtual(name.to_string())],
+                            target_skipped: false,
                         });
                     }
                     _ => {}

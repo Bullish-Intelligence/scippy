@@ -563,6 +563,10 @@ pub struct NativeReference {
     pub span: (u32, u32),
     pub role: ReferenceRole,
     pub targets: Vec<NativeTarget>,
+    /// The reference names a file that the pack skipped, such as a note over its size limit.
+    /// The file has no declaration, so `targets` has no entry for it. When no target is left,
+    /// the reference is unresolved with the reason `target-skipped`, not `no-path`.
+    pub target_skipped: bool,
 }
 
 /// A document of a native pack.
@@ -598,9 +602,9 @@ pub struct NativeLink {
     /// reference of its own.
     pub anchor_span: Option<(u32, u32)>,
     pub label: Option<String>,
-    /// `resolved`, `missing`, or `ambiguous`.
+    /// `resolved`, `missing`, `ambiguous`, or `skipped-target`.
     pub state: &'static str,
-    /// `resolved`, `missing`, or `none`.
+    /// `resolved`, `missing`, `unchecked`, or `none`.
     pub anchor_state: &'static str,
 }
 

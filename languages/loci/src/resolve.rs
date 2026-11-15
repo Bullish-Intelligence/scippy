@@ -3,7 +3,7 @@
 //! Resolution is a pure function of the file lists and the anchors. A tie is `ambiguous`, with
 //! sorted candidates. Nothing picks a winner.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::config::{GlobSet, Settings};
 use crate::note::Note;
@@ -19,6 +19,10 @@ pub enum State {
     Resolved,
     Missing,
     Ambiguous,
+    /// The name reaches a note that Scippy skipped because it is too large. The note takes part
+    /// in name resolution as if it were indexed, but it has no facts.
+    /// loci-core has no such state: it drops the note, and the link is `missing`.
+    SkippedTarget,
     /// A tag has no resolution.
     None,
 }
@@ -29,6 +33,7 @@ impl State {
             State::Resolved => "resolved",
             State::Missing => "missing",
             State::Ambiguous => "ambiguous",
+            State::SkippedTarget => "skipped-target",
             State::None => "none",
         }
     }
@@ -118,6 +123,8 @@ pub struct Vault {
     by_path: HashMap<String, Vec<String>>,
     by_stem: HashMap<String, Vec<String>>,
     by_alias: HashMap<String, Vec<String>>,
+    /// The paths of the skipped notes. They are in `by_path` and `by_stem`, and nowhere else.
+    skipped: HashSet<String>,
     link_targets: HashMap<String, Vec<String>>,
     link_by_basename: HashMap<String, Vec<String>>,
     anchors: HashMap<String, AnchorIndex>,
@@ -138,7 +145,8 @@ pub struct Classified {
     pub link_targets: Vec<String>,
     /// The extra roots: name and `stem_visible`.
     pub roots: Vec<(String, bool)>,
-    /// The notes and claimed files over the size cap, dropped from every tier.
+    /// The notes and claimed files over the size cap, dropped from every tier, in the vault root
+    /// and in the extra roots. Their paths still take part in name resolution.
     /// `(path, size, cap)`.
     pub skipped: Vec<(String, u64, u64)>,
 }
@@ -208,6 +216,7 @@ pub fn classify(
             out.link_targets.push(path.clone());
         }
     }
+    out.skipped.extend(extra.skipped.iter().cloned());
     out.sources
         .extend(extra.sources.iter().map(|(p, _)| p.clone()));
     out.link_targets
@@ -260,6 +269,11 @@ impl Vault {
             by_path: HashMap::new(),
             by_stem: HashMap::new(),
             by_alias: HashMap::new(),
+            skipped: classified
+                .skipped
+                .iter()
+                .map(|(p, _, _)| p.clone())
+                .collect(),
             link_targets: HashMap::new(),
             link_by_basename: HashMap::new(),
             anchors: HashMap::new(),
@@ -267,7 +281,10 @@ impl Vault {
             by_root_stem: HashMap::new(),
             by_root_basename: HashMap::new(),
         };
-        for path in &classified.sources {
+        // A skipped note has a name and no facts: no alias, no anchor. Its path names it as
+        // the path of an indexed note does.
+        let skipped = classified.skipped.iter().map(|(p, _, _)| p);
+        for path in classified.sources.iter().chain(skipped) {
             let npath = vault.norm(path);
             let stem = vault.norm(stem_of(path));
             vault.by_path.entry(npath).or_default().push(path.clone());
@@ -357,6 +374,11 @@ impl Vault {
             }
         }
         vault
+    }
+
+    /// True when the path is a skipped note.
+    pub fn is_skipped(&self, path: &str) -> bool {
+        self.skipped.contains(path)
     }
 
     /// The extra root that holds a path: the first segment names it, and a folder follows.
@@ -653,13 +675,26 @@ impl Vault {
         } else {
             self.resolve_one(&r.target, source)
         };
-        let (anchor_state, anchor_kind, anchor_span) = self.resolve_anchor(
-            &resolution,
-            r.heading.as_deref(),
-            r.block.as_deref(),
-            markdown,
-        );
-        let resolved = resolution.state == State::Resolved;
+        // A link that reaches only a skipped note has the state `skipped-target`. A tie keeps the
+        // state `ambiguous`, as for indexed notes.
+        let skipped = resolution.state == State::Resolved
+            && resolution
+                .path
+                .as_deref()
+                .is_some_and(|p| self.is_skipped(p));
+        let (anchor_state, anchor_kind, anchor_span) = if skipped {
+            // The note has no read anchors. A link without an anchor has no anchor state.
+            let anchored = r.heading.is_some() || r.block.is_some();
+            (if anchored { "unchecked" } else { "none" }, None, None)
+        } else {
+            self.resolve_anchor(
+                &resolution,
+                r.heading.as_deref(),
+                r.block.as_deref(),
+                markdown,
+            )
+        };
+        let resolved = resolution.state == State::Resolved && !skipped;
         Record {
             source: source.to_string(),
             kind: r.kind,
@@ -674,7 +709,11 @@ impl Vault {
                 .map(|b| b.strip_prefix('^').unwrap_or(b).to_string()),
             property: r.prop.clone(),
             origin: None,
-            state: resolution.state,
+            state: if skipped {
+                State::SkippedTarget
+            } else {
+                resolution.state
+            },
             target_path: resolution.path.clone(),
             target_is_document: resolved.then_some(resolution.is_document),
             candidates: resolution.candidates,

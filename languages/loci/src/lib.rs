@@ -33,6 +33,12 @@
 //! A note that is not UTF-8 is skipped with the warning `invalid-utf8`. loci-core reads it
 //! lossy.
 //!
+//! A note over `note_max_bytes` is skipped with the warning `file-too-large`. Its path still
+//! takes part in name resolution. A link that reaches only that note has the state
+//! `skipped-target`. loci-core drops the note, and the link is `missing`. The oracle shape of
+//! [`Record::to_json`] maps the state back. An alias of the note stays unread, so a link by
+//! alias alone stays `missing`.
+//!
 //! # Symbols
 //!
 //! The package is `loci <vault> .`. `<vault>` is the name of the project folder.
@@ -332,7 +338,7 @@ impl NativeAnalysis for LociPack {
         let classified = classify(&files, &settings, listing);
         // The walker already warns about a file over the largest cap. Warn about the rest.
         let walker_cap = vault_walker_cap(&settings);
-        for (path, size, cap) in classified.skipped.iter().chain(&listing.skipped) {
+        for (path, size, cap) in classified.skipped.iter() {
             if *size <= walker_cap {
                 output.diagnostics.push(Diagnostic {
                     file: Some(path.clone()),
@@ -478,6 +484,7 @@ fn build_output(
                     span: span(record.span),
                     role: ReferenceRole::Reference,
                     targets: vec![NativeTarget::Virtual(key)],
+                    target_skipped: false,
                 });
                 continue;
             }
@@ -526,6 +533,7 @@ fn build_output(
                                 span: span(target_part),
                                 role,
                                 targets: module(target).into_iter().collect(),
+                                target_skipped: false,
                             });
                         }
                         link.anchor_span = Some(span(anchor_part));
@@ -533,6 +541,7 @@ fn build_output(
                             span: span(anchor_part),
                             role,
                             targets: vec![NativeTarget::Declaration(p, span(a))],
+                            target_skipped: false,
                         });
                         output.links.push(link);
                         continue;
@@ -545,18 +554,38 @@ fn build_output(
                 (State::Ambiguous, _) => {
                     // Every candidate needs a declaration, or a tie would look like one target.
                     // A candidate that is not a note is an attachment: it gets a stub.
-                    for c in &record.candidates {
-                        if !notes.contains_key(c) {
+                    // A skipped note has no declaration and gets no stub.
+                    let indexed: Vec<&String> = record
+                        .candidates
+                        .iter()
+                        .filter(|c| !vault.is_skipped(c))
+                        .collect();
+                    for c in &indexed {
+                        if !notes.contains_key(*c) {
                             if let Ok(p) = ProjectRelativePath::new(c) {
-                                stubs.entry(c.clone()).or_insert(p);
+                                stubs.entry((*c).clone()).or_insert(p);
                             }
                         }
                     }
-                    record.candidates.iter().filter_map(|c| module(c)).collect()
+                    // One indexed candidate would look like a resolved link, so a tie with a
+                    // skipped note keeps its targets only when two indexed candidates remain.
+                    if indexed.len() < record.candidates.len() && indexed.len() < 2 {
+                        Vec::new()
+                    } else {
+                        indexed.iter().filter_map(|c| module(c)).collect()
+                    }
                 }
                 _ => Vec::new(),
             };
+            // The link reaches a skipped note, and no target names it.
+            let target_skipped = targets.is_empty()
+                && match record.state {
+                    State::SkippedTarget => true,
+                    State::Ambiguous => record.candidates.iter().any(|c| vault.is_skipped(c)),
+                    _ => false,
+                };
             references.push(NativeReference {
+                target_skipped,
                 span: span(record.span),
                 role: if record.embed {
                     ReferenceRole::Read
@@ -588,7 +617,21 @@ fn build_output(
 
 impl Record {
     /// The record in the shape of `graph/relations` of loci-core (USER.md section 28).
+    ///
+    /// This is the oracle comparison. loci-core has no state for a note over its size limit.
+    /// It drops the note, so a link to it is `missing`. Scippy gives `skipped-target`, and the
+    /// anchor state `unchecked` when the link has an anchor. This shape maps both back to the
+    /// loci-core form: state `missing`, anchor state `none`, and no target. The mapping covers
+    /// a link that reaches only a skipped note. A tie that includes a skipped note keeps the
+    /// state `ambiguous` and all candidates. loci-core would not see the skipped candidate.
     pub fn to_json(&self) -> serde_json::Value {
+        let skipped = self.state == State::SkippedTarget;
+        let state = if skipped { State::Missing } else { self.state };
+        let (anchor_state, anchor_kind, anchor_span) = if skipped {
+            ("none", None, None)
+        } else {
+            (self.anchor_state, self.anchor_kind, self.anchor_span)
+        };
         serde_json::json!({
             "source": self.source,
             "kind": self.kind.name(),
@@ -600,13 +643,13 @@ impl Record {
             "block": self.block,
             "property": self.property,
             "origin": self.origin,
-            "state": self.state.name(),
-            "target_path": self.target_path,
+            "state": state.name(),
+            "target_path": if skipped { None } else { self.target_path.as_ref() },
             "target_is_document": self.target_is_document,
             "candidates": self.candidates,
-            "anchor_state": self.anchor_state,
-            "anchor_kind": self.anchor_kind,
-            "anchor_span": self.anchor_span.map(|s| [s.0, s.1]),
+            "anchor_state": anchor_state,
+            "anchor_kind": anchor_kind,
+            "anchor_span": anchor_span.map(|s| [s.0, s.1]),
         })
     }
 }

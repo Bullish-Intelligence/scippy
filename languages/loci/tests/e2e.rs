@@ -1088,12 +1088,22 @@ fn the_published_edges_match_the_relations_of_loci_core() {
                 "{at}"
             );
             assert_eq!(edge.label.as_deref(), record["label"].as_str(), "{at}");
-            assert_eq!(edge.state.as_deref(), record["state"].as_str(), "{at}");
-            assert_eq!(
-                edge.anchor_state.as_deref(),
-                record["anchor_state"].as_str(),
-                "{at}"
-            );
+            // loci-core has no state for a note over its size limit. It drops the note, so the
+            // link is `missing` with the anchor state `none`. Scippy gives `skipped-target`
+            // and, for a link with an anchor, `unchecked`. Map both to the loci-core form.
+            let skipped = edge.state.as_deref() == Some("skipped-target");
+            let state = if skipped {
+                Some("missing")
+            } else {
+                edge.state.as_deref()
+            };
+            let anchor = if skipped {
+                Some("none")
+            } else {
+                edge.anchor_state.as_deref()
+            };
+            assert_eq!(state, record["state"].as_str(), "{at}");
+            assert_eq!(anchor, record["anchor_state"].as_str(), "{at}");
             let candidates = record["candidates"].as_array().unwrap().len();
             assert_eq!(edge.candidates.len(), candidates, "{at}");
             if record["state"] == "missing" || record["state"] == "ambiguous" {

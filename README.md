@@ -84,9 +84,16 @@ rebuilds it.
   - `alias`: a name and the document that it refers to;
   - `link` and `embed`: a link or an embed of a native pack. The Loci pack passes the link kind
     (`wikilink`, `markdown_link`, `frontmatter_link`, `embed`, `markdown_embed`), the label,
-    the state (`resolved`, `missing`, `ambiguous`), and the anchor state (`resolved`, `missing`,
-    `none`). A link `[[t#S]]` is one edge and has two supports: one for the note and one for the
-    heading. An ambiguous link keeps its candidates in `reference_candidate`.
+    the state (`resolved`, `missing`, `ambiguous`, `skipped-target`), and the anchor state
+    (`resolved`, `missing`, `unchecked`, `none`). A link `[[t#S]]` is one edge and has two
+    supports: one for the note and one for the heading. An ambiguous link keeps its candidates
+    in `reference_candidate`.
+    A note over `note_max_bytes` is skipped, but its path still takes part in name resolution.
+    A link that reaches only that note has the state `skipped-target`, the anchor state
+    `unchecked` when it has an anchor, and the reference outcome `unresolved` with the reason
+    `target-skipped`. `loci-core` has no such state: it drops the note, and the link is `missing`.
+    The Loci oracle comparison maps `skipped-target` back to `missing`. An alias of a skipped
+    note lives in its unread front matter, so a link by alias alone stays `missing`.
   A tag is a reference and has no edge.
 - The column `reference.kind` says how a reference names its target in the source: `plain`,
   `member` (the `x` in `a.x`), or `keyword` (the `x` in `f(x=1)`). A reference of a native pack
