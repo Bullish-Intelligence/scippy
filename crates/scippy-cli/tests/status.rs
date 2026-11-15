@@ -5,7 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use scippy_core::{AnalysisSnapshot, IndexReport, IndexRequest, index_project_with_snapshot};
+use scippy_core::{
+    AnalysisSnapshot, IndexReport, IndexRequest, LanguagePack, index_project_with_snapshot,
+};
 use scippy_loci::LociPack;
 use scippy_metalayer::{FileStatus, Metalayer, PublishOptions};
 use scippy_python::PythonPack;
@@ -254,4 +256,115 @@ fn the_scippy_sources_publish() {
     assert!(count("SELECT count(*) FROM reference") > 100);
     assert!(count("SELECT count(*) FROM file_reference") > 10);
     assert_eq!(count("SELECT count(*) FROM revision"), 1);
+}
+
+#[test]
+fn two_roots_with_one_name_publish_an_incomplete_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault");
+    let roots = dir.path().join("roots");
+    write(
+        &vault,
+        ".loci/vault.toml",
+        "schema = 1\nid = \"x\"\nroots_file = \"roots.toml\"\n",
+    );
+    write(&vault, "Home.md", "# Home\n");
+    let mut table = String::new();
+    for name in ["app", "one", "two"] {
+        let path = roots.join(name);
+        table += &format!(
+            "[[root]]\nname = \"{name}\"\npath = \"{}\"\nlister = \"walk\"\n\n",
+            path.display()
+        );
+    }
+    write(&vault, "roots.toml", &table);
+    // The roots `one` and `two` both name their package `lib`. The root `app` needs `lib`.
+    write(
+        &roots.join("one"),
+        "pyproject.toml",
+        "[project]\nname = \"lib\"\n",
+    );
+    write(&roots.join("one"), "lib.py", "x = 1\n");
+    write(
+        &roots.join("two"),
+        "pyproject.toml",
+        "[project]\nname = \"lib\"\n",
+    );
+    write(&roots.join("two"), "lib.py", "x = 2\n");
+    write(
+        &roots.join("app"),
+        "pyproject.toml",
+        "[project]\nname = \"app\"\ndependencies = [\"lib\"]\n",
+    );
+    write(&roots.join("app"), "main.py", "y = 1\n");
+    let (_, snapshot) = snapshot(&vault, |_| {});
+    let found: Vec<_> = snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "root-name-collision")
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", snapshot.diagnostics);
+    assert!(
+        found[0].message.contains("one, two"),
+        "{}",
+        found[0].message
+    );
+    // The collision loses a link, not a file, so no file has a row.
+    assert!(rows(&snapshot).is_empty(), "{:?}", rows(&snapshot));
+    assert!(!snapshot.input_complete);
+
+    // The run still publishes, and the revision says the input is incomplete.
+    let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
+    layer
+        .publish(&snapshot, &PublishOptions::default())
+        .unwrap();
+    assert!(!layer.view().unwrap().unwrap().revision().input_complete);
+}
+
+#[test]
+fn a_note_over_the_note_limit_is_skipped_and_its_link_stays_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("vault");
+    write(
+        &root,
+        ".loci/vault.toml",
+        "schema = 1\nid = \"x\"\n[policy]\nnote_max_bytes = 100\n",
+    );
+    write(&root, "Small.md", "See [[Big]].\n");
+    write(
+        &root,
+        "Big.md",
+        &format!("# Big\n\n{}\n", "word ".repeat(60)),
+    );
+    // The command line takes the file limit from the pack. Do the same here.
+    let limits = LociPack.input_limits(&root).unwrap();
+    let (_, snapshot) = snapshot(&root, |r| r.limits.max_file_bytes = limits.max_file_bytes);
+    let found: Vec<_> = snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "file-too-large")
+        .collect();
+    assert_eq!(found.len(), 1, "{:?}", snapshot.diagnostics);
+    assert_eq!(found[0].file.as_deref(), Some("Big.md"));
+    assert!(!snapshot.input_complete);
+    assert_eq!(rows(&snapshot), [("Big.md", "skipped", "file-too-large")]);
+    // Today the link to the skipped note has the state `missing`. Only the diagnostic and
+    // the incomplete flag tell the reader that the note exists.
+    let link: Vec<_> = snapshot.edges.iter().filter(|e| e.kind == "link").collect();
+    assert_eq!(link.len(), 1, "{link:?}");
+    assert_eq!(link[0].state.as_deref(), Some("missing"));
+
+    // The run publishes, and the metalayer holds the skipped status.
+    let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
+    layer
+        .publish(&snapshot, &PublishOptions::default())
+        .unwrap();
+    let view = layer.view().unwrap().unwrap();
+    assert!(!view.revision().input_complete);
+    let skipped = view.files(Some(FileStatus::Skipped)).unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(
+        (skipped[0].path.as_str(), skipped[0].reason.as_deref()),
+        ("Big.md", Some("file-too-large"))
+    );
 }
