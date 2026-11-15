@@ -19,8 +19,11 @@ use std::process::{Command, Output};
 
 use protobuf::Message;
 use scip::types::{Document, Index, Occurrence, SymbolRole, occurrence::Typed_range};
-use scippy_core::{IndexReport, IndexRequest, LanguagePack, Severity, index_project};
+use scippy_core::{
+    IndexReport, IndexRequest, LanguagePack, Severity, index_project, index_project_with_snapshot,
+};
 use scippy_loci::{Listing, LociPack, Settings, export_workspace};
+use scippy_metalayer::{EdgeKind, Metalayer, PublishOptions, RelationKind, SymbolRef};
 use scippy_python::PythonPack;
 use serde_json::Value;
 
@@ -1025,4 +1028,164 @@ fn scip_snapshot_matches_the_golden_files() {
             check_golden(&format!("{name}/{file}"), &actual);
         }
     }
+}
+
+// ---- the metalayer edges against loci-core ----
+
+/// Index a vault, publish the run, and return the database.
+fn published(root: &Path) -> (tempfile::TempDir, Metalayer) {
+    let scratch = tempfile::tempdir().unwrap();
+    let request = IndexRequest::new(root, scratch.path().join("index.scip"));
+    let (_, snapshot) = index_project_with_snapshot(&request, &[&LociPack]).unwrap();
+    let mut layer = Metalayer::open(scratch.path().join("layer.sqlite")).unwrap();
+    layer
+        .publish(&snapshot, &PublishOptions::default())
+        .unwrap();
+    (scratch, layer)
+}
+
+fn span_of(value: &Value) -> (u32, u32) {
+    let span = value.as_array().unwrap();
+    (
+        span[0].as_u64().unwrap() as u32,
+        span[1].as_u64().unwrap() as u32,
+    )
+}
+
+#[test]
+fn the_published_edges_match_the_relations_of_loci_core() {
+    let mut compared = 0;
+    for name in ORACLE_FIXTURES {
+        let prepared = prepare(name);
+        let (_scratch, mut layer) = published(&prepared.root);
+        let view = layer.view().unwrap().unwrap();
+        let mut edges = view.edges(Some(EdgeKind::Link)).unwrap();
+        edges.extend(view.edges(Some(EdgeKind::Embed)).unwrap());
+        edges.sort_by(|a, b| (&a.path, a.span).cmp(&(&b.path, b.span)));
+        // A tag is a reference with no edge.
+        let expected: Vec<Value> = read_oracle(name)
+            .into_iter()
+            .filter(|r| r["kind"] != "tag")
+            .collect();
+        assert_eq!(
+            edges.len(),
+            expected.len(),
+            "{name}: the count of edges differs"
+        );
+        for (edge, record) in edges.iter().zip(&expected) {
+            let at = format!("{name}: {} {}", record["source"], record["span"]);
+            assert_eq!(edge.path, record["source"].as_str().unwrap(), "{at}");
+            assert_eq!(edge.span, Some(span_of(&record["span"])), "{at}");
+            assert_eq!(edge.link_kind.as_deref(), record["kind"].as_str(), "{at}");
+            let embed = record["embed"].as_bool().unwrap();
+            assert_eq!(
+                edge.kind,
+                if embed {
+                    EdgeKind::Embed
+                } else {
+                    EdgeKind::Link
+                },
+                "{at}"
+            );
+            assert_eq!(edge.label.as_deref(), record["label"].as_str(), "{at}");
+            assert_eq!(edge.state.as_deref(), record["state"].as_str(), "{at}");
+            assert_eq!(
+                edge.anchor_state.as_deref(),
+                record["anchor_state"].as_str(),
+                "{at}"
+            );
+            let candidates = record["candidates"].as_array().unwrap().len();
+            assert_eq!(edge.candidates.len(), candidates, "{at}");
+            if record["state"] == "missing" || record["state"] == "ambiguous" {
+                assert!(edge.target.is_none(), "{at}");
+            }
+            compared += 1;
+        }
+    }
+    assert!(compared > 50, "{compared}");
+}
+
+fn vault_with(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("vault");
+    fs::create_dir_all(root.join(".loci")).unwrap();
+    fs::write(
+        root.join(".loci/vault.toml"),
+        "schema = 1\nid = \"01a08b81-648f-70e8-bb5f-cd8c53f0f305\"\n",
+    )
+    .unwrap();
+    for (path, text) in files {
+        fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        fs::write(root.join(path), text).unwrap();
+    }
+    (scratch, root)
+}
+
+#[test]
+fn a_broken_anchor_is_missing_and_a_good_anchor_gives_one_edge_and_two_supports() {
+    let source = "[[t#Section]]\n\n[[t#Nope]]\n";
+    let (_keep, root) = vault_with(&[("src.md", source), ("t.md", "# Section\n")]);
+    let (_scratch, mut layer) = published(&root);
+    let view = layer.view().unwrap().unwrap();
+    let edges = view.edges(Some(EdgeKind::Link)).unwrap();
+    assert_eq!(edges.len(), 2);
+    let good = edges
+        .iter()
+        .find(|e| e.anchor_state.as_deref() == Some("resolved"))
+        .unwrap();
+    let broken = edges
+        .iter()
+        .find(|e| e.anchor_state.as_deref() == Some("missing"))
+        .unwrap();
+    assert_eq!(good.state.as_deref(), Some("resolved"));
+    assert_eq!(broken.state.as_deref(), Some("resolved"));
+    assert_eq!(broken.span, Some((15, 25)));
+    // The note is the target of both links. The heading has one support: the good anchor.
+    let note = good.target.clone().unwrap();
+    assert!(note.symbol.ends_with("`t.md`/"), "{note:?}");
+    let on_note = view.supports("src.md", &note).unwrap();
+    assert_eq!(on_note.len(), 2);
+    assert!(on_note.iter().all(|s| s.kind == RelationKind::Link));
+    let heading = SymbolRef::global(format!("{}Section.", note.symbol));
+    let on_heading = view.supports("src.md", &heading).unwrap();
+    assert_eq!(on_heading.len(), 1);
+    assert_eq!(on_heading[0].kind, RelationKind::Link);
+    // The good link has two reference locations: the target part and the anchor part.
+    assert_eq!((on_note[0].span, on_heading[0].span), ((2, 3), (4, 11)));
+}
+
+#[test]
+fn an_ambiguous_link_has_its_candidates_and_a_non_ascii_note_has_byte_spans() {
+    let source = "# é日 ünïcode\n\n[[dup]] and ![[pic.png]]\n";
+    let (_keep, root) = vault_with(&[
+        ("src.md", source),
+        ("a/dup.md", "# A\n"),
+        ("b/dup.md", "# B\n"),
+        ("pic.png", ""),
+    ]);
+    let (_scratch, mut layer) = published(&root);
+    let view = layer.view().unwrap().unwrap();
+    let links = view.edges(Some(EdgeKind::Link)).unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].state.as_deref(), Some("ambiguous"));
+    assert_eq!(links[0].candidates.len(), 2);
+    assert!(links[0].target.is_none());
+    let start = source.find("[[dup]]").unwrap() as u32;
+    assert_eq!(links[0].span, Some((start, start + 7)));
+    // The byte offset is not the character offset.
+    assert_ne!(start as usize, source[..start as usize].chars().count());
+    let embeds = view.edges(Some(EdgeKind::Embed)).unwrap();
+    assert_eq!(embeds.len(), 1);
+    let embed_start = source.find("![[pic.png]]").unwrap() as u32;
+    assert_eq!(embeds[0].span, Some((embed_start, embed_start + 12)));
+    assert_eq!(embeds[0].state.as_deref(), Some("resolved"));
+    // The embed target is the attachment.
+    assert!(
+        embeds[0]
+            .target
+            .clone()
+            .unwrap()
+            .symbol
+            .ends_with("`pic.png`/")
+    );
 }

@@ -318,11 +318,16 @@ pub(crate) fn publish(
         symbols.insert(&tx, None, &info.symbol, &info.kind, &info.display_name)?;
     }
 
-    // Occurrences and the edges that the declarations carry.
+    // Occurrences and the edges that the declarations carry. An import occurrence marks the
+    // reference at the same span as an import reference.
+    let mut imports: HashSet<(i64, u32, u32, i64)> = HashSet::new();
     for d in &documents {
         let file = files[d.path.as_str()];
         for occurrence in &d.occurrences {
             let symbol = symbols.of_fact(&tx, file, &occurrence.symbol)?;
+            if occurrence.role == "import" {
+                imports.insert((file, occurrence.start, occurrence.end, symbol));
+            }
             tx.prepare_cached(
                 "INSERT OR IGNORE INTO occurrence (file_id, start, end, symbol_id, role)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -357,7 +362,10 @@ pub(crate) fn publish(
         }
     }
 
-    // References, and the candidates of the ambiguous ones.
+    // References, the candidates of the ambiguous ones, and the import edges.
+    // `located` maps a reference location to its row and its target.
+    let mut located: HashMap<(i64, u32, u32), (i64, Option<i64>)> =
+        HashMap::with_capacity(s.references.len());
     for r in &s.references {
         let file = *files.get(r.path.as_str()).ok_or_else(|| {
             ScippyError::Storage(format!(
@@ -378,16 +386,27 @@ pub(crate) fn publish(
         };
         tx.prepare_cached(
             "INSERT INTO reference (file_id, start, end, kind, outcome, target_id, reason, limited)
-             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .and_then(|mut st| {
             st.execute(params![
-                file, r.start, r.end, outcome, target, reason, limited
+                file, r.start, r.end, r.kind, outcome, target, reason, limited
             ])
         })
         .map_err(storage)?;
+        let id = tx.last_insert_rowid();
+        located.insert((file, r.start, r.end), (id, target));
+        if let Some(target) = target {
+            if imports.contains(&(file, r.start, r.end, target)) {
+                tx.prepare_cached(
+                    "INSERT INTO edge (kind, file_id, target_id, start, end, reference_id)
+                     VALUES ('import', ?1, ?2, ?3, ?4, ?5)",
+                )
+                .and_then(|mut st| st.execute(params![file, target, r.start, r.end, id]))
+                .map_err(storage)?;
+            }
+        }
         if let ReferenceOutcome::Ambiguous(candidates) = &r.outcome {
-            let id = tx.last_insert_rowid();
             let mut sorted: Vec<&String> = candidates.iter().collect();
             sorted.sort();
             sorted.dedup();
@@ -400,6 +419,54 @@ pub(crate) fn publish(
                 .map_err(storage)?;
             }
         }
+    }
+
+    // The edges that the run gave: inheritance, links, and embeds. An edge names its references
+    // by location.
+    for e in &s.edges {
+        let file = *files.get(e.path.as_str()).ok_or_else(|| {
+            ScippyError::Storage(format!("an edge lies in {:?}, which is not a file", e.path))
+        })?;
+        let find = |span: Option<(u32, u32)>| -> Result<Option<(i64, Option<i64>)>, ScippyError> {
+            span.map(|(start, end)| {
+                located.get(&(file, start, end)).copied().ok_or_else(|| {
+                    ScippyError::Storage(format!(
+                        "an edge in {:?} names a reference at {start}..{end}, which does not exist",
+                        e.path
+                    ))
+                })
+            })
+            .transpose()
+        };
+        let reference = find(e.reference_span)?;
+        let anchor = find(e.anchor_span)?;
+        let source = e
+            .source
+            .as_deref()
+            .map(|symbol| symbols.of_fact(&tx, file, symbol))
+            .transpose()?;
+        tx.prepare_cached(
+            "INSERT INTO edge (kind, file_id, source_id, target_id, start, end, reference_id,
+                               anchor_reference_id, link_kind, label, state, anchor_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        )
+        .and_then(|mut st| {
+            st.execute(params![
+                e.kind,
+                file,
+                source,
+                reference.and_then(|r| r.1),
+                e.span.0,
+                e.span.1,
+                reference.map(|r| r.0),
+                anchor.map(|a| a.0),
+                e.link_kind,
+                e.label,
+                e.state,
+                e.anchor_state,
+            ])
+        })
+        .map_err(storage)?;
     }
 
     // Diagnostics.

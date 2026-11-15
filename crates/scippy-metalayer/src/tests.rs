@@ -2,8 +2,8 @@ use std::path::Path;
 
 use rusqlite::Connection;
 use scippy_core::{
-    AnalysisDiagnostic, AnalysisDocument, AnalysisFile, AnalysisOccurrence, AnalysisReference,
-    AnalysisSnapshot, AnalysisSymbol, ReferenceOutcome, ScippyError,
+    AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisOccurrence,
+    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, ReferenceOutcome, ScippyError,
 };
 
 use crate::publish::sha256_hex;
@@ -60,6 +60,7 @@ fn reference(path: &str, start: u32, end: u32, outcome: ReferenceOutcome) -> Ana
         end,
         outcome,
         limited: None,
+        kind: None,
     }
 }
 
@@ -72,6 +73,7 @@ fn empty() -> AnalysisSnapshot {
         documents: Vec::new(),
         lost_files: Vec::new(),
         references: Vec::new(),
+        edges: Vec::new(),
         external_symbols: Vec::new(),
         diagnostics: Vec::new(),
         input_complete: true,
@@ -870,4 +872,305 @@ fn a_reference_in_an_unknown_file_fails_the_publish() {
         .push(reference("missing.py", 0, 1, resolved("t")));
     assert!(layer.publish(&s, &PublishOptions::default()).is_err());
     assert!(layer.view().unwrap().is_none());
+}
+
+fn edge(kind: &str, path: &str, span: (u32, u32)) -> AnalysisEdge {
+    AnalysisEdge {
+        kind: kind.into(),
+        path: path.into(),
+        source: None,
+        span,
+        reference_span: Some(span),
+        anchor_span: None,
+        link_kind: None,
+        label: None,
+        state: None,
+        anchor_state: None,
+    }
+}
+
+/// A document of a native pack, with the module symbol and one heading.
+fn note(path: &str) -> AnalysisDocument {
+    let mut d = document(path, "# Heading\n");
+    d.language = "Markdown".into();
+    d.pack = Some("loci".into());
+    d.symbols = vec![
+        symbol(&format!("g {path}/")),
+        symbol(&format!("g {path}/Heading.")),
+    ];
+    d.occurrences = vec![
+        occurrence(0, 0, &format!("g {path}/"), "definition"),
+        occurrence(0, 9, &format!("g {path}/Heading."), "definition"),
+    ];
+    d
+}
+
+fn link(span: (u32, u32), state: &str, anchor_state: &str) -> AnalysisEdge {
+    AnalysisEdge {
+        link_kind: Some("wikilink".into()),
+        label: Some("label".into()),
+        state: Some(state.into()),
+        anchor_state: Some(anchor_state.into()),
+        ..edge("link", "src.md", span)
+    }
+}
+
+/// A source note with links of every state, and the target notes.
+fn vault() -> AnalysisSnapshot {
+    let mut s = empty();
+    let mut src = note("src.md");
+    src.occurrences = vec![occurrence(0, 0, "g src.md/", "definition")];
+    src.symbols = vec![symbol("g src.md/")];
+    s.documents = vec![src, note("t.md"), note("u.md")];
+    let reference = |start, end, outcome| reference("src.md", start, end, outcome);
+    s.references = vec![
+        // [[t#Heading]] at 10..22: the target part and the anchor part have a reference each.
+        reference(12, 13, resolved("g t.md/")),
+        reference(14, 21, resolved("g t.md/Heading.")),
+        // [[t#Nope]] at 30..40: the anchor is missing. One reference over the whole link.
+        reference(30, 40, resolved("g t.md/")),
+        // ![[u]] at 50..56: an embed with the read role.
+        reference(50, 56, resolved("g u.md/")),
+        // [[both]] at 60..68: two candidates.
+        reference(
+            60,
+            68,
+            ReferenceOutcome::Ambiguous(vec!["g u.md/".into(), "g t.md/".into()]),
+        ),
+        // [[nothing]] at 70..80: no target.
+        reference(
+            70,
+            80,
+            ReferenceOutcome::Unresolved("no-declaration".into()),
+        ),
+        // [[#Own]] at 90..96: the anchor reference only.
+        reference(91, 95, resolved("g src.md/Own.")),
+    ];
+    let mut anchored = link((10, 22), "resolved", "resolved");
+    anchored.reference_span = Some((12, 13));
+    anchored.anchor_span = Some((14, 21));
+    let mut own = link((90, 96), "resolved", "resolved");
+    own.reference_span = None;
+    own.anchor_span = Some((91, 95));
+    let mut embed = edge("embed", "src.md", (50, 56));
+    embed.link_kind = Some("embed".into());
+    embed.state = Some("resolved".into());
+    embed.anchor_state = Some("none".into());
+    s.edges = vec![
+        anchored,
+        link((30, 40), "resolved", "missing"),
+        embed,
+        link((60, 68), "ambiguous", "none"),
+        link((70, 80), "missing", "none"),
+        own,
+    ];
+    s
+}
+
+#[test]
+fn a_link_edge_keeps_its_state_and_anchor_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    publish(&mut layer, &vault());
+    let view = layer.view().unwrap().unwrap();
+    let edges = view.edges(Some(EdgeKind::Link)).unwrap();
+    let flat: Vec<_> = edges
+        .iter()
+        .map(|e| {
+            (
+                e.span,
+                e.state.as_deref(),
+                e.anchor_state.as_deref(),
+                e.target.is_some(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        flat,
+        vec![
+            (Some((10, 22)), Some("resolved"), Some("resolved"), true),
+            (Some((30, 40)), Some("resolved"), Some("missing"), true),
+            (Some((60, 68)), Some("ambiguous"), Some("none"), false),
+            (Some((70, 80)), Some("missing"), Some("none"), false),
+            (Some((90, 96)), Some("resolved"), Some("resolved"), false),
+        ]
+    );
+    assert_eq!(edges[0].link_kind.as_deref(), Some("wikilink"));
+    assert_eq!(edges[0].label.as_deref(), Some("label"));
+    assert_eq!(edges[0].target, Some(SymbolRef::global("g t.md/")));
+    let embeds = view.edges(Some(EdgeKind::Embed)).unwrap();
+    assert_eq!(embeds.len(), 1);
+    assert_eq!(embeds[0].target, Some(SymbolRef::global("g u.md/")));
+}
+
+#[test]
+fn an_ambiguous_link_has_its_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    publish(&mut layer, &vault());
+    let view = layer.view().unwrap().unwrap();
+    let edges = view.edges(Some(EdgeKind::Link)).unwrap();
+    let ambiguous = edges.iter().find(|e| e.span == Some((60, 68))).unwrap();
+    assert_eq!(
+        ambiguous.candidates,
+        vec![SymbolRef::global("g t.md/"), SymbolRef::global("g u.md/")]
+    );
+    assert!(edges[0].candidates.is_empty());
+}
+
+#[test]
+fn a_link_with_an_anchor_gives_one_edge_and_two_supports() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    publish(&mut layer, &vault());
+    let view = layer.view().unwrap().unwrap();
+    let anchored: Vec<_> = view
+        .edges(Some(EdgeKind::Link))
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.span == Some((10, 22)))
+        .collect();
+    assert_eq!(anchored.len(), 1);
+    let note = view
+        .supports("src.md", &SymbolRef::global("g t.md/"))
+        .unwrap();
+    let heading = view
+        .supports("src.md", &SymbolRef::global("g t.md/Heading."))
+        .unwrap();
+    assert_eq!(note.len(), 2);
+    assert_eq!(note[0].span, (12, 13));
+    assert_eq!(heading.len(), 1);
+    assert_eq!(heading[0].span, (14, 21));
+    assert!(
+        note.iter()
+            .chain(&heading)
+            .all(|s| s.kind == RelationKind::Link)
+    );
+    // The embed is an embed support.
+    let embed = view
+        .supports("src.md", &SymbolRef::global("g u.md/"))
+        .unwrap();
+    assert_eq!(embed[0].kind, RelationKind::Embed);
+    // The relation counts by kind.
+    let rows = view
+        .file_references(RelationQuery {
+            path: Some("src.md".into()),
+            kind: Some(RelationKind::Link),
+            ..Default::default()
+        })
+        .unwrap();
+    let t = rows.iter().find(|r| r.target.symbol == "g t.md/").unwrap();
+    assert_eq!(t.supports, 2);
+}
+
+#[test]
+fn the_import_edge_follows_the_import_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    publish(&mut layer, &rich());
+    let view = layer.view().unwrap().unwrap();
+    let imports = view.edges(Some(EdgeKind::Import)).unwrap();
+    assert_eq!(imports.len(), 1);
+    assert_eq!(imports[0].path, "a.py");
+    assert_eq!(imports[0].span, Some((22, 25)));
+    assert_eq!(imports[0].target, Some(SymbolRef::global("g ext.")));
+    assert_eq!(imports[0].source, None);
+}
+
+#[test]
+fn an_inheritance_edge_keeps_the_class_and_the_supertype() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = empty();
+    let mut a = document(
+        "a.py",
+        "class A: pass\nclass B: pass\nclass C(A, B): pass\n",
+    );
+    a.symbols = vec![symbol("g A#"), symbol("g B#"), symbol("g C#")];
+    s.documents = vec![a];
+    s.references = vec![
+        reference("a.py", 36, 37, resolved("g A#")),
+        reference("a.py", 39, 40, resolved("g B#")),
+    ];
+    for (span, _) in [((36, 37), "A"), ((39, 40), "B")] {
+        let mut e = edge("inheritance", "a.py", span);
+        e.source = Some("g C#".into());
+        s.edges.push(e);
+    }
+    publish(&mut layer, &s);
+    let view = layer.view().unwrap().unwrap();
+    let edges = view.edges(Some(EdgeKind::Inheritance)).unwrap();
+    let flat: Vec<_> = edges
+        .iter()
+        .map(|e| {
+            (
+                e.source.clone().unwrap().symbol,
+                e.target.clone().unwrap().symbol,
+                e.span,
+            )
+        })
+        .collect();
+    assert_eq!(
+        flat,
+        vec![
+            ("g C#".to_string(), "g A#".to_string(), Some((36, 37))),
+            ("g C#".to_string(), "g B#".to_string(), Some((39, 40))),
+        ]
+    );
+}
+
+#[test]
+fn an_edge_that_names_no_reference_fails_the_publish() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = snapshot("t");
+    s.edges = vec![edge("inheritance", "a.py", (7, 8))];
+    assert!(layer.publish(&s, &PublishOptions::default()).is_err());
+    assert!(layer.view().unwrap().is_none());
+}
+
+#[test]
+fn the_reference_kind_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = snapshot("t");
+    for (n, kind) in ["plain", "member", "keyword"].into_iter().enumerate() {
+        let mut r = reference("a.py", 10 + n as u32, 11 + n as u32, resolved("t"));
+        r.kind = Some(kind.into());
+        s.references.push(r);
+    }
+    publish(&mut layer, &s);
+    let view = layer.view().unwrap().unwrap();
+    let kinds: Vec<_> = view
+        .references(ReferenceQuery::default())
+        .unwrap()
+        .into_iter()
+        .map(|r| r.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            None,
+            Some(RefKind::Plain),
+            Some(RefKind::Member),
+            Some(RefKind::Keyword)
+        ]
+    );
+}
+
+#[test]
+fn the_support_view_uses_the_edge_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let layer = layer(dir.path());
+    let plan: Vec<String> = layer
+        .db
+        .prepare("EXPLAIN QUERY PLAN SELECT kind FROM support")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let plan = plan.join("\n");
+    assert!(plan.contains("edge_reference"), "{plan}");
+    assert!(plan.contains("edge_anchor"), "{plan}");
 }

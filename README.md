@@ -68,8 +68,23 @@ rebuilds it.
   reference location. It does not count when the target is a `local N` symbol, or when the
   location is the definition site of the same symbol. A same-file global target counts.
   A support that rests on a stopped search counts, and the column `limited` counts it too.
-- This version fills the `override` and `alias` edges and the kinds `use` and `import` of the
-  relation. Edges for inheritance, links, and embeds, and the reference kind, come later.
+- The `edge` table has one row for each:
+  - `import`: an import reference (an import occurrence at the span of a resolved reference);
+  - `inheritance`: a class and one supertype, with the span of the name in the class header.
+    A class with two supertypes has two edges;
+  - `override`: a method and the method that it overrides;
+  - `alias`: a name and the document that it refers to;
+  - `link` and `embed`: a link or an embed of a native pack. The Loci pack passes the link kind
+    (`wikilink`, `markdown_link`, `frontmatter_link`, `embed`, `markdown_embed`), the label,
+    the state (`resolved`, `missing`, `ambiguous`), and the anchor state (`resolved`, `missing`,
+    `none`). A link `[[t#S]]` is one edge and has two supports: one for the note and one for the
+    heading. An ambiguous link keeps its candidates in `reference_candidate`.
+  A tag is a reference and has no edge.
+- The column `reference.kind` says how a reference names its target in the source: `plain`,
+  `member` (the `x` in `a.x`), or `keyword` (the `x` in `f(x=1)`). A reference of a native pack
+  has no kind.
+- The relation `file_reference` has the kinds `import`, `use`, `link`, and `embed`. A support
+  is a link or embed support when an edge of that kind names its reference.
 - `Metalayer::view` starts one read transaction. Its methods read one revision. Integer ids
   stay inside the database. `Metalayer::open_read_only` never writes, creates, or rebuilds.
 - A database with an older format version is dropped and rebuilt. A database with a newer

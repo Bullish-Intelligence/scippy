@@ -29,8 +29,9 @@ mod schedule;
 mod snapshot;
 
 pub use snapshot::{
-    AnalysisDiagnostic, AnalysisDocument, AnalysisFile, AnalysisOccurrence, AnalysisReference,
-    AnalysisSnapshot, AnalysisSymbol, INCOMPLETE_CODES, ReferenceOutcome, file_status,
+    AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisOccurrence,
+    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, INCOMPLETE_CODES, ReferenceOutcome,
+    file_status,
 };
 
 pub use bindings::ResolveLimits;
@@ -40,9 +41,9 @@ pub use identity::{Descriptor, Package};
 pub use language::{
     Analysis, BindingRules, Builtins, DeclKind, Dialect, Engine, ExternalAsset, ExternalIdentity,
     ExtraFile, ExtraFiles, ExtractionSpec, Identity, LanguagePack, Manifest, NativeAnalysis,
-    NativeDeclaration, NativeDocument, NativeInput, NativeOutput, NativeReference, NativeSource,
-    NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind, ReferenceRole, Scope,
-    SupportFile, VirtualSymbol, WalkRules,
+    NativeDeclaration, NativeDocument, NativeInput, NativeLink, NativeOutput, NativeReference,
+    NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind, ReferenceRole,
+    Scope, SupportFile, VirtualSymbol, WalkRules,
 };
 pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{

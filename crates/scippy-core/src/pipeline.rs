@@ -26,7 +26,9 @@ use crate::reconcile::{
 };
 use crate::report::{Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage};
 use crate::schedule;
-use crate::snapshot::{AnalysisReference, AnalysisSnapshot, RunContext, sha256_hex};
+use crate::snapshot::{
+    AnalysisEdge, AnalysisReference, AnalysisSnapshot, Capture, RunContext, sha256_hex,
+};
 
 /// The SCIP scheme of every symbol that Scippy writes.
 /// It is Scippy-owned. Scippy does not claim the identifiers of another indexer.
@@ -133,7 +135,7 @@ pub(crate) fn run(
     let mut stubs: Vec<Document> = Vec::new();
     let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut trace = Vec::new();
-    let mut references = capture.then(Vec::new);
+    let mut capture = capture.then(Capture::default);
 
     for (index, pack) in languages.iter().enumerate() {
         let files: Vec<&FoundFile> = found.files.iter().filter(|f| f.pack == index).collect();
@@ -171,7 +173,7 @@ pub(crate) fn run(
                 &cache,
                 &mut report,
                 &mut trace,
-                &mut references,
+                &mut capture,
             )?,
             Engine::Native(native) => index_native_pack(
                 *pack,
@@ -183,7 +185,7 @@ pub(crate) fn run(
                 request,
                 &mut report,
                 &mut trace,
-                &mut references,
+                &mut capture,
             )?,
         };
         documents.extend(indexed.documents);
@@ -244,8 +246,9 @@ pub(crate) fn run(
         }
         for (path, sha256) in changed {
             documents.retain(|d| d.path.as_str() != path);
-            if let Some(references) = &mut references {
-                references.retain(|r| r.path != path);
+            if let Some(capture) = &mut capture {
+                capture.references.retain(|r| r.path != path);
+                capture.edges.retain(|e| e.path != path);
             }
             report.files_skipped += 1;
             report.diagnostics.push(Diagnostic {
@@ -323,8 +326,8 @@ pub(crate) fn run(
         documents,
         external_symbols: external_symbols.into_values().collect(),
     };
-    let snapshot = if let Some(references) = references {
-        Some(AnalysisSnapshot::new(&data, references, &report, context)?)
+    let snapshot = if let Some(capture) = capture {
+        Some(AnalysisSnapshot::new(&data, capture, &report, context)?)
     } else {
         None
     };
@@ -354,7 +357,7 @@ fn index_pack(
     cache: &Arc<CacheGate>,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
-    references: &mut Option<Vec<AnalysisReference>>,
+    capture: &mut Option<Capture>,
 ) -> Result<PackIndex, ScippyError> {
     let paths: Vec<ProjectRelativePath> = files.iter().map(|f| f.path.clone()).collect();
     let (manifests, problems) = analysis
@@ -567,8 +570,10 @@ fn index_pack(
         let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
         for r in &reconciled {
             count(report, r);
-            if let Some(references) = references {
-                references.push(AnalysisReference::from_reconciled(r));
+            if let Some(capture) = capture {
+                capture
+                    .references
+                    .push(AnalysisReference::from_reconciled(r, false));
             }
             if let BindingOutcome::Resolved(symbol) = &r.outcome {
                 if let Some(info) = externals.get(symbol) {
@@ -583,7 +588,7 @@ fn index_pack(
             let lines = LineIndex::new(&doc.source);
             trace.extend(reconciled.iter().map(|r| trace_line(&lines, r)));
         }
-        record_inheritance(&doc, &reconciled, &mut inheritance);
+        record_inheritance(&doc, &reconciled, &mut inheritance, capture);
         for d in doc.declared.iter().filter(|d| is_method(d)) {
             method_documents.insert(d.symbol.clone(), out.len());
         }
@@ -1041,7 +1046,7 @@ fn index_native_pack(
     request: &IndexRequest,
     report: &mut IndexReport,
     trace: &mut Vec<String>,
-    references: &mut Option<Vec<AnalysisReference>>,
+    capture: &mut Option<Capture>,
 ) -> Result<PackIndex, ScippyError> {
     // Read the files that the pack accepts.
     let mut sources: Vec<NativeSource> = Vec::with_capacity(files.len());
@@ -1072,6 +1077,22 @@ fn index_native_pack(
         extra,
     });
     report.diagnostics.extend(output.diagnostics);
+    if let Some(capture) = capture {
+        for link in &output.links {
+            capture.edges.push(AnalysisEdge {
+                kind: if link.embed { "embed" } else { "link" }.to_owned(),
+                path: link.path.as_str().to_owned(),
+                source: None,
+                span: link.span,
+                reference_span: link.reference_span,
+                anchor_span: link.anchor_span,
+                link_kind: Some(link.kind.clone()),
+                label: link.label.clone(),
+                state: Some(link.state.to_owned()),
+                anchor_state: Some(link.anchor_state.to_owned()),
+            });
+        }
+    }
     let model = native.project_model(root);
 
     let mut package = model.package().unwrap_or_else(|| native.default_package());
@@ -1247,8 +1268,10 @@ fn index_native_pack(
         );
         for r in &reconciled {
             count(report, r);
-            if let Some(references) = references {
-                references.push(AnalysisReference::from_reconciled(r));
+            if let Some(capture) = capture {
+                capture
+                    .references
+                    .push(AnalysisReference::from_reconciled(r, true));
             }
             if let BindingOutcome::Resolved(symbol) = &r.outcome {
                 if let Some(info) = externals.get(symbol) {
@@ -1325,7 +1348,12 @@ fn enclosing_class(declared: &[Declared], start: u32, end: u32) -> Option<&Decla
 }
 
 /// Add the supertypes and the methods of the classes of one document.
-fn record_inheritance(doc: &Doc, reconciled: &[Reconciled], inheritance: &mut Inheritance) {
+fn record_inheritance(
+    doc: &Doc,
+    reconciled: &[Reconciled],
+    inheritance: &mut Inheritance,
+    capture: &mut Option<Capture>,
+) {
     for method in doc.declared.iter().filter(|d| is_method(d)) {
         let (start, end) = method.fact.extent;
         if let Some(class) = enclosing_class(&doc.declared, start, end) {
@@ -1352,6 +1380,20 @@ fn record_inheritance(doc: &Doc, reconciled: &[Reconciled], inheritance: &mut In
         };
         if !class.symbol.is_local() {
             inheritance.add_supertype(&class.symbol, (*supertype).clone());
+            if let Some(capture) = capture {
+                capture.edges.push(AnalysisEdge {
+                    kind: "inheritance".to_owned(),
+                    path: doc.path.as_str().to_owned(),
+                    source: Some(class.symbol.as_str().to_owned()),
+                    span: (start, end),
+                    reference_span: Some((start, end)),
+                    anchor_span: None,
+                    link_kind: None,
+                    label: None,
+                    state: None,
+                    anchor_state: None,
+                });
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::emit::{self, IndexData, Role, SymbolInfo};
 use crate::error::ScippyError;
+use crate::language::ReferenceKind;
 use crate::reconcile::{BindingOutcome, Reconciled, UnresolvedReason};
 use crate::report::IndexReport;
 
@@ -91,10 +92,15 @@ pub struct AnalysisReference {
     /// It is `None` for any other outcome. A bounded reference names its bound in the outcome.
     #[serde(default)]
     pub limited: Option<String>,
+    /// How the reference names its target in the source: `plain`, `member`, or `keyword`.
+    /// It is `None` for a reference of a native pack, which has no such distinction.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 impl AnalysisReference {
-    pub(crate) fn from_reconciled(r: &Reconciled) -> Self {
+    /// `native` is true for a reference that a native pack gave.
+    pub(crate) fn from_reconciled(r: &Reconciled, native: bool) -> Self {
         let outcome = match &r.outcome {
             BindingOutcome::Resolved(s) => ReferenceOutcome::Resolved(s.as_str().to_owned()),
             BindingOutcome::Ambiguous(s) => {
@@ -117,6 +123,14 @@ impl AnalysisReference {
             end: r.reference.end_byte,
             outcome,
             limited: r.limited.map(|b| b.code().to_owned()),
+            kind: (!native).then(|| {
+                match r.kind {
+                    ReferenceKind::Plain => "plain",
+                    ReferenceKind::Member => "member",
+                    ReferenceKind::Keyword => "keyword",
+                }
+                .to_owned()
+            }),
         }
     }
 
@@ -125,6 +139,39 @@ impl AnalysisReference {
     pub fn is_inexact(&self) -> bool {
         self.limited.is_some() || matches!(self.outcome, ReferenceOutcome::Bounded(_))
     }
+}
+
+/// An edge that a declaration or a link adds to the references: an inheritance edge, or a link
+/// or an embed of a native pack. A reference carries the target. An edge names its references
+/// by span, and the store joins them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisEdge {
+    /// `inheritance`, `link`, or `embed`.
+    pub kind: String,
+    /// The file of the source site.
+    pub path: String,
+    /// For an inheritance edge: the class symbol.
+    pub source: Option<String>,
+    /// The span of the edge: the supertype name, or the whole link.
+    pub span: (u32, u32),
+    /// The span of the reference that names the target. It is `None` when the edge has none.
+    pub reference_span: Option<(u32, u32)>,
+    /// The span of the reference that names the anchor of a link, such as the heading of `[[t#S]]`.
+    pub anchor_span: Option<(u32, u32)>,
+    /// The kind of link in the language of the pack, such as `wikilink`.
+    pub link_kind: Option<String>,
+    pub label: Option<String>,
+    /// For a link: `resolved`, `missing`, or `ambiguous`.
+    pub state: Option<String>,
+    /// For a link: `resolved`, `missing`, or `none`.
+    pub anchor_state: Option<String>,
+}
+
+/// What the pipeline captures for a snapshot.
+#[derive(Default)]
+pub(crate) struct Capture {
+    pub references: Vec<AnalysisReference>,
+    pub edges: Vec<AnalysisEdge>,
 }
 
 /// A file that the run accepted and did not index.
@@ -178,6 +225,9 @@ pub struct AnalysisSnapshot {
     #[serde(default)]
     pub lost_files: Vec<AnalysisFile>,
     pub references: Vec<AnalysisReference>,
+    /// The inheritance edges, and the links and embeds of native packs, sorted.
+    #[serde(default)]
+    pub edges: Vec<AnalysisEdge>,
     pub external_symbols: Vec<AnalysisSymbol>,
     pub diagnostics: Vec<AnalysisDiagnostic>,
     /// False when the run lost input. It is true only when no file has the status `skipped` or
@@ -232,7 +282,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 impl AnalysisSnapshot {
     pub(crate) fn new(
         data: &IndexData,
-        mut references: Vec<AnalysisReference>,
+        capture: Capture,
         report: &IndexReport,
         context: RunContext,
     ) -> Result<Self, ScippyError> {
@@ -270,7 +320,14 @@ impl AnalysisSnapshot {
                 }
             })
             .collect();
+        let Capture {
+            mut references,
+            mut edges,
+        } = capture;
         references.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
+        edges.sort_by(|a, b| {
+            (&a.path, a.span, &a.kind, &a.source).cmp(&(&b.path, b.span, &b.kind, &b.source))
+        });
         let bounded_references = references.iter().filter(|r| r.is_inexact()).count();
         let lost_files: Vec<AnalysisFile> = report
             .lost_files
@@ -292,6 +349,7 @@ impl AnalysisSnapshot {
             documents,
             lost_files,
             references,
+            edges,
             external_symbols: data.external_symbols.iter().map(symbol_info).collect(),
             diagnostics: report
                 .diagnostics
@@ -328,6 +386,7 @@ mod tests {
             end: 1,
             outcome,
             limited: limited.map(str::to_owned),
+            kind: None,
         }
     }
 

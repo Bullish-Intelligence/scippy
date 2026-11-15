@@ -9,7 +9,7 @@ use scippy_core::ScippyError;
 /// Marks a database file as a Scippy read model. The bytes spell "SCPY".
 pub(crate) const APPLICATION_ID: i32 = 0x5343_5059;
 /// The storage format version that this code reads and writes.
-pub(crate) const SCHEMA_VERSION: i32 = 3;
+pub(crate) const SCHEMA_VERSION: i32 = 4;
 
 /// The tables and views. The design is in `METALAYER_SCHEMA.md`, section 3.
 pub(crate) const DDL: &str = "
@@ -113,6 +113,8 @@ CREATE TABLE edge (
 CREATE INDEX edge_file ON edge(file_id, kind);
 CREATE INDEX edge_target ON edge(target_id, kind);
 CREATE INDEX edge_source ON edge(source_id, kind);
+CREATE INDEX edge_reference ON edge(reference_id);
+CREATE INDEX edge_anchor ON edge(anchor_reference_id);
 
 CREATE TABLE diagnostic (
   id INTEGER PRIMARY KEY,
@@ -128,8 +130,8 @@ CREATE INDEX diagnostic_code ON diagnostic(code);
 
 CREATE VIEW support AS
 SELECT r.id AS reference_id, r.file_id, r.start, r.end, r.target_id, r.limited,
-  CASE WHEN EXISTS (SELECT 1 FROM edge e WHERE e.kind = 'link'  AND r.id IN (e.reference_id, e.anchor_reference_id)) THEN 'link'
-       WHEN EXISTS (SELECT 1 FROM edge e WHERE e.kind = 'embed' AND r.id IN (e.reference_id, e.anchor_reference_id)) THEN 'embed'
+  CASE WHEN EXISTS (SELECT 1 FROM edge e WHERE e.kind = 'link'  AND (e.reference_id = r.id OR e.anchor_reference_id = r.id)) THEN 'link'
+       WHEN EXISTS (SELECT 1 FROM edge e WHERE e.kind = 'embed' AND (e.reference_id = r.id OR e.anchor_reference_id = r.id)) THEN 'embed'
        WHEN EXISTS (SELECT 1 FROM occurrence o WHERE o.file_id = r.file_id AND o.start = r.start
                     AND o.end = r.end AND o.symbol_id = r.target_id AND o.role = 'import') THEN 'import'
        ELSE 'use' END AS kind

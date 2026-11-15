@@ -258,7 +258,7 @@ impl<'a> View<'a> {
     pub fn edges(&self, kind: Option<EdgeKind>) -> Result<Vec<EdgeRecord>, ScippyError> {
         let sql = format!(
             "SELECT e.kind, f.path, e.start, e.end, e.link_kind, e.label, e.state, e.anchor_state,
-                    {}, {}
+                    {}, {}, e.id
              FROM edge e
              JOIN file f ON f.id = e.file_id
              LEFT JOIN symbol s ON s.id = e.source_id
@@ -287,14 +287,32 @@ impl<'a> View<'a> {
                         anchor_state: r.get(7)?,
                         source: optional_symbol_at(r, 8)?,
                         target: optional_symbol_at(r, 11)?,
+                        candidates: Vec::new(),
                     },
+                    r.get::<_, i64>(14)?,
                 ))
             })
             .map_err(storage)?;
+        let mut candidates = self
+            .tx
+            .prepare(&format!(
+                "SELECT {} FROM edge e
+                 JOIN reference_candidate c ON c.reference_id = e.reference_id
+                 JOIN symbol s ON s.id = c.symbol_id
+                 LEFT JOIN file sf ON sf.id = s.file_id
+                 WHERE e.id = ?1 ORDER BY c.ordinal",
+                symbol_columns("s", "sf")
+            ))
+            .map_err(storage)?;
         let mut out = Vec::new();
         for row in rows {
-            let (kind, mut edge) = row.map_err(storage)?;
+            let (kind, mut edge, id) = row.map_err(storage)?;
             edge.kind = EdgeKind::parse(&kind)?;
+            edge.candidates = candidates
+                .query_map([id], |r| symbol_at(r, 0))
+                .map_err(storage)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(storage)?;
             out.push(edge);
         }
         Ok(out)

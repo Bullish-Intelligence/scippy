@@ -205,6 +205,8 @@ fn test_scope() -> Scope {
 #[derive(Debug)]
 pub(crate) struct Reconciled {
     pub reference: SourceAnchor,
+    /// How the reference names its target in the source.
+    pub kind: ReferenceKind,
     pub outcome: BindingOutcome,
     /// The bound that stopped the search of a resolved reference. The nearest-binding rule kept
     /// the result, but the search did not find every end. It is `None` for any other outcome.
@@ -447,6 +449,7 @@ pub(crate) fn reconcile(
             };
             Reconciled {
                 reference,
+                kind,
                 outcome,
                 limited,
                 ends: groups.len(),

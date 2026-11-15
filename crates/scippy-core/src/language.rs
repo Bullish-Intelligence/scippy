@@ -554,6 +554,31 @@ pub struct NativeDocument {
     pub references: Vec<NativeReference>,
 }
 
+/// A link or an embed that a native pack found. It adds facts to the references of the pack:
+/// the kind of link, its label, and the state of the link and of its anchor.
+#[derive(Clone, Debug)]
+pub struct NativeLink {
+    /// The document that holds the link.
+    pub path: ProjectRelativePath,
+    /// The link embeds its target: it has the role [`ReferenceRole::Read`].
+    pub embed: bool,
+    /// The kind of link in the language of the pack, such as `wikilink`.
+    pub kind: String,
+    /// The span of the whole link.
+    pub span: (u32, u32),
+    /// The span of the reference that names the target. `None` when no reference names it: a
+    /// link to its own note has the anchor reference only.
+    pub reference_span: Option<(u32, u32)>,
+    /// The span of the reference that names the anchor, when the anchor resolves and has a
+    /// reference of its own.
+    pub anchor_span: Option<(u32, u32)>,
+    pub label: Option<String>,
+    /// `resolved`, `missing`, or `ambiguous`.
+    pub state: &'static str,
+    /// `resolved`, `missing`, or `none`.
+    pub anchor_state: &'static str,
+}
+
 /// A symbol that no document of the project declares, such as a tag.
 #[derive(Clone, Debug)]
 pub struct VirtualSymbol {
@@ -565,6 +590,8 @@ pub struct VirtualSymbol {
 #[derive(Debug, Default)]
 pub struct NativeOutput {
     pub documents: Vec<NativeDocument>,
+    /// The links and embeds of the documents. Each link has references in its document.
+    pub links: Vec<NativeLink>,
     pub virtual_symbols: Vec<VirtualSymbol>,
     pub diagnostics: Vec<Diagnostic>,
 }

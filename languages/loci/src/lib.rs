@@ -81,7 +81,7 @@ use std::sync::Mutex;
 use scippy_core::{
     DeclKind, Descriptor, Diagnostic, Engine, ExternalIdentity, ExtraFile, ExtraFiles, Identity,
     InputLimits, LanguagePack, NativeAnalysis, NativeDeclaration, NativeDocument, NativeInput,
-    NativeOutput, NativeReference, NativeTarget, Package, ProjectFile, ProjectModel,
+    NativeLink, NativeOutput, NativeReference, NativeTarget, Package, ProjectFile, ProjectModel,
     ProjectRelativePath, Reach, ReferenceRole, Scope, Severity, Stage, SymbolKind, VirtualSymbol,
     WalkRules,
 };
@@ -481,6 +481,19 @@ fn build_output(
                 });
                 continue;
             }
+            // The facts of the link that the references do not carry. The reference spans change
+            // below, when the anchor has a reference of its own.
+            let mut link = NativeLink {
+                path: rel.clone(),
+                embed: record.embed,
+                kind: record.kind.name().to_string(),
+                span: span(record.span),
+                reference_span: Some(span(record.span)),
+                anchor_span: None,
+                label: record.label.clone(),
+                state: record.state.name(),
+                anchor_state: record.anchor_state,
+            };
             let module = |p: &str| {
                 ProjectRelativePath::new(p)
                     .ok()
@@ -506,18 +519,22 @@ fn build_output(
                     if let (Some(a), Some((target_part, anchor_part)), Ok(p)) =
                         (anchor, record.parts, ProjectRelativePath::new(target))
                     {
+                        link.reference_span = None;
                         if target_part.0 < target_part.1 {
+                            link.reference_span = Some(span(target_part));
                             references.push(NativeReference {
                                 span: span(target_part),
                                 role,
                                 targets: module(target).into_iter().collect(),
                             });
                         }
+                        link.anchor_span = Some(span(anchor_part));
                         references.push(NativeReference {
                             span: span(anchor_part),
                             role,
                             targets: vec![NativeTarget::Declaration(p, span(a))],
                         });
+                        output.links.push(link);
                         continue;
                     }
                     match (anchor, ProjectRelativePath::new(target)) {
@@ -548,6 +565,7 @@ fn build_output(
                 },
                 targets,
             });
+            output.links.push(link);
         }
         output.documents.push(NativeDocument {
             path: rel,
