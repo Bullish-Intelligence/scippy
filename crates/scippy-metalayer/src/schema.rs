@@ -81,7 +81,7 @@ CREATE TABLE reference (
   outcome TEXT NOT NULL CHECK (outcome IN ('resolved','ambiguous','unresolved','bounded')),
   target_id INTEGER REFERENCES symbol(id),
   reason TEXT,
-  limited TEXT,
+  limited TEXT CHECK (limited IN ('work','queue-length','arena-cells','failed')),
   UNIQUE (file_id, start, end),
   CHECK ((outcome = 'resolved') = (target_id IS NOT NULL)),
   CHECK ((outcome IN ('unresolved','bounded')) = (reason IS NOT NULL)),

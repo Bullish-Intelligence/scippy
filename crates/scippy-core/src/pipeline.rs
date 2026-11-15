@@ -143,7 +143,8 @@ pub(crate) fn run(
     let mut stubs: Vec<Document> = Vec::new();
     let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut trace = Vec::new();
-    let mut capture = capture.then(Capture::default);
+    // A strict run needs the snapshot, because its flag `input_complete` decides the result.
+    let mut capture = (capture || request.strict).then(Capture::default);
 
     for (index, pack) in languages.iter().enumerate() {
         let files: Vec<&FoundFile> = found.files.iter().filter(|f| f.pack == index).collect();
@@ -264,29 +265,6 @@ pub(crate) fn run(
     report.files_indexed = documents.len();
     report.occurrences = documents.iter().map(|d| d.occurrences.len()).sum();
 
-    if request.strict {
-        let errors = report
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .count();
-        if errors > 0 {
-            return Err(ScippyError::Strict { errors });
-        }
-    }
-
-    if let Some(path) = &request.trace {
-        trace.sort();
-        let io = |source| ScippyError::Io {
-            path: path.clone(),
-            source,
-        };
-        let mut file = File::create(path).map_err(io)?;
-        for line in trace {
-            writeln!(file, "{line}").map_err(io)?;
-        }
-    }
-
     let context = RunContext {
         project_root: found.root.to_string_lossy().into_owned(),
         shards: {
@@ -311,6 +289,22 @@ pub(crate) fn run(
     } else {
         None
     };
+    // A strict run fails when it lost input, and it writes no file.
+    if request.strict && snapshot.as_ref().is_some_and(|s| !s.input_complete) {
+        return Err(ScippyError::Incomplete);
+    }
+    if let Some(path) = &request.trace {
+        trace.sort();
+        let io = |source| ScippyError::Io {
+            path: path.clone(),
+            source,
+        };
+        let mut file = File::create(path).map_err(io)?;
+        for line in trace {
+            writeln!(file, "{line}").map_err(io)?;
+        }
+    }
+
     if write_output {
         emit::write_index(data, &request.output)?;
     }

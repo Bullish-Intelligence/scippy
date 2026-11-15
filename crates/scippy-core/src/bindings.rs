@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use stack_graphs::arena::Handle;
 use stack_graphs::graph::{File, Node, SourceInfo, StackGraph, Symbol};
 use stack_graphs::partial::{PartialPath, PartialPaths};
@@ -62,8 +63,10 @@ impl Default for ResolveLimits {
 }
 
 /// Why a search stopped before it finished. A bounded result can lack ends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Bound {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Bound {
     Work,
     QueueLength,
     ArenaCells,
@@ -72,13 +75,24 @@ pub(crate) enum Bound {
 }
 
 impl Bound {
-    /// The stable name of the bound, for the trace and the snapshot.
-    pub(crate) fn code(self) -> &'static str {
+    /// The stable name of the bound, for the trace, the snapshot, and the database.
+    pub fn code(self) -> &'static str {
         match self {
             Bound::Work => "work",
             Bound::QueueLength => "queue-length",
             Bound::ArenaCells => "arena-cells",
             Bound::Failed => "failed",
+        }
+    }
+
+    /// The bound with this stable name, or `None` for an unknown name.
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "work" => Some(Bound::Work),
+            "queue-length" => Some(Bound::QueueLength),
+            "arena-cells" => Some(Bound::ArenaCells),
+            "failed" => Some(Bound::Failed),
+            _ => None,
         }
     }
 }

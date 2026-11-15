@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::bindings::Bound;
 use crate::emit::{self, IndexData, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::language::ReferenceKind;
@@ -91,15 +92,17 @@ pub struct AnalysisReference {
     pub start: u32,
     pub end: u32,
     pub outcome: ReferenceOutcome,
-    /// The bound that stopped the search of a resolved reference, as `work`, `queue-length`,
-    /// `arena-cells`, or `failed`. The result is the nearest binding, and other ends can exist.
-    /// It is `None` for any other outcome. A bounded reference names its bound in the outcome.
+    /// The bound that stopped the search of a resolved reference. The result is the nearest
+    /// binding, and other ends can exist. It is `None` for any other outcome. A bounded
+    /// reference names its bound in the outcome. The text form is `work`, `queue-length`,
+    /// `arena-cells`, or `failed`.
     #[serde(default)]
-    pub limited: Option<String>,
-    /// How the reference names its target in the source: `plain`, `member`, or `keyword`.
-    /// It is `None` for a reference of a native pack, which has no such distinction.
+    pub limited: Option<Bound>,
+    /// How the reference names its target in the source. It is `None` for a reference of a
+    /// native pack, which has no such distinction. The text form is `plain`, `member`, or
+    /// `keyword`.
     #[serde(default)]
-    pub kind: Option<String>,
+    pub kind: Option<ReferenceKind>,
 }
 
 impl AnalysisReference {
@@ -126,15 +129,8 @@ impl AnalysisReference {
             start: r.reference.start_byte,
             end: r.reference.end_byte,
             outcome,
-            limited: r.limited.map(|b| b.code().to_owned()),
-            kind: (!native).then(|| {
-                match r.kind {
-                    ReferenceKind::Plain => "plain",
-                    ReferenceKind::Member => "member",
-                    ReferenceKind::Keyword => "keyword",
-                }
-                .to_owned()
-            }),
+            limited: r.limited,
+            kind: (!native).then_some(r.kind),
         }
     }
 
@@ -386,13 +382,13 @@ impl AnalysisSnapshot {
 mod tests {
     use super::*;
 
-    fn reference(outcome: ReferenceOutcome, limited: Option<&str>) -> AnalysisReference {
+    fn reference(outcome: ReferenceOutcome, limited: Option<Bound>) -> AnalysisReference {
         AnalysisReference {
             path: "a.py".into(),
             start: 0,
             end: 1,
             outcome,
-            limited: limited.map(str::to_owned),
+            limited,
             kind: None,
         }
     }
@@ -400,11 +396,27 @@ mod tests {
     #[test]
     fn a_bounded_search_makes_the_reference_inexact() {
         let bounded = reference(ReferenceOutcome::Bounded("work".into()), None);
-        let kept = reference(ReferenceOutcome::Resolved("s".into()), Some("work"));
+        let kept = reference(ReferenceOutcome::Resolved("s".into()), Some(Bound::Work));
         let exact = reference(ReferenceOutcome::Resolved("s".into()), None);
         assert!(bounded.is_inexact());
         assert!(kept.is_inexact());
         assert!(!exact.is_inexact());
+    }
+
+    #[test]
+    fn the_enums_keep_their_stable_text_in_json() {
+        let mut r = reference(
+            ReferenceOutcome::Resolved("s".into()),
+            Some(Bound::QueueLength),
+        );
+        r.kind = Some(ReferenceKind::Keyword);
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""limited":"queue-length""#), "{json}");
+        assert!(json.contains(r#""kind":"keyword""#), "{json}");
+        let back: AnalysisReference = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+        let unknown = json.replace("queue-length", "no-such-bound");
+        assert!(serde_json::from_str::<AnalysisReference>(&unknown).is_err());
     }
 
     #[test]

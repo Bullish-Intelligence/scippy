@@ -35,7 +35,7 @@ pub use snapshot::{
     file_status,
 };
 
-pub use bindings::ResolveLimits;
+pub use bindings::{Bound, ResolveLimits};
 pub use emit::{SymbolKind, write_scip};
 pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
@@ -60,7 +60,8 @@ use std::path::PathBuf;
 pub struct IndexRequest {
     pub root: PathBuf,
     pub output: PathBuf,
-    /// Fail when the run raises an error diagnostic.
+    /// Fail when the run lost input: the snapshot field `input_complete` is false. A failed
+    /// run writes no output file.
     pub strict: bool,
     pub limits: InputLimits,
     /// Replace the package name that the language pack chooses for a project without a manifest.

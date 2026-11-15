@@ -131,7 +131,7 @@ fn rich() -> AnalysisSnapshot {
     s.documents = vec![a, b];
     s.external_symbols = vec![symbol("g ext.")];
     let mut limited = reference("a.py", 30, 31, resolved("g f()."));
-    limited.limited = Some("work".into());
+    limited.limited = Some(Bound::Work);
     s.references = vec![
         // A write at the definition site resolves to its own declaration.
         reference("a.py", 4, 5, resolved("g f().")),
@@ -199,9 +199,9 @@ fn a_limited_reference_counts_and_shows_in_the_relation_and_its_supports() {
     assert_eq!(
         supports
             .iter()
-            .map(|s| (s.span, s.limited.as_deref()))
+            .map(|s| (s.span, s.limited))
             .collect::<Vec<_>>(),
-        vec![((14, 15), None), ((30, 31), Some("work"))]
+        vec![((14, 15), None), ((30, 31), Some(Bound::Work))]
     );
     assert!(!view.revision().analysis_exact);
     assert!(view.revision().input_complete);
@@ -339,7 +339,7 @@ fn a_bounded_search_publishes_and_keeps_its_marks() {
     let mut layer = layer(dir.path());
     let mut s = snapshot("s");
     let mut kept = reference("a.py", 2, 3, resolved("s"));
-    kept.limited = Some("work".into());
+    kept.limited = Some(Bound::Work);
     s.references.push(kept);
     s.references.push(reference(
         "a.py",
@@ -353,7 +353,7 @@ fn a_bounded_search_publishes_and_keeps_its_marks() {
     let view = layer.view().unwrap().unwrap();
     let all = view.references(ReferenceQuery::default()).unwrap();
     assert_eq!(all.len(), 3);
-    assert_eq!(all[1].limited.as_deref(), Some("work"));
+    assert_eq!(all[1].limited, Some(Bound::Work));
     assert_eq!(all[2].outcome, Outcome::Bounded("queue-length".into()));
     let rows = view.file_references(RelationQuery::default()).unwrap();
     assert_eq!((rows[0].supports, rows[0].limited), (2, 1));
@@ -1135,9 +1135,14 @@ fn the_reference_kind_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let mut layer = layer(dir.path());
     let mut s = snapshot("t");
-    for (n, kind) in ["plain", "member", "keyword"].into_iter().enumerate() {
+    let all = [
+        ReferenceKind::Plain,
+        ReferenceKind::Member,
+        ReferenceKind::Keyword,
+    ];
+    for (n, kind) in all.into_iter().enumerate() {
         let mut r = reference("a.py", 10 + n as u32, 11 + n as u32, resolved("t"));
-        r.kind = Some(kind.into());
+        r.kind = Some(kind);
         s.references.push(r);
     }
     publish(&mut layer, &s);
@@ -1152,11 +1157,102 @@ fn the_reference_kind_round_trips() {
         kinds,
         vec![
             None,
-            Some(RefKind::Plain),
-            Some(RefKind::Member),
-            Some(RefKind::Keyword)
+            Some(ReferenceKind::Plain),
+            Some(ReferenceKind::Member),
+            Some(ReferenceKind::Keyword)
         ]
     );
+}
+
+#[test]
+fn every_bound_round_trips_through_publish_and_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = snapshot("t");
+    let all = [
+        Bound::Work,
+        Bound::QueueLength,
+        Bound::ArenaCells,
+        Bound::Failed,
+    ];
+    for (n, bound) in all.into_iter().enumerate() {
+        let mut r = reference("a.py", 10 + n as u32, 11 + n as u32, resolved("t"));
+        r.limited = Some(bound);
+        s.references.push(r);
+    }
+    s.analysis_exact = false;
+    s.bounded_references = 4;
+    publish(&mut layer, &s);
+    let view = layer.view().unwrap().unwrap();
+    let limited: Vec<_> = view
+        .references(ReferenceQuery::default())
+        .unwrap()
+        .into_iter()
+        .map(|r| r.limited)
+        .collect();
+    assert_eq!(
+        limited,
+        vec![
+            None,
+            Some(Bound::Work),
+            Some(Bound::QueueLength),
+            Some(Bound::ArenaCells),
+            Some(Bound::Failed)
+        ]
+    );
+    let supports = view.supports("a.py", &SymbolRef::global("t")).unwrap();
+    assert_eq!(
+        supports
+            .iter()
+            .filter_map(|s| s.limited)
+            .collect::<Vec<_>>(),
+        all.to_vec()
+    );
+}
+
+#[test]
+fn an_unknown_stored_bound_or_kind_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = snapshot("t");
+    let mut r = reference("a.py", 10, 11, resolved("t"));
+    r.limited = Some(Bound::Work);
+    r.kind = Some(ReferenceKind::Plain);
+    s.references.push(r);
+    s.analysis_exact = false;
+    s.bounded_references = 1;
+    publish(&mut layer, &s);
+
+    // The CHECK constraints refuse an unknown value.
+    for column in ["limited", "kind"] {
+        let sql = format!("UPDATE reference SET {column} = 'bogus' WHERE start = 10");
+        assert!(layer.db.execute(&sql, []).is_err(), "{column}");
+    }
+
+    // A reader still refuses a value that got past the constraints.
+    layer
+        .db
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE reference SET limited = 'bogus' WHERE start = 10;
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+    let view = layer.view().unwrap().unwrap();
+    let error = view.references(ReferenceQuery::default()).unwrap_err();
+    assert!(error.to_string().contains("Bound"), "{error}");
+    drop(view);
+    layer
+        .db
+        .execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE reference SET limited = NULL, kind = 'bogus' WHERE start = 10;
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+    let view = layer.view().unwrap().unwrap();
+    let error = view.references(ReferenceQuery::default()).unwrap_err();
+    assert!(error.to_string().contains("ReferenceKind"), "{error}");
 }
 
 #[test]

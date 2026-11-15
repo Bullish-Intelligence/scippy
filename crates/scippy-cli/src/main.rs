@@ -71,8 +71,9 @@ struct IndexArgs {
     /// Publish the analysis to this metalayer SQLite database.
     #[arg(long)]
     metalayer: Option<PathBuf>,
-    /// Fail when the run raises an error diagnostic. With `--metalayer`, also refuse to publish
-    /// when the run lost input. The database and the SCIP file stay as they were.
+    /// Fail when the run lost input, with or without `--metalayer`. Lost input means a file that
+    /// the run skipped or could not parse, or an error diagnostic. A failed run writes no SCIP
+    /// file and opens no database. Both stay as they were.
     #[arg(long)]
     strict: bool,
     /// Replace the root set of the metalayer database when it holds another project root.
@@ -231,7 +232,6 @@ fn main() -> ExitCode {
             request.package_version = package_version;
             request.trace = trace;
             request.graph_cache = graph_cache;
-            request.strict = strict;
             if let Some(bytes) = graph_cache_max_bytes {
                 request.graph_cache_max_bytes = bytes;
             }
@@ -251,8 +251,10 @@ fn main() -> ExitCode {
             if let Some(bytes) = memory_budget {
                 request.memory_budget = bytes;
             }
-            let indexed = if let Some(path) = metalayer {
-                // The SCIP file follows the publication. A failed publish keeps the old file.
+            // The CLI applies `--strict` itself, so that it can print the diagnostics first.
+            let indexed = if metalayer.is_some() || strict {
+                // The SCIP file follows the check and the publication. A failed run keeps the
+                // old file.
                 index_project_for_publish(&request, &registry()).and_then(|(report, snapshot)| {
                     // A strict run opens no database and writes no file for lost input.
                     if strict && !snapshot.input_complete {
@@ -261,18 +263,27 @@ fn main() -> ExitCode {
                         }
                         return Err(ScippyError::Incomplete);
                     }
-                    let options = PublishOptions {
-                        strict,
-                        replace_root_set,
+                    let revision = match metalayer {
+                        Some(path) => {
+                            let options = PublishOptions {
+                                strict,
+                                replace_root_set,
+                            };
+                            Some(
+                                Metalayer::open(path)?
+                                    .publish(&snapshot, &options)?
+                                    .revision,
+                            )
+                        }
+                        None => None,
                     };
-                    let published = Metalayer::open(path)?.publish(&snapshot, &options)?;
-                    write_scip(&request.output, &snapshot.scip).map_err(|e| {
-                        ScippyError::Storage(format!(
-                            "revision {} is committed, but the SCIP file failed: {e}",
-                            published.revision
-                        ))
+                    write_scip(&request.output, &snapshot.scip).map_err(|e| match revision {
+                        Some(revision) => ScippyError::Storage(format!(
+                            "revision {revision} is committed, but the SCIP file failed: {e}"
+                        )),
+                        None => e,
                     })?;
-                    Ok((report, Some(published.revision)))
+                    Ok((report, revision))
                 })
             } else {
                 index_project(&request, &registry()).map(|report| (report, None))

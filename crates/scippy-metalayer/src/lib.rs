@@ -14,13 +14,14 @@ use std::path::Path;
 use rusqlite::Connection;
 use scippy_core::{AnalysisSnapshot, ScippyError};
 
+pub use scippy_core::{Bound, ReferenceKind};
+
 pub use publish::{PublishOptions, Published};
 pub use read::View;
 pub use records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
-    OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, RefKind, ReferenceQuery,
-    ReferenceRecord, RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord,
-    SymbolRef,
+    OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord,
+    RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord, SymbolRef,
 };
 
 /// A local read model. Each publish replaces the facts of the previous revision.

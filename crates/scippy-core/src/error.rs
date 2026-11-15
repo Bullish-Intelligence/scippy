@@ -26,15 +26,13 @@ pub enum ScippyError {
     DuplicateDocument { path: String },
     /// A language pack is invalid: its query or its binding rules do not compile.
     Pack { pack: &'static str, reason: String },
-    /// Strict mode found error diagnostics.
-    Strict { errors: usize },
     /// A file system operation failed.
     Io { path: PathBuf, source: io::Error },
     /// Protobuf serialization failed.
     Serialize(String),
     /// The graph cache or metalayer database failed.
     Storage(String),
-    /// The input is incomplete, and the store refuses to publish it.
+    /// The input is incomplete, and a strict run refuses to go on.
     Incomplete,
     /// The metalayer database holds another root set. Use `--replace-root-set` to replace it.
     RootSetMismatch { stored: String, requested: String },
@@ -66,7 +64,6 @@ impl fmt::Display for ScippyError {
             }
             Self::DuplicateDocument { path } => write!(f, "duplicate document {path}"),
             Self::Pack { pack, reason } => write!(f, "language pack {pack}: {reason}"),
-            Self::Strict { errors } => write!(f, "strict mode: {errors} error diagnostic(s)"),
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Serialize(message) => write!(f, "serialization failed: {message}"),
             Self::Storage(message) => write!(f, "storage failed: {message}"),

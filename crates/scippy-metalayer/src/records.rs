@@ -2,7 +2,23 @@
 //!
 //! A record holds paths and symbol strings. It never holds a database id.
 
-use scippy_core::ScippyError;
+use scippy_core::{Bound, ReferenceKind, ScippyError};
+
+/// Reads a stored bound. An unknown text is a storage error.
+pub(crate) fn parse_bound(text: &str) -> Result<Bound, ScippyError> {
+    Bound::from_code(text).ok_or_else(|| {
+        ScippyError::Storage(format!("unknown Bound value {text:?} in the database"))
+    })
+}
+
+/// Reads a stored reference kind. An unknown text is a storage error.
+pub(crate) fn parse_reference_kind(text: &str) -> Result<ReferenceKind, ScippyError> {
+    ReferenceKind::from_code(text).ok_or_else(|| {
+        ScippyError::Storage(format!(
+            "unknown ReferenceKind value {text:?} in the database"
+        ))
+    })
+}
 
 macro_rules! text_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
@@ -58,15 +74,6 @@ text_enum! {
         Use => "use",
         Link => "link",
         Embed => "embed",
-    }
-}
-
-text_enum! {
-    /// How a reference names its target in the source.
-    RefKind {
-        Plain => "plain",
-        Member => "member",
-        Keyword => "keyword",
     }
 }
 
@@ -187,10 +194,10 @@ pub enum Outcome {
 pub struct ReferenceRecord {
     pub path: String,
     pub span: (u32, u32),
-    pub kind: Option<RefKind>,
+    pub kind: Option<ReferenceKind>,
     pub outcome: Outcome,
     /// For a resolved reference: the bound that stopped the search.
-    pub limited: Option<String>,
+    pub limited: Option<Bound>,
 }
 
 /// Which references to read. A field that is `None` does not filter.
@@ -258,7 +265,7 @@ pub struct SupportRecord {
     pub path: String,
     pub span: (u32, u32),
     pub kind: RelationKind,
-    pub limited: Option<String>,
+    pub limited: Option<Bound>,
 }
 
 /// The source text of a file, checked against the stored hash.

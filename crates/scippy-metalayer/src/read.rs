@@ -10,9 +10,9 @@ use scippy_core::ScippyError;
 use crate::publish::sha256_hex;
 use crate::records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
-    OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, RefKind, ReferenceQuery,
-    ReferenceRecord, RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord,
-    SymbolRef,
+    OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord,
+    RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord, SymbolRef,
+    parse_bound, parse_reference_kind,
 };
 use crate::schema::storage;
 
@@ -248,9 +248,9 @@ impl<'a> View<'a> {
             out.push(ReferenceRecord {
                 path,
                 span,
-                kind: kind.as_deref().map(RefKind::parse).transpose()?,
+                kind: kind.as_deref().map(parse_reference_kind).transpose()?,
                 outcome,
-                limited,
+                limited: limited.as_deref().map(parse_bound).transpose()?,
             });
         }
         Ok(out)
@@ -419,7 +419,7 @@ impl<'a> View<'a> {
                 Ok((
                     span(r.get(0)?, r.get(1)?),
                     r.get::<_, String>(2)?,
-                    r.get(3)?,
+                    r.get::<_, Option<String>>(3)?,
                 ))
             })
             .map_err(storage)?;
@@ -430,7 +430,7 @@ impl<'a> View<'a> {
                 path: path.to_owned(),
                 span,
                 kind: RelationKind::parse(&kind)?,
-                limited,
+                limited: limited.as_deref().map(parse_bound).transpose()?,
             });
         }
         Ok(out)

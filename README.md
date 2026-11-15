@@ -141,8 +141,9 @@ The field `bounded_references` counts both kinds. `Metalayer::publish` accepts a
 error when the snapshot disagrees. The exit code is 0 when a run publishes lost input. The
 revision records the flags, and the CLI prints the diagnostics.
 
-`--strict` makes the run fail on an error diagnostic. With `--metalayer`, it also refuses lost
-input: the CLI opens no database and writes no file, and `ScippyError::Incomplete` is the error.
+`--strict` makes the run fail when `input_complete` is false, with or without `--metalayer`. An
+error diagnostic already makes `input_complete` false. A failed run writes no SCIP file and opens
+no database, and `ScippyError::Incomplete` is the error. The CLI prints the diagnostics first.
 The revision records `strict`.
 
 The database has no stable entity IDs, history, watcher, or query language.

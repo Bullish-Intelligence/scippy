@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
-use scippy_core::{AnalysisSnapshot, INCOMPLETE_CODES, ReferenceOutcome, ScippyError};
+use scippy_core::{
+    AnalysisSnapshot, Bound, INCOMPLETE_CODES, ReferenceKind, ReferenceOutcome, ScippyError,
+};
 use sha2::{Digest, Sha256};
 
 use crate::schema::{SCHEMA_VERSION, storage};
@@ -383,7 +385,7 @@ pub(crate) fn publish(
                 "resolved",
                 Some(symbols.of_fact(&tx, file, t)?),
                 None,
-                r.limited.as_deref(),
+                r.limited.map(Bound::code),
             ),
             ReferenceOutcome::Ambiguous(_) => ("ambiguous", None, None, None),
             ReferenceOutcome::Unresolved(why) => ("unresolved", None, Some(why.as_str()), None),
@@ -395,7 +397,14 @@ pub(crate) fn publish(
         )
         .and_then(|mut st| {
             st.execute(params![
-                file, r.start, r.end, r.kind, outcome, target, reason, limited
+                file,
+                r.start,
+                r.end,
+                r.kind.map(ReferenceKind::code),
+                outcome,
+                target,
+                reason,
+                limited
             ])
         })
         .map_err(storage)?;

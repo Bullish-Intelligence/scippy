@@ -6,7 +6,7 @@ use std::path::Path;
 use scippy_core::{AnalysisSnapshot, IndexRequest, index_project_with_snapshot};
 use scippy_loci::LociPack;
 use scippy_metalayer::{
-    EdgeKind, Metalayer, Outcome, PublishOptions, RefKind, ReferenceQuery, RelationKind,
+    EdgeKind, Metalayer, Outcome, PublishOptions, ReferenceKind, ReferenceQuery, RelationKind,
 };
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
@@ -125,9 +125,12 @@ fn the_reference_kind_is_plain_member_or_keyword_and_none_for_a_native_pack() {
             .unwrap_or_else(|| panic!("no reference for {token} in {text}"));
         found.kind
     };
-    assert_eq!(kind_at("m.py", "C(A, B)", "A"), Some(RefKind::Plain));
-    assert_eq!(kind_at("m.py", "C().run()", "run"), Some(RefKind::Member));
-    assert_eq!(kind_at("m.py", "f(x=1)", "x"), Some(RefKind::Keyword));
+    assert_eq!(kind_at("m.py", "C(A, B)", "A"), Some(ReferenceKind::Plain));
+    assert_eq!(
+        kind_at("m.py", "C().run()", "run"),
+        Some(ReferenceKind::Member)
+    );
+    assert_eq!(kind_at("m.py", "f(x=1)", "x"), Some(ReferenceKind::Keyword));
     assert_eq!(kind_at("n.md", "[[n]]", "[[n]]"), None);
     // Every reference of a stack-graphs pack has a kind.
     let all = view.references(ReferenceQuery::default()).unwrap();

@@ -12,6 +12,8 @@
 use std::any::Any;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::identity::{Descriptor, Package};
 use crate::project::{InputLimits, ProjectRelativePath};
 use crate::report::Diagnostic;
@@ -85,7 +87,8 @@ impl DeclKind {
 ///
 /// The pack marks a reference as a member with the `@member` capture, and a reference as a
 /// keyword with the `@keyword` capture. Every other reference is plain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReferenceKind {
     /// A name that stands alone, such as the `x` in `f(x)`.
     Plain,
@@ -93,6 +96,27 @@ pub enum ReferenceKind {
     Member,
     /// A name that selects a parameter of a callee, such as the `x` in `f(x=1)`.
     Keyword,
+}
+
+impl ReferenceKind {
+    /// The stable name of the kind, for the snapshot and the database.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Member => "member",
+            Self::Keyword => "keyword",
+        }
+    }
+
+    /// The kind with this stable name, or `None` for an unknown name.
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code {
+            "plain" => Some(Self::Plain),
+            "member" => Some(Self::Member),
+            "keyword" => Some(Self::Keyword),
+            _ => None,
+        }
+    }
 }
 
 /// One step of the declaration chain: the kind and the name of a declaration.
