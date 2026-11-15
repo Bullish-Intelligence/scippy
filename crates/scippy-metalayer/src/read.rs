@@ -18,7 +18,7 @@ use crate::schema::storage;
 
 /// A read transaction. Every method reads the revision that [`crate::Metalayer::view`] pinned.
 pub struct View<'a> {
-    tx: Transaction<'a>,
+    pub(crate) tx: Transaction<'a>,
     revision: RevisionInfo,
 }
 
@@ -55,7 +55,7 @@ impl<'a> View<'a> {
         let revision = tx
             .query_row(
                 "SELECT id, parent, input_digest, tool_version, input_complete, analysis_exact,
-                        strict, scip_sha256, created_at
+                        strict, scip_sha256, created_at, scip_size, position_encoding
                  FROM revision ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -69,6 +69,8 @@ impl<'a> View<'a> {
                         strict: r.get(6)?,
                         scip_sha256: r.get(7)?,
                         created_at: r.get(8)?,
+                        scip_size: r.get(9)?,
+                        position_encoding: r.get(10)?,
                     })
                 },
             )
@@ -109,15 +111,25 @@ impl<'a> View<'a> {
 
     /// The files of the input manifest, sorted by path.
     pub fn files(&self, status: Option<FileStatus>) -> Result<Vec<FileRecord>, ScippyError> {
+        self.files_where(status, None)
+    }
+
+    /// The files of the input manifest that match the status and the path, sorted by path.
+    pub(crate) fn files_where(
+        &self,
+        status: Option<FileStatus>,
+        path: Option<&str>,
+    ) -> Result<Vec<FileRecord>, ScippyError> {
         let mut statement = self
             .tx
             .prepare(
-                "SELECT path, status, reason, pack, sha256, size, stale FROM file
-                 WHERE ?1 IS NULL OR status = ?1 ORDER BY path",
+                "SELECT path, status, reason, pack, sha256, size, stale, language, real_path
+                 FROM file
+                 WHERE (?1 IS NULL OR status = ?1) AND (?2 IS NULL OR path = ?2) ORDER BY path",
             )
             .map_err(storage)?;
         let rows = statement
-            .query_map([status.map(FileStatus::as_str)], |r| {
+            .query_map(params![status.map(FileStatus::as_str), path], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -126,12 +138,15 @@ impl<'a> View<'a> {
                     r.get(4)?,
                     r.get::<_, Option<u64>>(5)?,
                     r.get::<_, bool>(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
                 ))
             })
             .map_err(storage)?;
         let mut files = Vec::new();
         for row in rows {
-            let (path, status, reason, pack, sha256, size, stale) = row.map_err(storage)?;
+            let (path, status, reason, pack, sha256, size, stale, language, real_path) =
+                row.map_err(storage)?;
             files.push(FileRecord {
                 path,
                 status: FileStatus::parse(&status)?,
@@ -140,6 +155,8 @@ impl<'a> View<'a> {
                 sha256,
                 size,
                 stale,
+                language,
+                real_path,
             });
         }
         Ok(files)
@@ -485,7 +502,7 @@ impl<'a> View<'a> {
     }
 
     /// The id of a symbol in this revision. Ids stay inside the crate.
-    fn symbol_id(&self, symbol: &SymbolRef) -> Result<Option<i64>, ScippyError> {
+    pub(crate) fn symbol_id(&self, symbol: &SymbolRef) -> Result<Option<i64>, ScippyError> {
         match &symbol.file {
             None => self
                 .tx

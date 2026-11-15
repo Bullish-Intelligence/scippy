@@ -5,6 +5,7 @@
 //! `METALAYER_SCHEMA.md`. The database is rebuildable: the SCIP file stays the canonical output.
 
 mod publish;
+mod query;
 mod read;
 mod records;
 mod schema;
@@ -17,12 +18,14 @@ use scippy_core::{AnalysisSnapshot, ScippyError};
 pub use scippy_core::{Bound, ReferenceKind};
 
 pub use publish::{PublishOptions, Published};
+pub use query::{Counts, Probe, SymbolRecord};
 pub use read::View;
 pub use records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
     OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord,
     RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord, SymbolRef,
 };
+pub use schema::SCHEMA_VERSION;
 
 /// A local read model. Each publish replaces the facts of the previous revision.
 pub struct Metalayer {

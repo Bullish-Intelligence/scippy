@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "files",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 5,
+  "value": {
+    "items": [
+      {
+        "path": "notes/a/dup.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "930a1f6d29df6ec47936ec92e42ca400cd434ce2dd95cec5043c51d5670aa26d",
+        "size": 8,
+        "stale": false
+      },
+      {
+        "path": "notes/b/dup.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "917b2500fa72527cc254e9ca4346c2ef79e2b8e2a22fdc455fd509fd811c89da",
+        "size": 8,
+        "stale": false
+      },
+      {
+        "path": "notes/index.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "f747dd93d77b4214acbccc0f079646ffe742ccb106df99698399b4866e0093b9",
+        "size": 204,
+        "stale": false
+      },
+      {
+        "path": "notes/latin1.md",
+        "status": "skipped",
+        "reason": "invalid-utf8",
+        "pack": "loci",
+        "language": null,
+        "sha256": null,
+        "size": null,
+        "stale": false
+      },
+      {
+        "path": "notes/target.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "4911324a821bf9c08fd3cc4dd69de28ef429c1b1a25656abe3cf345f27c5757c",
+        "size": 24,
+        "stale": false
+      },
+      {
+        "path": "notes/Überblick.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "03be831b233b04c53bd75438db082aad8ace1130af9a0abe436afc88ecb2053a",
+        "size": 30,
+        "stale": false
+      }
+    ],
+    "total": 6,
+    "truncated": false
+  }
+}

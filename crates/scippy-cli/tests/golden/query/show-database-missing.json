@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "show",
+  "ok": false,
+  "error": {
+    "kind": "database-missing",
+    "message": "no database at <tmp>/scratch/absent.sqlite; run `scippy index --metalayer` first"
+  }
+}

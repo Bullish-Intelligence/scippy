@@ -1,0 +1,42 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "files",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 5,
+  "value": {
+    "items": [
+      {
+        "path": "notes/latin1.md",
+        "status": "skipped",
+        "reason": "invalid-utf8",
+        "pack": "loci",
+        "language": null,
+        "sha256": null,
+        "size": null,
+        "stale": false
+      }
+    ],
+    "total": 1,
+    "truncated": false
+  }
+}

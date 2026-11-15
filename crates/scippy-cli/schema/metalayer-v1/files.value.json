@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/files.value.json",
+  "title": "The value of `metalayer files`",
+  "allOf": [{"$ref": "../metalayer-v1.schema.json#/$defs/list"}],
+  "properties": {
+    "items": {
+      "items": {
+        "type": "object",
+        "required": ["path", "status", "reason", "pack", "language", "sha256", "size", "stale"],
+        "properties": {
+          "path": {"type": "string"},
+          "status": {
+            "type": "string",
+            "examples": ["indexed", "skipped", "failed", "shadowed"]
+          },
+          "reason": {"type": ["string", "null"]},
+          "pack": {"type": ["string", "null"]},
+          "language": {"type": ["string", "null"]},
+          "sha256": {"type": ["string", "null"]},
+          "size": {"type": ["integer", "null"], "minimum": 0},
+          "stale": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

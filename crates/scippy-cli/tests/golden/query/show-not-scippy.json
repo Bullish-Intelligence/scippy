@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "show",
+  "ok": false,
+  "error": {
+    "kind": "schema-mismatch",
+    "message": "<tmp>/scratch/not-a-database.sqlite is not a Scippy metalayer database"
+  }
+}

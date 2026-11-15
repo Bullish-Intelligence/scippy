@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1.schema.json",
+  "title": "Scippy metalayer envelope, format version 1",
+  "description": "The output of `scippy metalayer <command> --json`. Readers must ignore unknown fields and unknown enum values. Known enum values are in `examples`, so a new value still validates.",
+  "type": "object",
+  "required": ["format_version", "tool", "command", "ok"],
+  "properties": {
+    "format_version": {"type": "integer", "const": 1},
+    "tool": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "examples": ["scippy"]},
+        "version": {"type": "string"}
+      }
+    },
+    "command": {
+      "type": "string",
+      "examples": ["show", "files", "relations", "edges", "explain", "check"]
+    },
+    "ok": {"type": "boolean"}
+  },
+  "if": {"required": ["ok"], "properties": {"ok": {"const": false}}},
+  "then": {"$ref": "#/$defs/error_envelope"},
+  "else": {"$ref": "#/$defs/success_envelope"},
+  "$defs": {
+    "error_envelope": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": ["kind", "message"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "examples": [
+                "no-revision",
+                "database-missing",
+                "schema-mismatch",
+                "not-found",
+                "bad-argument",
+                "storage",
+                "io"
+              ]
+            },
+            "message": {"type": "string"}
+          }
+        }
+      }
+    },
+    "success_envelope": {
+      "type": "object",
+      "required": [
+        "revision",
+        "root_set",
+        "input_complete",
+        "analysis_exact",
+        "position_encoding",
+        "schema_version",
+        "value"
+      ],
+      "properties": {
+        "revision": {
+          "type": "object",
+          "required": ["id", "input_digest", "created_at", "tool_version", "scip_sha256", "scip_size"],
+          "properties": {
+            "id": {"type": "integer"},
+            "input_digest": {"type": "string"},
+            "created_at": {"type": "string"},
+            "tool_version": {"type": "string"},
+            "scip_sha256": {"type": "string"},
+            "scip_size": {"type": "integer", "minimum": 0}
+          }
+        },
+        "root_set": {
+          "type": "object",
+          "required": ["key", "project_root", "shards"],
+          "properties": {
+            "key": {"type": "string"},
+            "project_root": {"type": "string"},
+            "shards": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "input_complete": {"type": "boolean"},
+        "analysis_exact": {"type": "boolean"},
+        "position_encoding": {"type": "string", "examples": ["utf8-byte"]},
+        "schema_version": {"type": "integer"},
+        "value": {}
+      },
+      "allOf": [
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "show"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/show.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "files"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/files.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "relations"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/relations.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "edges"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/edges.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "explain"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/explain.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "check"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/check.value.json"}}}
+        }
+      ]
+    },
+    "list": {
+      "description": "The value of a list command. A value file adds the item schema.",
+      "type": "object",
+      "required": ["items", "total", "truncated"],
+      "properties": {
+        "items": {"type": "array"},
+        "total": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean"}
+      }
+    },
+    "symbol": {
+      "description": "A symbol. The file is set for a local symbol only.",
+      "type": "object",
+      "required": ["symbol"],
+      "properties": {
+        "symbol": {"type": "string"},
+        "file": {"type": ["string", "null"]}
+      }
+    },
+    "span": {
+      "description": "A byte range [start, end] of UTF-8 bytes in the file.",
+      "type": ["array", "null"],
+      "items": {"type": "integer", "minimum": 0},
+      "minItems": 2,
+      "maxItems": 2
+    }
+  }
+}

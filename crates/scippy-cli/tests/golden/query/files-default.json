@@ -1,0 +1,152 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "files",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 5,
+  "value": {
+    "items": [
+      {
+        "path": "notes/a/dup.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "930a1f6d29df6ec47936ec92e42ca400cd434ce2dd95cec5043c51d5670aa26d",
+        "size": 8,
+        "stale": false
+      },
+      {
+        "path": "notes/b/dup.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "917b2500fa72527cc254e9ca4346c2ef79e2b8e2a22fdc455fd509fd811c89da",
+        "size": 8,
+        "stale": false
+      },
+      {
+        "path": "notes/index.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "f747dd93d77b4214acbccc0f079646ffe742ccb106df99698399b4866e0093b9",
+        "size": 204,
+        "stale": false
+      },
+      {
+        "path": "notes/latin1.md",
+        "status": "skipped",
+        "reason": "invalid-utf8",
+        "pack": "loci",
+        "language": null,
+        "sha256": null,
+        "size": null,
+        "stale": false
+      },
+      {
+        "path": "notes/target.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "4911324a821bf9c08fd3cc4dd69de28ef429c1b1a25656abe3cf345f27c5757c",
+        "size": 24,
+        "stale": false
+      },
+      {
+        "path": "notes/Überblick.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "03be831b233b04c53bd75438db082aad8ace1130af9a0abe436afc88ecb2053a",
+        "size": 30,
+        "stale": false
+      },
+      {
+        "path": "pkg/__init__.py",
+        "status": "indexed",
+        "reason": null,
+        "pack": "python",
+        "language": "Python",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "size": 0,
+        "stale": false
+      },
+      {
+        "path": "pkg/base.py",
+        "status": "indexed",
+        "reason": null,
+        "pack": "python",
+        "language": "Python",
+        "sha256": "5d5141ca246362fd04fbc5e92510c0a0683744c235dc362421b369afaedd5922",
+        "size": 48,
+        "stale": false
+      },
+      {
+        "path": "pkg/café.py",
+        "status": "indexed",
+        "reason": null,
+        "pack": "python",
+        "language": "Python",
+        "sha256": "2d149d4c1fafd1c89d62ebddda1e57fbdaa1c25da80d5497f68797dabe4c4976",
+        "size": 34,
+        "stale": false
+      },
+      {
+        "path": "pkg/child.py",
+        "status": "indexed",
+        "reason": null,
+        "pack": "python",
+        "language": "Python",
+        "sha256": "01449e6d24ab78886f3ef4d79c031c050d42fd7798c3dbd76c1a2a364f317f96",
+        "size": 260,
+        "stale": false
+      },
+      {
+        "path": "pkg/left.py",
+        "status": "indexed",
+        "reason": null,
+        "pack": "python",
+        "language": "Python",
+        "sha256": "84de7d10e67abe719794468cd85557560459a45ee46b095b8df1684038085023",
+        "size": 25,
+        "stale": false
+      },
+      {
+        "path": "pkg/right.py",
+        "status": "indexed",
+        "reason": null,
+        "pack": "python",
+        "language": "Python",
+        "sha256": "0755e09e2f50dde3c3dfe38b74a51ac6d216849c91a3bf4b54b6f37d25aebc4d",
+        "size": 25,
+        "stale": false
+      }
+    ],
+    "total": 12,
+    "truncated": false
+  }
+}

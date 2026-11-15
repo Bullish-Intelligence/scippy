@@ -96,11 +96,11 @@ fn snapshot(target: &str) -> AnalysisSnapshot {
     s
 }
 
-fn layer(dir: &Path) -> Metalayer {
+pub(crate) fn layer(dir: &Path) -> Metalayer {
     Metalayer::open(dir.join("layer.sqlite")).unwrap()
 }
 
-fn publish(layer: &mut Metalayer, s: &AnalysisSnapshot) -> i64 {
+pub(crate) fn publish(layer: &mut Metalayer, s: &AnalysisSnapshot) -> i64 {
     layer
         .publish(s, &PublishOptions::default())
         .unwrap()
@@ -115,7 +115,7 @@ fn count(layer: &Metalayer, table: &str) -> i64 {
 }
 
 /// A fixture with a local symbol, a definition site, an import, and a limited reference.
-fn rich() -> AnalysisSnapshot {
+pub(crate) fn rich() -> AnalysisSnapshot {
     let mut s = empty();
     let mut a = document("a.py", "def f(): pass\nf()\nlocal\nimp\n");
     a.symbols = vec![symbol("g f()."), symbol("local 0")];

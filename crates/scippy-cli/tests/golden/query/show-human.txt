@@ -1,0 +1,20 @@
+revision  1
+parent  -
+created_at  <created_at>
+tool_version  <tool_version>
+input_digest  <input_digest>
+scip_sha256  <scip_sha256>
+scip_size  <scip_size>
+project_root  <root>
+root_key  <root_key>
+shards  -
+input_complete  false
+analysis_exact  true
+strict  false
+position_encoding  utf8-byte
+schema_version  5
+files  failed=0 indexed=11 shadowed=0 skipped=1
+symbols  27
+references  ambiguous=2 bounded=0 resolved=18 unresolved=5
+edges  alias=0 embed=1 import=12 inheritance=1 link=5 override=0
+diagnostics  error=0 info=0 warning=1

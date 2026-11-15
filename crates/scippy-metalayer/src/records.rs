@@ -149,6 +149,10 @@ pub struct RevisionInfo {
     pub strict: bool,
     pub scip_sha256: String,
     pub created_at: String,
+    /// The size of the SCIP file in bytes.
+    pub scip_size: u64,
+    /// The unit of every span. It is `utf8-byte`.
+    pub position_encoding: String,
 }
 
 /// One row of the input manifest.
@@ -164,6 +168,10 @@ pub struct FileRecord {
     /// The file on disk differed from the indexed content at the end of the run. The facts
     /// come from the indexed content. The file is not lost, and `input_complete` ignores it.
     pub stale: bool,
+    /// The language of the file, when a pack set it.
+    pub language: Option<String>,
+    /// The path that the run read, when the file lies outside the project root.
+    pub real_path: Option<String>,
 }
 
 /// An occurrence. The span is in UTF-8 bytes.

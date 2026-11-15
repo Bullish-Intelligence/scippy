@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "show",
+  "ok": false,
+  "error": {
+    "kind": "schema-mismatch",
+    "message": "the metalayer database has format version 3, but this build reads version 5; run `scippy index` to rebuild it"
+  }
+}

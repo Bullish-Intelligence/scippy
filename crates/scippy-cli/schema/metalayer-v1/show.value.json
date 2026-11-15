@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/show.value.json",
+  "title": "The value of `metalayer show`",
+  "type": "object",
+  "required": ["parent", "strict", "counts"],
+  "properties": {
+    "parent": {"type": ["integer", "null"], "description": "The id of the previous revision."},
+    "strict": {"type": "boolean"},
+    "counts": {
+      "type": "object",
+      "required": ["files", "symbols", "references", "edges", "diagnostics"],
+      "properties": {
+        "files": {
+          "description": "The files by status.",
+          "$ref": "#/$defs/counts",
+          "examples": [{"indexed": 3, "skipped": 0, "failed": 0, "shadowed": 0}]
+        },
+        "symbols": {"type": "integer", "minimum": 0},
+        "references": {
+          "description": "The references by outcome: resolved, ambiguous, unresolved, bounded.",
+          "$ref": "#/$defs/counts"
+        },
+        "edges": {
+          "description": "The edges by kind: import, inheritance, override, alias, link, embed.",
+          "$ref": "#/$defs/counts"
+        },
+        "diagnostics": {
+          "description": "The diagnostics by severity: error, warning, info.",
+          "$ref": "#/$defs/counts"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "counts": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    }
+  }
+}

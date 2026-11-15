@@ -1,0 +1,52 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "files",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 5,
+  "value": {
+    "items": [
+      {
+        "path": "notes/a/dup.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "930a1f6d29df6ec47936ec92e42ca400cd434ce2dd95cec5043c51d5670aa26d",
+        "size": 8,
+        "stale": false
+      },
+      {
+        "path": "notes/b/dup.md",
+        "status": "indexed",
+        "reason": null,
+        "pack": "loci",
+        "language": "Markdown",
+        "sha256": "917b2500fa72527cc254e9ca4346c2ef79e2b8e2a22fdc455fd509fd811c89da",
+        "size": 8,
+        "stale": false
+      }
+    ],
+    "total": 12,
+    "truncated": true
+  }
+}

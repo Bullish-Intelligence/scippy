@@ -155,6 +155,20 @@ does not capture a filesystem snapshot, but it reads each file once. The manifes
 check of the Loci listing are separate reads. They are not project sources in the snapshot.
 Keep both databases outside the project and its roots.
 
+## Metalayer queries
+
+`scippy metalayer <command> --db PATH [--json] [--limit N]` reads a metalayer database. It never
+writes. The design and the JSON contract are in `METALAYER_QUERY.md`.
+
+- `show` prints the revision, the root set, the flags, and the counts.
+- `files` lists the input manifest. Filters: `--status`, `--language`, `--prefix`.
+
+With `--json`, a command prints one envelope with `format_version` 1. The schema is
+`crates/scippy-cli/schema/metalayer-v1.schema.json`. A reader must ignore unknown fields and
+unknown enum values. A failure prints `scippy: {error}` on stderr, or an error envelope with
+`--json`. Exit codes: 0 success, 1 error, 2 usage error, 4 no revision in the database.
+To update the golden test files, run `UPDATE_GOLDEN=1 cargo test -p scippy-cli --test query_golden`.
+
 ## Manifests
 
 The Python pack reads the `pyproject.toml` of the project root and of each root.

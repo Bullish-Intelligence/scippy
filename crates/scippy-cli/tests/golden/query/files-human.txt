@@ -1,0 +1,12 @@
+notes/a/dup.md  indexed  Markdown  8
+notes/b/dup.md  indexed  Markdown  8
+notes/index.md  indexed  Markdown  204
+notes/latin1.md  skipped  -  -  invalid-utf8
+notes/target.md  indexed  Markdown  24
+notes/Überblick.md  indexed  Markdown  30
+pkg/__init__.py  indexed  Python  0
+pkg/base.py  indexed  Python  48
+pkg/café.py  indexed  Python  34
+pkg/child.py  indexed  Python  260
+pkg/left.py  indexed  Python  25
+pkg/right.py  indexed  Python  25

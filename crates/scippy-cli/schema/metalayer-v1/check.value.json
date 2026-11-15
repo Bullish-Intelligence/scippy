@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/check.value.json",
+  "title": "The value of `metalayer check`",
+  "description": "A stub. The lane that builds the command replaces this file.",
+  "type": "object"
+}

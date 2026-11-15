@@ -14,6 +14,8 @@ use scippy_metalayer::{Metalayer, PublishOptions};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
+mod metalayer;
+
 #[derive(Parser)]
 #[command(version, about = "Produce a SCIP index of a source tree")]
 struct Cli {
@@ -27,6 +29,8 @@ enum Command {
     Index(Box<IndexArgs>),
     /// List the built-in language packs.
     Languages,
+    /// Query a metalayer database.
+    Metalayer(metalayer::MetalayerArgs),
 }
 
 #[derive(Args)]
@@ -193,6 +197,7 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Command::Metalayer(args) => metalayer::run(args),
         Command::Index(args) => {
             if let Err(message) = check_paths(&args) {
                 eprintln!("scippy: {message}");

@@ -15,9 +15,11 @@ scippy-python = { path = "../../languages/python" }
 scippy-typescript = { path = "../../languages/typescript" }
 scippy-loci = { path = "../../languages/loci" }
 clap.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 protobuf.workspace = true
 scip.workspace = true
 tempfile.workspace = true
 rusqlite = "0.28"
+jsonschema = { version = "0.61.2", default-features = false }
