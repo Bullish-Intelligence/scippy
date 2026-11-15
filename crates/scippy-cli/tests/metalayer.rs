@@ -567,7 +567,7 @@ fn swapped_cache_rows_are_rebuilt_and_give_the_clean_output() {
         );
         let db = rusqlite::Connection::open(&cache).unwrap();
         let rows: Vec<(String, Vec<u8>, String)> = db
-            .prepare("SELECT key, value, sum FROM file_graph_v3 ORDER BY key LIMIT 2")
+            .prepare("SELECT key, value, sum FROM file_graph_v4 ORDER BY key LIMIT 2")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
@@ -577,7 +577,7 @@ fn swapped_cache_rows_are_rebuilt_and_give_the_clean_output() {
         for (from, to) in [(0, 1), (1, 0)] {
             let sum = &rows[if swap_checksums { from } else { to }].2;
             db.execute(
-                "UPDATE file_graph_v3 SET value = ?1, sum = ?2 WHERE key = ?3",
+                "UPDATE file_graph_v4 SET value = ?1, sum = ?2 WHERE key = ?3",
                 rusqlite::params![rows[from].1, sum, rows[to].0],
             )
             .unwrap();

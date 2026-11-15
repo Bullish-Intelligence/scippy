@@ -1,7 +1,8 @@
 //! A disposable cache of file graphs and their partial paths.
 //!
 //! A row holds a graph in the `bincode` format, compressed with `zstd`. The cache keeps rows for
-//! the running executable only, and it keeps its file under a byte cap.
+//! the running executable only, and it keeps its file under a byte cap. A row has an owner: a
+//! file of a project. A new row of an owner replaces the older row of that owner.
 
 use std::cell::RefCell;
 use std::io::Read;
@@ -36,6 +37,8 @@ pub(crate) struct CachedGraph {
 /// run ends: the gate then keeps the cache file under its byte cap.
 pub(crate) struct CacheGate {
     path: Option<PathBuf>,
+    /// The canonical project root. Projects can share one cache file, so it is part of each owner.
+    root: String,
     timeout: Duration,
     /// The byte cap of the cache file. Zero means no cap.
     max_bytes: u64,
@@ -48,9 +51,11 @@ pub(crate) struct CacheGate {
 }
 
 impl CacheGate {
-    pub fn new(path: Option<&Path>, timeout: Duration, max_bytes: u64) -> Self {
+    pub fn new(path: Option<&Path>, root: &Path, timeout: Duration, max_bytes: u64) -> Self {
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         Self {
             path: path.map(Path::to_path_buf),
+            root: root.to_string_lossy().into_owned(),
             timeout,
             max_bytes,
             off: AtomicBool::new(false),
@@ -179,7 +184,7 @@ impl Drop for CacheGate {
 /// Create the tables and return the number of this run.
 ///
 /// The cache keeps the rows of one executable. This function deletes the rows of the others,
-/// and the old `file_graph_v2` table.
+/// and the old `file_graph_v2` and `file_graph_v3` tables.
 fn create(path: &Path, timeout: Duration, exe: &str) -> rusqlite::Result<i64> {
     let db = Connection::open(path)?;
     db.busy_timeout(timeout)?;
@@ -187,13 +192,17 @@ fn create(path: &Path, timeout: Duration, exe: &str) -> rusqlite::Result<i64> {
     db.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0))?;
     db.execute_batch(
         "DROP TABLE IF EXISTS file_graph_v2; \
-         CREATE TABLE IF NOT EXISTS file_graph_v3 \
+         DROP TABLE IF EXISTS file_graph_v3; \
+         DROP TABLE IF EXISTS file_graph_use_v3; \
+         CREATE TABLE IF NOT EXISTS file_graph_v4 \
          (key TEXT PRIMARY KEY, value BLOB NOT NULL, sum TEXT NOT NULL); \
-         CREATE TABLE IF NOT EXISTS file_graph_use_v3 \
+         CREATE TABLE IF NOT EXISTS file_graph_use_v4 \
          (key TEXT PRIMARY KEY, exe TEXT NOT NULL, last_used INTEGER NOT NULL, \
-          bytes INTEGER NOT NULL); \
-         CREATE INDEX IF NOT EXISTS file_graph_use_v3_last_used \
-         ON file_graph_use_v3 (last_used)",
+          bytes INTEGER NOT NULL, owner TEXT NOT NULL); \
+         CREATE INDEX IF NOT EXISTS file_graph_use_v4_last_used \
+         ON file_graph_use_v4 (last_used); \
+         CREATE INDEX IF NOT EXISTS file_graph_use_v4_owner \
+         ON file_graph_use_v4 (owner)",
     )?;
     // An incremental vacuum returns the pages of deleted rows to the file system without a
     // rewrite of the file. A plain `VACUUM` copies the whole file and needs as much free disk
@@ -203,13 +212,13 @@ fn create(path: &Path, timeout: Duration, exe: &str) -> rusqlite::Result<i64> {
     if mode != 2 {
         db.execute_batch("PRAGMA auto_vacuum = INCREMENTAL; VACUUM")?;
     }
-    db.execute("DELETE FROM file_graph_use_v3 WHERE exe <> ?1", [exe])?;
+    db.execute("DELETE FROM file_graph_use_v4 WHERE exe <> ?1", [exe])?;
     db.execute(
-        "DELETE FROM file_graph_v3 WHERE key NOT IN (SELECT key FROM file_graph_use_v3)",
+        "DELETE FROM file_graph_v4 WHERE key NOT IN (SELECT key FROM file_graph_use_v4)",
         [],
     )?;
     db.query_row(
-        "SELECT COALESCE(MAX(last_used), 0) + 1 FROM file_graph_use_v3",
+        "SELECT COALESCE(MAX(last_used), 0) + 1 FROM file_graph_use_v4",
         [],
         |r| r.get(0),
     )
@@ -249,7 +258,7 @@ fn delete_oldest(db: &Connection, excess: i64) -> rusqlite::Result<()> {
     let mut keys = Vec::new();
     {
         let mut rows =
-            tx.prepare("SELECT key, bytes FROM file_graph_use_v3 ORDER BY last_used, key")?;
+            tx.prepare("SELECT key, bytes FROM file_graph_use_v4 ORDER BY last_used, key")?;
         let mut rows = rows.query([])?;
         let mut freed = 0;
         while freed < excess
@@ -260,8 +269,8 @@ fn delete_oldest(db: &Connection, excess: i64) -> rusqlite::Result<()> {
         }
     }
     for key in &keys {
-        tx.execute("DELETE FROM file_graph_v3 WHERE key = ?1", [key])?;
-        tx.execute("DELETE FROM file_graph_use_v3 WHERE key = ?1", [key])?;
+        tx.execute("DELETE FROM file_graph_v4 WHERE key = ?1", [key])?;
+        tx.execute("DELETE FROM file_graph_use_v4 WHERE key = ?1", [key])?;
     }
     tx.commit()
 }
@@ -269,8 +278,8 @@ fn delete_oldest(db: &Connection, excess: i64) -> rusqlite::Result<()> {
 /// The rows and the hits that a shard has not written yet.
 #[derive(Default)]
 struct Pending {
-    /// The key, the stored value, and the checksum of each new row.
-    rows: Vec<(String, Vec<u8>, String)>,
+    /// The key, the owner, the stored value, and the checksum of each new row.
+    rows: Vec<(String, String, Vec<u8>, String)>,
     bytes: usize,
     /// The keys of the rows that this shard read.
     touched: Vec<String>,
@@ -326,7 +335,7 @@ impl GraphCache {
         let row: Option<(Value, Value)> = self
             .db
             .query_row(
-                "SELECT value, sum FROM file_graph_v3 WHERE key = ?1",
+                "SELECT value, sum FROM file_graph_v4 WHERE key = ?1",
                 [key],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -342,7 +351,7 @@ impl GraphCache {
                 Ok(Some(graph))
             }
             _ => {
-                for table in ["file_graph_v3", "file_graph_use_v3"] {
+                for table in ["file_graph_v4", "file_graph_use_v4"] {
                     self.db
                         .execute(&format!("DELETE FROM {table} WHERE key = ?1"), [key])
                         .map_err(|e| e.to_string())?;
@@ -352,14 +361,17 @@ impl GraphCache {
         }
     }
 
-    /// Keep the row in memory. The cache writes the rows of a shard in few transactions.
-    pub fn put(&self, key: &str, value: &CachedGraph) -> Result<(), String> {
+    /// Keep the row in memory. The cache writes the rows of a shard in few transactions. The
+    /// write deletes the older row of the same owner.
+    pub fn put(&self, key: &str, owner: &str, value: &CachedGraph) -> Result<(), String> {
         let bytes = encode(value)?;
         let sum = checksum(key, &bytes);
         let full = {
             let mut pending = self.pending.borrow_mut();
             pending.bytes += bytes.len();
-            pending.rows.push((key.to_owned(), bytes, sum));
+            pending
+                .rows
+                .push((key.to_owned(), owner.to_owned(), bytes, sum));
             pending.bytes >= FLUSH_BYTES
         };
         if full { self.flush() } else { Ok(()) }
@@ -373,16 +385,32 @@ impl GraphCache {
         }
         let write = || -> rusqlite::Result<()> {
             let tx = self.db.unchecked_transaction()?;
-            for (key, bytes, sum) in &pending.rows {
-                tx.prepare_cached("INSERT OR REPLACE INTO file_graph_v3 VALUES (?1, ?2, ?3)")?
+            for (key, owner, bytes, sum) in &pending.rows {
+                // Delete the superseded row first. It belongs to the same owner and executable.
+                tx.prepare_cached(
+                    "DELETE FROM file_graph_v4 WHERE key IN (SELECT key FROM file_graph_use_v4 \
+                     WHERE owner = ?1 AND exe = ?2 AND key <> ?3)",
+                )?
+                .execute(params![owner, self.exe, key])?;
+                tx.prepare_cached(
+                    "DELETE FROM file_graph_use_v4 WHERE owner = ?1 AND exe = ?2 AND key <> ?3",
+                )?
+                .execute(params![owner, self.exe, key])?;
+                tx.prepare_cached("INSERT OR REPLACE INTO file_graph_v4 VALUES (?1, ?2, ?3)")?
                     .execute(params![key, bytes, sum])?;
                 tx.prepare_cached(
-                    "INSERT OR REPLACE INTO file_graph_use_v3 VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT OR REPLACE INTO file_graph_use_v4 VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?
-                .execute(params![key, self.exe, self.run, bytes.len() as i64])?;
+                .execute(params![
+                    key,
+                    self.exe,
+                    self.run,
+                    bytes.len() as i64,
+                    owner
+                ])?;
             }
             for key in &pending.touched {
-                tx.prepare_cached("UPDATE file_graph_use_v3 SET last_used = ?1 WHERE key = ?2")?
+                tx.prepare_cached("UPDATE file_graph_use_v4 SET last_used = ?1 WHERE key = ?2")?
                     .execute(params![self.run, key])?;
             }
             tx.commit()
@@ -390,6 +418,7 @@ impl GraphCache {
         write().map_err(|e| e.to_string())
     }
 
+    /// Return the key of a row and its owner.
     #[allow(clippy::too_many_arguments)]
     pub fn key(
         &self,
@@ -400,9 +429,9 @@ impl GraphCache {
         globals: &[(String, String)],
         dialect: usize,
         shadow_aware: bool,
-    ) -> Result<String, String> {
+    ) -> Result<(String, String), String> {
         let input = serde_json::to_vec(&(
-            "file-graph-v3",
+            "file-graph-v4",
             self.exe,
             pack,
             pack_key,
@@ -413,7 +442,13 @@ impl GraphCache {
             shadow_aware,
         ))
         .map_err(|e| e.to_string())?;
-        Ok(format!("{:x}", Sha256::digest(input)))
+        // The owner has no source and no globals. It is the same for every edit of a file.
+        let owner = serde_json::to_vec(&("owner", &self.gate.root, pack, path, dialect))
+            .map_err(|e| e.to_string())?;
+        Ok((
+            format!("{:x}", Sha256::digest(input)),
+            format!("{:x}", Sha256::digest(owner)),
+        ))
     }
 }
 
@@ -445,7 +480,11 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(5);
 
     fn gate(path: &Path, exe: &'static str, max_bytes: u64) -> Arc<CacheGate> {
-        Arc::new(CacheGate::new(Some(path), TIMEOUT, max_bytes).with_exe(exe))
+        project_gate(path, Path::new("/project-a"), exe, max_bytes)
+    }
+
+    fn project_gate(path: &Path, root: &Path, exe: &'static str, max_bytes: u64) -> Arc<CacheGate> {
+        Arc::new(CacheGate::new(Some(path), root, TIMEOUT, max_bytes).with_exe(exe))
     }
 
     /// A graph with one file and no nodes. The name tells the rows apart.
@@ -470,13 +509,13 @@ mod tests {
         let db = Connection::open(path).unwrap();
         let bytes: Vec<u8> = (0..size).map(|n| (n * 31 + run as usize) as u8).collect();
         db.execute(
-            "INSERT INTO file_graph_v3 VALUES (?1, ?2, ?3)",
+            "INSERT INTO file_graph_v4 VALUES (?1, ?2, ?3)",
             params![key, bytes, checksum(key, &bytes)],
         )
         .unwrap();
         db.execute(
-            "INSERT INTO file_graph_use_v3 VALUES (?1, ?2, ?3, ?4)",
-            params![key, exe, run, size as i64],
+            "INSERT INTO file_graph_use_v4 VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![key, exe, run, size as i64, key],
         )
         .unwrap();
     }
@@ -489,7 +528,7 @@ mod tests {
         {
             let cache = gate.open().unwrap();
             assert!(cache.get("k").unwrap().is_none());
-            cache.put("k", &graph("a.py")).unwrap();
+            cache.put("k", "k", &graph("a.py")).unwrap();
         }
         let cache = gate.open().unwrap();
         let got = cache.get("k").unwrap().unwrap();
@@ -504,14 +543,14 @@ mod tests {
         {
             let old = gate(&path, "exe-a", 0);
             let cache = old.open().unwrap();
-            cache.put("one", &graph("a.py")).unwrap();
-            cache.put("two", &graph("b.py")).unwrap();
+            cache.put("one", "one", &graph("a.py")).unwrap();
+            cache.put("two", "two", &graph("b.py")).unwrap();
         }
-        assert_eq!(count(&path, "file_graph_v3"), 2);
+        assert_eq!(count(&path, "file_graph_v4"), 2);
         let new = gate(&path, "exe-b", 0);
         let cache = new.open().unwrap();
-        assert_eq!(count(&path, "file_graph_v3"), 0);
-        assert_eq!(count(&path, "file_graph_use_v3"), 0);
+        assert_eq!(count(&path, "file_graph_v4"), 0);
+        assert_eq!(count(&path, "file_graph_use_v4"), 0);
         assert!(cache.get("one").unwrap().is_none());
     }
 
@@ -522,9 +561,9 @@ mod tests {
         for _ in 0..2 {
             let gate = gate(&path, "exe-a", 0);
             let cache = gate.open().unwrap();
-            cache.put("one", &graph("a.py")).unwrap();
+            cache.put("one", "one", &graph("a.py")).unwrap();
         }
-        assert_eq!(count(&path, "file_graph_v3"), 1);
+        assert_eq!(count(&path, "file_graph_v4"), 1);
     }
 
     #[test]
@@ -544,7 +583,7 @@ mod tests {
         assert!(size <= cap, "the file has {size} bytes");
         let db = Connection::open(&path).unwrap();
         let keys: Vec<String> = db
-            .prepare("SELECT key FROM file_graph_use_v3 ORDER BY key")
+            .prepare("SELECT key FROM file_graph_use_v4 ORDER BY key")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -555,7 +594,78 @@ mod tests {
         assert_eq!(keys.last().unwrap(), "row100");
         let oldest = keys.len();
         assert_eq!(keys[0], format!("row{:03}", 100 - oldest + 1));
-        assert_eq!(count(&path, "file_graph_v3"), keys.len() as i64);
+        assert_eq!(count(&path, "file_graph_v4"), keys.len() as i64);
+    }
+
+    #[test]
+    fn a_new_key_replaces_the_row_of_the_same_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graphs.sqlite");
+        let gate = gate(&path, "exe-a", 0);
+        {
+            let cache = gate.open().unwrap();
+            cache.put("edit1", "file-a", &graph("a.py")).unwrap();
+            cache.put("other", "file-b", &graph("b.py")).unwrap();
+        }
+        {
+            // A later run edits the file twice. Each put replaces the row before it.
+            let cache = gate.open().unwrap();
+            cache.put("edit2", "file-a", &graph("a.py")).unwrap();
+        }
+        {
+            let cache = gate.open().unwrap();
+            cache.put("edit3", "file-a", &graph("a.py")).unwrap();
+            assert!(cache.get("edit2").unwrap().is_some());
+        }
+        assert_eq!(count(&path, "file_graph_v4"), 2);
+        assert_eq!(count(&path, "file_graph_use_v4"), 2);
+        let cache = gate.open().unwrap();
+        assert!(cache.get("edit1").unwrap().is_none());
+        assert!(cache.get("edit2").unwrap().is_none());
+        assert!(cache.get("edit3").unwrap().is_some());
+        assert!(cache.get("other").unwrap().is_some());
+    }
+
+    #[test]
+    fn projects_that_share_a_cache_keep_their_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graphs.sqlite");
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let key = |gate: &Arc<CacheGate>, source: &str| {
+            gate.open()
+                .unwrap()
+                .key("python", "pack", "m.py", source, &[], 0, false)
+                .unwrap()
+        };
+        let (gate_a, gate_b) = (
+            project_gate(&path, &a, "exe-a", 0),
+            project_gate(&path, &b, "exe-a", 0),
+        );
+        let (key_a1, owner_a) = key(&gate_a, "x = 1");
+        let (key_b1, owner_b) = key(&gate_b, "x = 2");
+        assert_ne!(owner_a, owner_b);
+        for (gate, key, owner) in [(&gate_a, &key_a1, &owner_a), (&gate_b, &key_b1, &owner_b)] {
+            gate.open()
+                .unwrap()
+                .put(key, owner, &graph("m.py"))
+                .unwrap();
+        }
+        // Project A edits the same relative path.
+        let (key_a2, owner_a2) = key(&gate_a, "x = 3");
+        assert_eq!(owner_a, owner_a2);
+        gate_a
+            .open()
+            .unwrap()
+            .put(&key_a2, &owner_a2, &graph("m.py"))
+            .unwrap();
+        assert_eq!(count(&path, "file_graph_v4"), 2);
+        let cache = gate_b.open().unwrap();
+        assert!(cache.get(&key_a1).unwrap().is_none());
+        assert!(cache.get(&key_a2).unwrap().is_some());
+        assert!(cache.get(&key_b1).unwrap().is_some());
     }
 
     #[test]
@@ -565,14 +675,14 @@ mod tests {
         {
             let gate = gate(&path, "exe-a", 0);
             let cache = gate.open().unwrap();
-            cache.put("old", &graph("a.py")).unwrap();
-            cache.put("other", &graph("b.py")).unwrap();
+            cache.put("old", "old", &graph("a.py")).unwrap();
+            cache.put("other", "other", &graph("b.py")).unwrap();
         }
         let last_used = |key: &str| -> i64 {
             Connection::open(&path)
                 .unwrap()
                 .query_row(
-                    "SELECT last_used FROM file_graph_use_v3 WHERE key = ?1",
+                    "SELECT last_used FROM file_graph_use_v4 WHERE key = ?1",
                     [key],
                     |r| r.get(0),
                 )

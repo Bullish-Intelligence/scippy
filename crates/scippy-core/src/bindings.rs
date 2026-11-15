@@ -270,7 +270,7 @@ impl BindingEngine {
         if !self.gate.is_on() {
             self.cache = None;
         }
-        let mut cache_key = None;
+        let mut cache_key: Option<(String, String)> = None;
         if let Some(cache) = &self.cache {
             match cache.key(
                 self.pack,
@@ -283,14 +283,14 @@ impl BindingEngine {
                 dialect,
                 self.shadow_aware,
             ) {
-                Ok(key) => cache_key = Some(key),
+                Ok(keys) => cache_key = Some(keys),
                 Err(error) => {
                     self.gate.fail(&error);
                     self.cache = None;
                 }
             }
         }
-        if let (Some(cache), Some(key)) = (&self.cache, &cache_key) {
+        if let (Some(cache), Some((key, _))) = (&self.cache, &cache_key) {
             match cache.get(key) {
                 Ok(Some(cached)) => {
                     let loaded = cached
@@ -367,7 +367,7 @@ impl BindingEngine {
             Err(_) => return Err(fail("the rules panicked".into())),
         }
         let paths = self.add_partial_paths(file);
-        if let (Some(cache), Some(key), Some(paths)) = (&self.cache, &cache_key, paths) {
+        if let (Some(cache), Some((key, owner)), Some(paths)) = (&self.cache, &cache_key, paths) {
             let graph = stack_graphs::serde::StackGraph::from_graph_filter(
                 &self.graph,
                 &|_: &StackGraph, candidate: &Handle<File>| *candidate == file,
@@ -382,7 +382,7 @@ impl BindingEngine {
                     )
                 })
                 .collect();
-            if let Err(error) = cache.put(key, &CachedGraph { graph, paths }) {
+            if let Err(error) = cache.put(key, owner, &CachedGraph { graph, paths }) {
                 self.gate.fail(&error);
                 self.cache = None;
             }

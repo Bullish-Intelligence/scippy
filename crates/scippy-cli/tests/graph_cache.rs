@@ -112,3 +112,82 @@ fn the_cap_keeps_the_file_small_and_the_output_the_same() {
     }
     assert!(fs::metadata(&cache).unwrap().len() <= cap);
 }
+
+fn rows(cache: &Path) -> (i64, i64) {
+    let db = rusqlite::Connection::open(cache).unwrap();
+    let count = |table: &str| {
+        db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    (count("file_graph_v4"), count("file_graph_use_v4"))
+}
+
+fn same_as_clean(root: &Path, scratch: &Path, cache: &Path, name: &str) -> Output {
+    let clean = scratch.join(format!("{name}-clean.scip"));
+    run(root, &clean, None, None);
+    let out = run(
+        root,
+        &scratch.join(format!("{name}.scip")),
+        Some(cache),
+        None,
+    );
+    assert_eq!(
+        fs::read(&clean).unwrap(),
+        fs::read(scratch.join(format!("{name}.scip"))).unwrap(),
+        "{name}"
+    );
+    out
+}
+
+#[test]
+fn two_edits_of_one_file_leave_one_row_for_it() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write_files(&root, 5);
+    let cache = scratch.path().join("graphs.sqlite");
+    same_as_clean(&root, scratch.path(), &cache, "cold");
+    assert_eq!(rows(&cache), (5, 5));
+    for edit in 1..=2 {
+        fs::write(
+            root.join("m0.py"),
+            format!("def g{edit}():\n    return {edit}\n"),
+        )
+        .unwrap();
+        let out = same_as_clean(&root, scratch.path(), &cache, &format!("edit{edit}"));
+        assert!(
+            graphs(&out).starts_with("4 cached, 1 built"),
+            "{}",
+            graphs(&out)
+        );
+        assert_eq!(rows(&cache), (5, 5));
+    }
+}
+
+#[test]
+fn projects_with_the_same_relative_path_keep_their_rows() {
+    let scratch = tempfile::tempdir().unwrap();
+    let cache = scratch.path().join("graphs.sqlite");
+    let mut roots = Vec::new();
+    for (name, salt) in [("one", 1), ("two", 2)] {
+        let root = scratch.path().join(name);
+        fs::create_dir_all(&root).unwrap();
+        for n in 0..3 {
+            let value = n + salt * 100;
+            let text = format!("def f{n}():\n    return {value}\n\nf{n}()\n");
+            fs::write(root.join(format!("m{n}.py")), text).unwrap();
+        }
+        same_as_clean(&root, scratch.path(), &cache, name);
+        roots.push(root);
+    }
+    assert_eq!(rows(&cache), (6, 6));
+    // An edit in the first project replaces only its own row.
+    fs::write(roots[0].join("m0.py"), "def edited():\n    return 0\n").unwrap();
+    same_as_clean(&roots[0], scratch.path(), &cache, "edited");
+    assert_eq!(rows(&cache), (6, 6));
+    let out = same_as_clean(&roots[1], scratch.path(), &cache, "again");
+    assert!(
+        graphs(&out).starts_with("3 cached, 0 built"),
+        "{}",
+        graphs(&out)
+    );
+}
