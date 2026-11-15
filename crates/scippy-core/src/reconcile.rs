@@ -410,12 +410,14 @@ pub(crate) fn reconcile(
                 }
             }
 
-            // A work bound stops the search before it has found every end. A plain name that
-            // already has a nearest binding in this document keeps that result. The oracle runs
-            // show that these results are as exact as the unbounded ones. A rebind that reads
-            // itself, as in `left, right = f(left, right)`, reaches this bound often.
+            // A bound stops the search before it has found every end. The kind of limit does not
+            // matter: work, queue length, and arena cells all stop the search early. A plain name
+            // that already has a nearest binding in this document keeps that result. The oracle
+            // runs show that these results are as exact as the unbounded ones. A rebind that reads
+            // itself, as in `left, right = f(left, right)`, reaches a bound often. A panic
+            // (`Failed`) gives no such guarantee, so it stays bounded.
             let keeps_nearest = |bound: Bound| {
-                bound == Bound::Work
+                matches!(bound, Bound::Work | Bound::QueueLength | Bound::ArenaCells)
                     && had_nearest
                     && !through_value
                     && usable.len() == 1
@@ -805,6 +807,34 @@ mod tests {
         let exact = run(None);
         assert_eq!(exact.outcome, BindingOutcome::Resolved(sym(0)));
         assert_eq!(exact.limited, None);
+    }
+
+    #[test]
+    fn a_queue_or_arena_bound_keeps_the_nearest_binding() {
+        let reference = anchor("a.py", 50);
+        let run = |bound: Bound| {
+            reconcile(
+                &index(),
+                vec![binding(
+                    reference.clone(),
+                    vec![end("a.py", 0, None)],
+                    Some(bound),
+                )],
+                &HashSet::new(),
+                &HashSet::new(),
+                &Targeting::accept_all(),
+            )
+            .remove(0)
+        };
+        for bound in [Bound::QueueLength, Bound::ArenaCells] {
+            let kept = run(bound);
+            assert_eq!(kept.outcome, BindingOutcome::Resolved(sym(0)));
+            assert_eq!(kept.limited, Some(bound));
+        }
+        // A panic gives no result.
+        let failed = run(Bound::Failed);
+        assert_eq!(failed.outcome, BindingOutcome::Bounded(Bound::Failed));
+        assert_eq!(failed.limited, None);
     }
 
     #[test]
