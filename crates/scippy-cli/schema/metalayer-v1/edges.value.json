@@ -2,6 +2,91 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scippy.invalid/schema/metalayer-v1/edges.value.json",
   "title": "The value of `metalayer edges`",
-  "description": "A stub. The lane that builds the command replaces this file.",
-  "type": "object"
+  "$defs": {
+    "symbol": {
+      "type": "object",
+      "required": ["symbol", "file"],
+      "properties": {
+        "symbol": {"type": "string"},
+        "file": {
+          "type": ["string", "null"],
+          "description": "The document of a local symbol. It is null for a global symbol."
+        }
+      }
+    }
+  },
+  "allOf": [{"$ref": "../metalayer-v1.schema.json#/$defs/list"}],
+  "properties": {
+    "items": {
+      "items": {
+        "type": "object",
+        "required": [
+          "kind", "path", "span", "source", "target", "target_path", "anchor", "link_kind",
+          "label", "state", "anchor_state", "candidates"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "examples": ["import", "inheritance", "override", "alias", "link", "embed"]
+          },
+          "path": {"type": "string", "description": "The file of the source site."},
+          "span": {
+            "type": ["array", "null"],
+            "prefixItems": [
+              {"type": "integer", "minimum": 0},
+              {"type": "integer", "minimum": 0}
+            ],
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "[start, end] in UTF-8 bytes."
+          },
+          "source": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/symbol"}]},
+          "target": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/symbol"}]},
+          "target_path": {
+            "type": ["string", "null"],
+            "description": "For a link or embed edge: the file of the target symbol."
+          },
+          "anchor": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "required": ["symbol", "file"],
+                "properties": {
+                  "symbol": {"type": "string"},
+                  "file": {"type": ["string", "null"]},
+                  "kind": {"type": ["string", "null"], "examples": ["Section", "Key"]},
+                  "display_name": {"type": ["string", "null"]}
+                }
+              }
+            ],
+            "description": "The symbol of the heading or block part of a link, when it resolves."
+          },
+          "link_kind": {"type": ["string", "null"], "examples": ["wikilink", "markdown", "embed"]},
+          "label": {"type": ["string", "null"]},
+          "state": {
+            "type": ["string", "null"],
+            "examples": ["resolved", "missing", "ambiguous", "none"]
+          },
+          "anchor_state": {
+            "type": ["string", "null"],
+            "examples": ["resolved", "missing", "ambiguous", "none"]
+          },
+          "candidates": {
+            "type": "array",
+            "description": "For an ambiguous link: the candidates, sorted by symbol string.",
+            "items": {
+              "type": "object",
+              "required": ["symbol", "file", "path"],
+              "properties": {
+                "symbol": {"type": "string"},
+                "file": {"type": ["string", "null"]},
+                "path": {"type": ["string", "null"], "description": "The file that defines the candidate."}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }

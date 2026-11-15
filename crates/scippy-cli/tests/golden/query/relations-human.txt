@@ -1,0 +1,14 @@
+notes/index.md  embed  scippy loci project . notes/`target.md`/  x1
+notes/index.md  link  scippy loci project . notes/`target.md`/  x2
+notes/index.md  link  scippy loci project . notes/`Überblick.md`/  x1
+pkg/child.py  import  scippy python demo . pkg/  x4
+pkg/child.py  import  scippy python demo . pkg/`café`/  x1
+pkg/child.py  import  scippy python demo . pkg/`café`/bonjour().  x1
+pkg/child.py  use  scippy python demo . pkg/`café`/bonjour().  x1
+pkg/child.py  import  scippy python demo . pkg/base/  x1
+pkg/child.py  import  scippy python demo . pkg/base/Base#  x1
+pkg/child.py  use  scippy python demo . pkg/base/Base#  x1
+pkg/child.py  import  scippy python demo . pkg/left/  x1
+pkg/child.py  import  scippy python demo . pkg/left/pick().  x1
+pkg/child.py  import  scippy python demo . pkg/right/  x1
+pkg/child.py  import  scippy python demo . pkg/right/pick().  x1

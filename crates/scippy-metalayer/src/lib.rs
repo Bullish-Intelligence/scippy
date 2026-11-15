@@ -19,6 +19,7 @@ pub use scippy_core::{Bound, ReferenceKind};
 
 pub use publish::{PublishOptions, Published};
 pub use query::{Counts, Probe, SymbolRecord};
+pub use query::{EdgeQuery, RelationQuery2, RelationRecord};
 pub use query::{FileState, compare_file};
 pub use read::View;
 pub use records::{

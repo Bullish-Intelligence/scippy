@@ -1,0 +1,19 @@
+notes/index.md  19..29  link  resolved  scippy loci project . notes/`target.md`/
+notes/index.md  46..57  embed  resolved  scippy loci project . notes/`target.md`/
+notes/index.md  87..102  link  resolved  scippy loci project . notes/`target.md`/
+notes/index.md  123..130  link  ambiguous  -
+notes/index.md  147..158  link  missing  -
+notes/index.md  188..202  link  resolved  scippy loci project . notes/`Überblick.md`/
+pkg/child.py  17..20  import  -  scippy python demo . pkg/
+pkg/child.py  21..25  import  -  scippy python demo . pkg/base/
+pkg/child.py  33..37  import  -  scippy python demo . pkg/base/Base#
+pkg/child.py  43..46  import  -  scippy python demo . pkg/
+pkg/child.py  47..52  import  -  scippy python demo . pkg/`café`/
+pkg/child.py  60..67  import  -  scippy python demo . pkg/`café`/bonjour().
+pkg/child.py  91..94  import  -  scippy python demo . pkg/
+pkg/child.py  95..99  import  -  scippy python demo . pkg/left/
+pkg/child.py  107..111  import  -  scippy python demo . pkg/left/pick().
+pkg/child.py  127..130  import  -  scippy python demo . pkg/
+pkg/child.py  131..136  import  -  scippy python demo . pkg/right/
+pkg/child.py  144..148  import  -  scippy python demo . pkg/right/pick().
+pkg/child.py  163..167  inheritance  -  scippy python demo . pkg/base/Base#

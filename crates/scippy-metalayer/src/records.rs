@@ -231,6 +231,8 @@ pub struct EdgeRecord {
     pub anchor_state: Option<String>,
     /// For an ambiguous link: the candidates, in the order of their symbol strings.
     pub candidates: Vec<SymbolRef>,
+    /// The symbol of the heading or block part of a link, when the part resolves.
+    pub anchor: Option<SymbolRef>,
 }
 
 /// A diagnostic of the run.

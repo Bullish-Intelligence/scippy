@@ -1,0 +1,104 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "edges",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<tmp>/scratch/edges-anchors-vault",
+    "shards": []
+  },
+  "input_complete": true,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 7,
+  "value": {
+    "items": [
+      {
+        "kind": "link",
+        "path": "notes/a.md",
+        "span": [
+          19,
+          28
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy loci edges-anchors-vault . notes/`t.md`/",
+          "file": null
+        },
+        "target_path": "notes/t.md",
+        "anchor": {
+          "symbol": "scippy loci edges-anchors-vault . notes/`t.md`/Sub.",
+          "file": null,
+          "kind": "Namespace",
+          "display_name": "Sub"
+        },
+        "link_kind": "wikilink",
+        "label": null,
+        "state": "resolved",
+        "anchor_state": "resolved",
+        "candidates": []
+      },
+      {
+        "kind": "link",
+        "path": "notes/a.md",
+        "span": [
+          33,
+          43
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy loci edges-anchors-vault . notes/`t.md`/",
+          "file": null
+        },
+        "target_path": "notes/t.md",
+        "anchor": {
+          "symbol": "scippy loci edges-anchors-vault . notes/`t.md`/`^blk`.",
+          "file": null,
+          "kind": "Key",
+          "display_name": "^blk"
+        },
+        "link_kind": "wikilink",
+        "label": null,
+        "state": "resolved",
+        "anchor_state": "resolved",
+        "candidates": []
+      },
+      {
+        "kind": "link",
+        "path": "notes/a.md",
+        "span": [
+          48,
+          56
+        ],
+        "source": null,
+        "target": null,
+        "target_path": null,
+        "anchor": {
+          "symbol": "scippy loci edges-anchors-vault . notes/`a.md`/Own.",
+          "file": null,
+          "kind": "Namespace",
+          "display_name": "Own"
+        },
+        "link_kind": "wikilink",
+        "label": null,
+        "state": "resolved",
+        "anchor_state": "resolved",
+        "candidates": []
+      }
+    ],
+    "total": 3,
+    "truncated": false
+  }
+}

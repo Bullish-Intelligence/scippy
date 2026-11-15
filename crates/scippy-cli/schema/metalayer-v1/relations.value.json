@@ -2,6 +2,40 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scippy.invalid/schema/metalayer-v1/relations.value.json",
   "title": "The value of `metalayer relations`",
-  "description": "A stub. The lane that builds the command replaces this file.",
-  "type": "object"
+  "allOf": [{"$ref": "../metalayer-v1.schema.json#/$defs/list"}],
+  "properties": {
+    "items": {
+      "items": {
+        "type": "object",
+        "required": ["path", "target", "kind", "supports", "limited"],
+        "properties": {
+          "path": {"type": "string"},
+          "target": {
+            "type": "object",
+            "required": ["symbol", "file", "kind", "display_name", "external"],
+            "properties": {
+              "symbol": {"type": "string"},
+              "file": {
+                "type": ["string", "null"],
+                "description": "The document of a local symbol. It is null for a global symbol."
+              },
+              "kind": {"type": "string", "examples": ["Class", "Function", "Module", "File"]},
+              "display_name": {"type": "string"},
+              "external": {"type": "boolean"},
+              "defined_in": {
+                "type": ["string", "null"],
+                "description": "The path of the document that defines the symbol. It is null for an external symbol."
+              }
+            }
+          },
+          "kind": {
+            "type": "string",
+            "examples": ["import", "use", "link", "embed"]
+          },
+          "supports": {"type": "integer", "minimum": 0},
+          "limited": {"type": "integer", "minimum": 0}
+        }
+      }
+    }
+  }
 }

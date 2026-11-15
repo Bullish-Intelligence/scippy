@@ -1,0 +1,158 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "relations",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 7,
+  "value": {
+    "items": [
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/",
+          "file": null,
+          "kind": "Module",
+          "display_name": "pkg",
+          "external": false,
+          "defined_in": "pkg/__init__.py"
+        },
+        "kind": "import",
+        "supports": 4,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/`café`/",
+          "file": null,
+          "kind": "Module",
+          "display_name": "café",
+          "external": false,
+          "defined_in": "pkg/café.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/`café`/bonjour().",
+          "file": null,
+          "kind": "Function",
+          "display_name": "bonjour",
+          "external": false,
+          "defined_in": "pkg/café.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/base/",
+          "file": null,
+          "kind": "Module",
+          "display_name": "base",
+          "external": false,
+          "defined_in": "pkg/base.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/base/Base#",
+          "file": null,
+          "kind": "Class",
+          "display_name": "Base",
+          "external": false,
+          "defined_in": "pkg/base.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/left/",
+          "file": null,
+          "kind": "Module",
+          "display_name": "left",
+          "external": false,
+          "defined_in": "pkg/left.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/left/pick().",
+          "file": null,
+          "kind": "Function",
+          "display_name": "pick",
+          "external": false,
+          "defined_in": "pkg/left.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/right/",
+          "file": null,
+          "kind": "Module",
+          "display_name": "right",
+          "external": false,
+          "defined_in": "pkg/right.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "path": "pkg/child.py",
+        "target": {
+          "symbol": "scippy python demo . pkg/right/pick().",
+          "file": null,
+          "kind": "Function",
+          "display_name": "pick",
+          "external": false,
+          "defined_in": "pkg/right.py"
+        },
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      }
+    ],
+    "total": 9,
+    "truncated": false
+  }
+}

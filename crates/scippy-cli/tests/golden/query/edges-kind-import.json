@@ -1,0 +1,272 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "edges",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 7,
+  "value": {
+    "items": [
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          17,
+          20
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          21,
+          25
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/base/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          33,
+          37
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/base/Base#",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          43,
+          46
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          47,
+          52
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/`café`/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          60,
+          67
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/`café`/bonjour().",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          91,
+          94
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          95,
+          99
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/left/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          107,
+          111
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/left/pick().",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          127,
+          130
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          131,
+          136
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/right/",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      },
+      {
+        "kind": "import",
+        "path": "pkg/child.py",
+        "span": [
+          144,
+          148
+        ],
+        "source": null,
+        "target": {
+          "symbol": "scippy python demo . pkg/right/pick().",
+          "file": null
+        },
+        "target_path": null,
+        "anchor": null,
+        "link_kind": null,
+        "label": null,
+        "state": null,
+        "anchor_state": null,
+        "candidates": []
+      }
+    ],
+    "total": 12,
+    "truncated": false
+  }
+}

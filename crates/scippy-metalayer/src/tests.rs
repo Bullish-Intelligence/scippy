@@ -917,7 +917,7 @@ fn link(span: (u32, u32), state: &str, anchor_state: &str) -> AnalysisEdge {
 }
 
 /// A source note with links of every state, and the target notes.
-fn vault() -> AnalysisSnapshot {
+pub(crate) fn vault() -> AnalysisSnapshot {
     let mut s = empty();
     let mut src = note("src.md");
     src.occurrences = vec![occurrence(0, 0, "g src.md/", "definition")];

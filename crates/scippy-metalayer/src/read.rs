@@ -25,12 +25,12 @@ pub struct View<'a> {
 /// The columns of a symbol and of the file that holds it, when the symbol is local.
 const SYMBOL_COLUMNS: &str = "{s}.symbol, {s}.local, {sf}.path";
 
-fn symbol_columns(symbol: &str, file: &str) -> String {
+pub(crate) fn symbol_columns(symbol: &str, file: &str) -> String {
     SYMBOL_COLUMNS.replace("{s}", symbol).replace("{sf}", file)
 }
 
 /// Read a symbol from three columns that start at `at`: the string, the local flag, and the path.
-fn symbol_at(row: &Row<'_>, at: usize) -> rusqlite::Result<SymbolRef> {
+pub(crate) fn symbol_at(row: &Row<'_>, at: usize) -> rusqlite::Result<SymbolRef> {
     let local: bool = row.get(at + 1)?;
     Ok(SymbolRef {
         symbol: row.get(at)?,
@@ -38,7 +38,7 @@ fn symbol_at(row: &Row<'_>, at: usize) -> rusqlite::Result<SymbolRef> {
     })
 }
 
-fn optional_symbol_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Option<SymbolRef>> {
+pub(crate) fn optional_symbol_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Option<SymbolRef>> {
     let symbol: Option<String> = row.get(at)?;
     match symbol {
         None => Ok(None),
@@ -275,66 +275,10 @@ impl<'a> View<'a> {
 
     /// The edges of one kind, or of every kind, sorted by file and span.
     pub fn edges(&self, kind: Option<EdgeKind>) -> Result<Vec<EdgeRecord>, ScippyError> {
-        let sql = format!(
-            "SELECT e.kind, f.path, e.start, e.end, e.link_kind, e.label, e.state, e.anchor_state,
-                    {}, {}, e.id
-             FROM edge e
-             JOIN file f ON f.id = e.file_id
-             LEFT JOIN symbol s ON s.id = e.source_id
-             LEFT JOIN file sf ON sf.id = s.file_id
-             LEFT JOIN symbol t ON t.id = e.target_id
-             LEFT JOIN file tf ON tf.id = t.file_id
-             WHERE ?1 IS NULL OR e.kind = ?1
-             ORDER BY f.path, e.start, e.end, e.kind, s.symbol, t.symbol, e.id",
-            symbol_columns("s", "sf"),
-            symbol_columns("t", "tf")
-        );
-        let mut statement = self.tx.prepare(&sql).map_err(storage)?;
-        let rows = statement
-            .query_map([kind.map(EdgeKind::as_str)], |r| {
-                let start: Option<u32> = r.get(2)?;
-                let end: Option<u32> = r.get(3)?;
-                Ok((
-                    r.get::<_, String>(0)?,
-                    EdgeRecord {
-                        kind: EdgeKind::Import,
-                        path: r.get(1)?,
-                        span: start.zip(end),
-                        link_kind: r.get(4)?,
-                        label: r.get(5)?,
-                        state: r.get(6)?,
-                        anchor_state: r.get(7)?,
-                        source: optional_symbol_at(r, 8)?,
-                        target: optional_symbol_at(r, 11)?,
-                        candidates: Vec::new(),
-                    },
-                    r.get::<_, i64>(14)?,
-                ))
-            })
-            .map_err(storage)?;
-        let mut candidates = self
-            .tx
-            .prepare(&format!(
-                "SELECT {} FROM edge e
-                 JOIN reference_candidate c ON c.reference_id = e.reference_id
-                 JOIN symbol s ON s.id = c.symbol_id
-                 LEFT JOIN file sf ON sf.id = s.file_id
-                 WHERE e.id = ?1 ORDER BY c.ordinal",
-                symbol_columns("s", "sf")
-            ))
-            .map_err(storage)?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (kind, mut edge, id) = row.map_err(storage)?;
-            edge.kind = EdgeKind::parse(&kind)?;
-            edge.candidates = candidates
-                .query_map([id], |r| symbol_at(r, 0))
-                .map_err(storage)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(storage)?;
-            out.push(edge);
-        }
-        Ok(out)
+        self.edges_where(&crate::query::EdgeQuery {
+            kinds: kind.into_iter().collect(),
+            ..Default::default()
+        })
     }
 
     /// The diagnostics of the run, in the order that the run raised them.

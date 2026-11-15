@@ -13,9 +13,11 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use scippy_core::ScippyError;
 use sha2::{Digest, Sha256};
 
+use crate::read::{optional_symbol_at, symbol_at, symbol_columns};
 use crate::schema::{APPLICATION_ID, storage};
 use crate::{
-    FileRecord, Metalayer, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord, SymbolRef, View,
+    EdgeKind, EdgeRecord, FileRecord, Metalayer, Outcome, OutcomeKind, ReferenceQuery,
+    ReferenceRecord, RelationKind, SymbolRef, View,
 };
 
 /// The counts of one revision. Each map holds every known key, also with the count zero.
@@ -325,6 +327,279 @@ mod explain_tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Relations and edges (`relations` and `edges`): `View::relations` and `View::edges_where`.
+// ---------------------------------------------------------------------------------------------
+
+/// Which file-to-symbol relations to read. A field that is `None` or empty does not filter.
+#[derive(Clone, Debug, Default)]
+pub struct RelationQuery2 {
+    /// The source file.
+    pub path: Option<String>,
+    /// The target symbol.
+    pub target: Option<SymbolRef>,
+    /// The exact display name of the target.
+    pub target_name: Option<String>,
+    /// The kinds to keep. An empty list keeps every kind.
+    pub kinds: Vec<RelationKind>,
+    /// `Some(true)` keeps the external targets, and `Some(false)` keeps the internal targets.
+    pub external: Option<bool>,
+}
+
+/// A file-to-symbol relation, with the data of its target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RelationRecord {
+    pub path: String,
+    pub target: SymbolRecord,
+    pub kind: RelationKind,
+    /// The count of supports.
+    pub supports: u32,
+    /// The supports that rest on a stopped search.
+    pub limited: u32,
+}
+
+/// Which edges to read. A field that is `None` or empty does not filter.
+#[derive(Clone, Debug, Default)]
+pub struct EdgeQuery {
+    /// The kinds to keep. An empty list keeps every kind.
+    pub kinds: Vec<EdgeKind>,
+    /// The file of the source site.
+    pub path: Option<String>,
+    pub target: Option<SymbolRef>,
+    /// The state of a link, such as `resolved`, `missing`, `ambiguous`, or `none`.
+    pub state: Option<String>,
+}
+
+impl View<'_> {
+    /// The relations that match the query, sorted by path, target symbol, and kind.
+    pub fn relations(&self, q: RelationQuery2) -> Result<Vec<RelationRecord>, ScippyError> {
+        let target = match &q.target {
+            None => None,
+            Some(symbol) => match self.symbol_id(symbol)? {
+                Some(id) => Some(id),
+                None => return Ok(Vec::new()),
+            },
+        };
+        let sql = format!(
+            "SELECT f.path, fr.kind, fr.supports, fr.limited, {}, t.kind, t.display_name, tf.path
+             FROM file_reference fr
+             JOIN file f ON f.id = fr.file_id
+             JOIN symbol t ON t.id = fr.target_id
+             LEFT JOIN file tf ON tf.id = t.file_id
+             WHERE (?1 IS NULL OR f.path = ?1) AND (?2 IS NULL OR fr.target_id = ?2)
+               AND (?3 IS NULL OR t.display_name = ?3)
+               AND (?4 IS NULL OR (t.file_id IS NULL) = ?4)
+             ORDER BY f.path, t.symbol, fr.kind",
+            symbol_columns("t", "tf")
+        );
+        let mut statement = self.tx.prepare(&sql).map_err(storage)?;
+        let rows = statement
+            .query_map(params![q.path, target, q.target_name, q.external], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    symbol_at(r, 4)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                ))
+            })
+            .map_err(storage)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (path, kind, supports, limited, symbol, symbol_kind, display_name, defined_in) =
+                row.map_err(storage)?;
+            let kind = RelationKind::parse(&kind)?;
+            if !q.kinds.is_empty() && !q.kinds.contains(&kind) {
+                continue;
+            }
+            out.push(RelationRecord {
+                path,
+                target: SymbolRecord {
+                    symbol,
+                    kind: symbol_kind,
+                    display_name,
+                    external: defined_in.is_none(),
+                    defined_in,
+                },
+                kind,
+                supports,
+                limited,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The edges that match the query, sorted by path, span, kind, source, and target.
+    pub fn edges_where(&self, q: &EdgeQuery) -> Result<Vec<EdgeRecord>, ScippyError> {
+        let target = match &q.target {
+            None => None,
+            Some(symbol) => match self.symbol_id(symbol)? {
+                Some(id) => Some(id),
+                None => return Ok(Vec::new()),
+            },
+        };
+        let sql = format!(
+            "SELECT e.kind, f.path, e.start, e.end, e.link_kind, e.label, e.state, e.anchor_state,
+                    {}, {}, e.id, {}
+             FROM edge e
+             JOIN file f ON f.id = e.file_id
+             LEFT JOIN symbol s ON s.id = e.source_id
+             LEFT JOIN file sf ON sf.id = s.file_id
+             LEFT JOIN symbol t ON t.id = e.target_id
+             LEFT JOIN file tf ON tf.id = t.file_id
+             LEFT JOIN reference ar ON ar.id = e.anchor_reference_id
+             LEFT JOIN symbol a ON a.id = ar.target_id
+             LEFT JOIN file af ON af.id = a.file_id
+             WHERE (?1 IS NULL OR f.path = ?1) AND (?2 IS NULL OR e.target_id = ?2)
+               AND (?3 IS NULL OR e.state = ?3)
+             ORDER BY f.path, e.start, e.end, e.kind, s.symbol, t.symbol, e.id",
+            symbol_columns("s", "sf"),
+            symbol_columns("t", "tf"),
+            symbol_columns("a", "af"),
+        );
+        let mut statement = self.tx.prepare(&sql).map_err(storage)?;
+        let rows = statement
+            .query_map(params![q.path, target, q.state], |r| {
+                let start: Option<u32> = r.get(2)?;
+                let end: Option<u32> = r.get(3)?;
+                Ok((
+                    r.get::<_, String>(0)?,
+                    EdgeRecord {
+                        kind: EdgeKind::Import,
+                        path: r.get(1)?,
+                        span: start.zip(end),
+                        link_kind: r.get(4)?,
+                        label: r.get(5)?,
+                        state: r.get(6)?,
+                        anchor_state: r.get(7)?,
+                        source: optional_symbol_at(r, 8)?,
+                        target: optional_symbol_at(r, 11)?,
+                        candidates: Vec::new(),
+                        anchor: optional_symbol_at(r, 15)?,
+                    },
+                    r.get::<_, i64>(14)?,
+                ))
+            })
+            .map_err(storage)?;
+        let mut candidates = self
+            .tx
+            .prepare(&format!(
+                "SELECT {} FROM edge e
+                 JOIN reference_candidate c ON c.reference_id = e.reference_id
+                 JOIN symbol s ON s.id = c.symbol_id
+                 LEFT JOIN file sf ON sf.id = s.file_id
+                 WHERE e.id = ?1 ORDER BY c.ordinal",
+                symbol_columns("s", "sf")
+            ))
+            .map_err(storage)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (kind, mut edge, id) = row.map_err(storage)?;
+            edge.kind = EdgeKind::parse(&kind)?;
+            if !q.kinds.is_empty() && !q.kinds.contains(&edge.kind) {
+                continue;
+            }
+            edge.candidates = candidates
+                .query_map([id], |r| symbol_at(r, 0))
+                .map_err(storage)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(storage)?;
+            out.push(edge);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod relation_tests {
+    use super::*;
+    use crate::tests::{layer, publish, rich, vault};
+
+    #[test]
+    fn relations_filter_by_name_kind_and_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut layer = layer(dir.path());
+        publish(&mut layer, &rich());
+        let view = layer.view().unwrap().unwrap();
+        let all = view.relations(RelationQuery2::default()).unwrap();
+        assert!(!all.is_empty());
+        let external = view
+            .relations(RelationQuery2 {
+                external: Some(true),
+                ..Default::default()
+            })
+            .unwrap();
+        let internal = view
+            .relations(RelationQuery2 {
+                external: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(external.len() + internal.len(), all.len());
+        assert!(external.iter().all(|r| r.target.external));
+        assert!(internal.iter().all(|r| !r.target.external));
+        let named = view
+            .relations(RelationQuery2 {
+                target_name: Some(all[0].target.display_name.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(named.contains(&all[0]));
+        let none = view
+            .relations(RelationQuery2 {
+                kinds: vec![RelationKind::Embed],
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn edges_filter_by_state_and_carry_the_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut layer = layer(dir.path());
+        publish(&mut layer, &vault());
+        let view = layer.view().unwrap().unwrap();
+        let missing = view
+            .edges_where(&EdgeQuery {
+                state: Some("missing".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].span, Some((70, 80)));
+        let links = view
+            .edges_where(&EdgeQuery {
+                kinds: vec![EdgeKind::Link],
+                ..Default::default()
+            })
+            .unwrap();
+        let anchored = links.iter().find(|e| e.span == Some((10, 22))).unwrap();
+        assert_eq!(anchored.anchor, Some(SymbolRef::global("g t.md/Heading.")));
+        let missing_anchor = links.iter().find(|e| e.span == Some((30, 40))).unwrap();
+        assert_eq!(missing_anchor.anchor, None);
+        let to_u = view
+            .edges_where(&EdgeQuery {
+                target: Some(SymbolRef::global("g u.md/")),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(to_u.len(), 1);
+        assert_eq!(to_u[0].kind, EdgeKind::Embed);
+        let in_other_file = view
+            .edges_where(&EdgeQuery {
+                path: Some("t.md".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(in_other_file.is_empty());
     }
 }
 

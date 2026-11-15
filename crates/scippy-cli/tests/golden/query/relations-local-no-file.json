@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "relations",
+  "ok": false,
+  "error": {
+    "kind": "bad-argument",
+    "message": "a local symbol needs --to-file, the file that holds it"
+  }
+}
