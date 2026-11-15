@@ -6,7 +6,6 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-use crate::bindings::Bound;
 use crate::emit::{self, IndexData, Role, SymbolInfo};
 use crate::error::ScippyError;
 use crate::reconcile::{BindingOutcome, Reconciled, UnresolvedReason};
@@ -78,6 +77,11 @@ pub struct AnalysisReference {
     pub start: u32,
     pub end: u32,
     pub outcome: ReferenceOutcome,
+    /// The bound that stopped the search of a resolved reference, as `work`, `queue-length`,
+    /// `arena-cells`, or `failed`. The result is the nearest binding, and other ends can exist.
+    /// It is `None` for any other outcome. A bounded reference names its bound in the outcome.
+    #[serde(default)]
+    pub limited: Option<String>,
 }
 
 impl AnalysisReference {
@@ -96,22 +100,21 @@ impl AnalysisReference {
                 }
                 .to_owned(),
             ),
-            BindingOutcome::Bounded(b) => ReferenceOutcome::Bounded(
-                match b {
-                    Bound::Work => "work",
-                    Bound::QueueLength => "queue-length",
-                    Bound::ArenaCells => "arena-cells",
-                    Bound::Failed => "failed",
-                }
-                .to_owned(),
-            ),
+            BindingOutcome::Bounded(b) => ReferenceOutcome::Bounded(b.code().to_owned()),
         };
         Self {
             path: r.reference.path.as_str().to_owned(),
             start: r.reference.start_byte,
             end: r.reference.end_byte,
             outcome,
+            limited: r.limited.map(|b| b.code().to_owned()),
         }
+    }
+
+    /// True when a search stopped at a limit: the outcome is bounded, or it keeps the nearest
+    /// binding of a stopped search.
+    pub fn is_inexact(&self) -> bool {
+        self.limited.is_some() || matches!(self.outcome, ReferenceOutcome::Bounded(_))
     }
 }
 
@@ -134,9 +137,13 @@ pub struct AnalysisSnapshot {
     pub diagnostics: Vec<AnalysisDiagnostic>,
     /// False when the run lost input. It is true only when the run skipped no file (at discovery
     /// or later), raised no error diagnostic, and raised no diagnostic with a code in
-    /// [`INCOMPLETE_CODES`]. A bounded search does not change it: see `bounded_references`.
-    pub complete: bool,
-    /// The count of references whose search hit a work bound. They have no target.
+    /// [`INCOMPLETE_CODES`]. A bounded search does not change it: see `analysis_exact`.
+    pub input_complete: bool,
+    /// False when a reference search stopped at a limit. A reference with the outcome `Bounded`
+    /// has no target. A resolved reference with a `limited` mark keeps the nearest binding.
+    /// This field does not depend on `input_complete`.
+    pub analysis_exact: bool,
+    /// The count of references whose search stopped at a limit. It counts both kinds.
     #[serde(default)]
     pub bounded_references: usize,
     /// The SCIP index from the same run.
@@ -176,10 +183,7 @@ impl AnalysisSnapshot {
             })
             .collect();
         references.sort_by(|a, b| (&a.path, a.start, a.end).cmp(&(&b.path, b.start, b.end)));
-        let bounded_references = references
-            .iter()
-            .filter(|r| matches!(r.outcome, ReferenceOutcome::Bounded(_)))
-            .count();
+        let bounded_references = references.iter().filter(|r| r.is_inexact()).count();
         Ok(Self {
             documents,
             references,
@@ -196,11 +200,12 @@ impl AnalysisSnapshot {
                     message: d.message.clone(),
                 })
                 .collect(),
-            complete: report.files_skipped == 0
+            input_complete: report.files_skipped == 0
                 && report.discovery_skipped == 0
                 && !report.diagnostics.iter().any(|d| {
                     d.severity == crate::Severity::Error || INCOMPLETE_CODES.contains(&d.code)
                 }),
+            analysis_exact: bounded_references == 0,
             bounded_references,
             scip: emit::encode(data.clone())?,
         })
@@ -210,7 +215,7 @@ impl AnalysisSnapshot {
 /// Marks a database file as a Scippy read model. The bytes spell "SCPY".
 const APPLICATION_ID: i32 = 0x5343_5059;
 /// The storage format version that this code reads and writes.
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// A local, experimental read model. Each publication replaces the complete snapshot.
 pub struct Metalayer {
@@ -275,7 +280,7 @@ impl Metalayer {
 
     /// Atomically replace the snapshot and its derived file-reference relation.
     pub fn publish(&mut self, snapshot: &AnalysisSnapshot) -> Result<i64, ScippyError> {
-        if !snapshot.complete {
+        if !snapshot.input_complete {
             return Err(ScippyError::Storage(
                 "cannot publish an incomplete analysis".into(),
             ));
@@ -373,13 +378,50 @@ mod tests {
                 start: 0,
                 end: 1,
                 outcome: ReferenceOutcome::Resolved(target.into()),
+                limited: None,
             }],
             external_symbols: Vec::new(),
             diagnostics: Vec::new(),
-            complete: true,
+            input_complete: true,
+            analysis_exact: true,
             bounded_references: 0,
             scip: Vec::new(),
         }
+    }
+
+    fn reference(outcome: ReferenceOutcome, limited: Option<&str>) -> AnalysisReference {
+        AnalysisReference {
+            path: "a.py".into(),
+            start: 0,
+            end: 1,
+            outcome,
+            limited: limited.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_bounded_search_makes_the_analysis_inexact_but_the_input_complete() {
+        let bounded = reference(ReferenceOutcome::Bounded("work".into()), None);
+        let kept = reference(ReferenceOutcome::Resolved("s".into()), Some("work"));
+        let exact = reference(ReferenceOutcome::Resolved("s".into()), None);
+        assert!(bounded.is_inexact());
+        assert!(kept.is_inexact());
+        assert!(!exact.is_inexact());
+        // A snapshot with both kinds publishes, and the stored value keeps the marks.
+        let mut inexact = snapshot("first");
+        let mut kept_elsewhere = kept.clone();
+        kept_elsewhere.start = 2;
+        kept_elsewhere.end = 3;
+        inexact.references = vec![bounded, kept, kept_elsewhere, exact];
+        inexact.bounded_references = 3;
+        inexact.analysis_exact = false;
+        let dir = tempfile::tempdir().unwrap();
+        let mut layer = Metalayer::open(dir.path().join("layer.sqlite")).unwrap();
+        layer.publish(&inexact).unwrap();
+        let view = layer.read().unwrap().unwrap();
+        assert_eq!(view.snapshot, inexact);
+        // The kept references still support the file relation.
+        assert_eq!(view.file_references, vec![("a.py".into(), "s".into(), 2)]);
     }
 
     #[test]
@@ -398,7 +440,7 @@ mod tests {
             vec![("a.py".into(), "first".into(), 1)]
         );
         let mut incomplete = snapshot("third");
-        incomplete.complete = false;
+        incomplete.input_complete = false;
         assert!(layer.publish(&incomplete).is_err());
         assert_eq!(layer.read().unwrap().unwrap().revision, 1);
     }

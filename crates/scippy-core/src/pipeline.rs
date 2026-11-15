@@ -7,9 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::IndexRequest;
-use crate::bindings::{
-    BindingEngine, Bound, CompiledRules, Place, RawBinding, RawEnd, ResolveLimits,
-};
+use crate::bindings::{BindingEngine, CompiledRules, Place, RawBinding, RawEnd, ResolveLimits};
 use crate::cache::CacheGate;
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
@@ -1568,7 +1566,7 @@ fn trace_line(lines: &LineIndex, r: &Reconciled) -> String {
                 .join(" | ")
         ),
         BindingOutcome::Unresolved(reason) => format!("unresolved\t{}", reason_code(*reason)),
-        BindingOutcome::Bounded(bound) => format!("bounded\t{}", bound_code(*bound)),
+        BindingOutcome::Bounded(bound) => format!("bounded\t{}", bound.code()),
     };
     format!(
         "{}:{at}\t{detail}\tends={} shadowed={} joined={} unjoined=[{}] targets=[{}]",
@@ -1579,15 +1577,6 @@ fn trace_line(lines: &LineIndex, r: &Reconciled) -> String {
         r.unjoined.join(","),
         r.targets.join(",")
     )
-}
-
-fn bound_code(bound: Bound) -> &'static str {
-    match bound {
-        Bound::Work => "work",
-        Bound::QueueLength => "queue-length",
-        Bound::ArenaCells => "arena-cells",
-        Bound::Failed => "failed",
-    }
 }
 
 /// Build the document: a definition occurrence for each declaration,

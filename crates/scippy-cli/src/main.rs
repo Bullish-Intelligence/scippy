@@ -210,7 +210,7 @@ fn main() -> ExitCode {
             let indexed = if let Some(path) = metalayer {
                 // The SCIP file follows the publication. A failed publish keeps the old file.
                 index_project_for_publish(&request, &registry()).and_then(|(report, snapshot)| {
-                    if !snapshot.complete {
+                    if !snapshot.input_complete {
                         for diagnostic in &report.diagnostics {
                             eprintln!("{diagnostic}");
                         }

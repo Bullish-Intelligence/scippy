@@ -62,6 +62,18 @@ pub(crate) enum Bound {
     Failed,
 }
 
+impl Bound {
+    /// The stable name of the bound, for the trace and the snapshot.
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Bound::Work => "work",
+            Bound::QueueLength => "queue-length",
+            Bound::ArenaCells => "arena-cells",
+            Bound::Failed => "failed",
+        }
+    }
+}
+
 /// The site of a definition node: a span in a project file or in an external asset.
 ///
 /// An external asset is a source file that the pack supplies and the project does not own.

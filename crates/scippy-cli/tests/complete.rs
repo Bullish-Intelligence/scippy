@@ -1,4 +1,4 @@
-//! Check that `AnalysisSnapshot::complete` is false when the run loses input.
+//! Check that `AnalysisSnapshot::input_complete` is false when the run loses input.
 
 use std::fs;
 use std::path::Path;
@@ -28,12 +28,13 @@ fn has_code(snapshot: &AnalysisSnapshot, code: &str) -> bool {
 }
 
 #[test]
-fn a_clean_project_is_complete() {
+fn a_clean_project_is_complete_and_exact() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "a.py", "def f():\n    return 1\n\nf()\n");
     write(dir.path(), "pyproject.toml", "[project]\nname = \"demo\"\n");
     let snapshot = snapshot(dir.path(), |_| {});
-    assert!(snapshot.complete, "{:?}", snapshot.diagnostics);
+    assert!(snapshot.input_complete, "{:?}", snapshot.diagnostics);
+    assert!(snapshot.analysis_exact);
     assert_eq!(snapshot.bounded_references, 0);
 }
 
@@ -43,7 +44,7 @@ fn a_file_over_the_size_limit_is_incomplete() {
     write(dir.path(), "a.py", "def f():\n    return 1\n");
     write(dir.path(), "big.py", &format!("x = 1\n{}", "#".repeat(200)));
     let snapshot = snapshot(dir.path(), |r| r.limits.max_file_bytes = 100);
-    assert!(!snapshot.complete);
+    assert!(!snapshot.input_complete);
     assert!(has_code(&snapshot, "file-too-large"));
 }
 
@@ -54,7 +55,7 @@ fn a_symlinked_source_file_is_incomplete() {
     write(dir.path(), "real.py", "x = 1\n");
     std::os::unix::fs::symlink("real.py", dir.path().join("link.py")).unwrap();
     let snapshot = snapshot(dir.path(), |_| {});
-    assert!(!snapshot.complete);
+    assert!(!snapshot.input_complete);
     assert!(has_code(&snapshot, "symlink-skipped"));
 }
 
@@ -64,7 +65,7 @@ fn a_broken_pyproject_is_incomplete() {
     write(dir.path(), "a.py", "x = 1\n");
     write(dir.path(), "pyproject.toml", "[project\nname = ");
     let snapshot = snapshot(dir.path(), |_| {});
-    assert!(!snapshot.complete);
+    assert!(!snapshot.input_complete);
     assert!(has_code(&snapshot, "manifest-error"));
 }
 
@@ -74,6 +75,6 @@ fn a_broken_tsconfig_is_incomplete() {
     write(dir.path(), "a.ts", "export const x = 1;\n");
     write(dir.path(), "tsconfig.json", "{ not json");
     let snapshot = snapshot(dir.path(), |_| {});
-    assert!(!snapshot.complete);
+    assert!(!snapshot.input_complete);
     assert!(has_code(&snapshot, "support-file-error"));
 }

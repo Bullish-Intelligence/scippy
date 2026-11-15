@@ -54,7 +54,7 @@ file-to-symbol relation. Each resolved reference supports that relation. Removin
 keeps a relation that another reference supports. `Metalayer::read` reads both in one transaction.
 `index_project_with_snapshot` returns the structured snapshot to a Rust caller.
 
-The snapshot field `complete` is true only when the run lost no input. It is false when:
+The snapshot field `input_complete` is true only when the run lost no input. It is false when:
 
 - the run skipped a file, whether the walker or a later stage skipped it. A symbolic link, a
   file over the size limit, a bad file name, and a Loci note over its size cap are skips;
@@ -63,8 +63,15 @@ The snapshot field `complete` is true only when the run lost no input. It is fal
   `file-too-large`. They report a `pyproject.toml` or `tsconfig.json` that cannot be used, a
   dependency name that two roots share, and a file over a size limit.
 
-A bounded search does not change `complete`. The field `bounded_references` counts the
-references whose search hit a work bound. `Metalayer::publish` refuses an incomplete snapshot.
+The snapshot field `analysis_exact` is true only when no reference search stopped at a limit.
+It is independent of `input_complete`. A search that stops gives one of two results:
+
+- the outcome `Bounded`: the reference has no target;
+- the outcome `Resolved` with a `limited` mark: the nearest binding in the same document. Other
+  ends can exist. This reference still supports the file-to-symbol relation.
+
+The field `bounded_references` counts both kinds. `Metalayer::publish` refuses a snapshot with
+`input_complete` false. It accepts a snapshot with `analysis_exact` false.
 
 The database is an experiment. It has no stable entity IDs, history, watcher, or query language.
 It refuses to publish a run that skips files or reports an error. The SCIP output and database

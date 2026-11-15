@@ -206,6 +206,9 @@ fn test_scope() -> Scope {
 pub(crate) struct Reconciled {
     pub reference: SourceAnchor,
     pub outcome: BindingOutcome,
+    /// The bound that stopped the search of a resolved reference. The nearest-binding rule kept
+    /// the result, but the search did not find every end. It is `None` for any other outcome.
+    pub limited: Option<Bound>,
     /// Distinct ends of the merged search.
     pub ends: usize,
     /// Ends that only shadowed paths reach. The reconciler ignores them.
@@ -438,9 +441,14 @@ pub(crate) fn reconcile(
             } else {
                 BindingOutcome::Ambiguous(usable.into_iter().collect())
             };
+            let limited = match outcome {
+                BindingOutcome::Resolved(_) if own.is_none() => bound,
+                _ => None,
+            };
             Reconciled {
                 reference,
                 outcome,
+                limited,
                 ends: groups.len(),
                 shadowed,
                 outside,
@@ -768,6 +776,32 @@ mod tests {
             ),
             BindingOutcome::Bounded(Bound::Work)
         );
+    }
+
+    #[test]
+    fn a_kept_nearest_binding_carries_the_bound() {
+        let reference = anchor("a.py", 50);
+        let run = |bound: Option<Bound>| {
+            reconcile(
+                &index(),
+                vec![binding(
+                    reference.clone(),
+                    vec![end("a.py", 0, None)],
+                    bound,
+                )],
+                &HashSet::new(),
+                &HashSet::new(),
+                &Targeting::accept_all(),
+            )
+            .remove(0)
+        };
+        let kept = run(Some(Bound::Work));
+        assert_eq!(kept.outcome, BindingOutcome::Resolved(sym(0)));
+        assert_eq!(kept.limited, Some(Bound::Work));
+        // An exact search has no mark.
+        let exact = run(None);
+        assert_eq!(exact.outcome, BindingOutcome::Resolved(sym(0)));
+        assert_eq!(exact.limited, None);
     }
 
     #[test]
