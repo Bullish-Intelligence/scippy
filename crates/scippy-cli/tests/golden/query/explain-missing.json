@@ -1,0 +1,114 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "explain",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<tmp>/scratch/explain-edited.dir/project",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 6,
+  "value": {
+    "file": {
+      "path": "notes/index.md",
+      "status": "indexed",
+      "reason": null,
+      "pack": "loci",
+      "language": "Markdown",
+      "sha256": "f747dd93d77b4214acbccc0f079646ffe742ccb106df99698399b4866e0093b9",
+      "size": 204,
+      "stale": false
+    },
+    "target": {
+      "symbol": "scippy loci project . notes/`target.md`/",
+      "file": null,
+      "kind": "File",
+      "display_name": "target.md",
+      "external": false,
+      "defined_in": "notes/target.md"
+    },
+    "source": "missing",
+    "relations": [
+      {
+        "kind": "embed",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "kind": "link",
+        "supports": 2,
+        "limited": 0
+      }
+    ],
+    "supports": [
+      {
+        "kind": "link",
+        "span": [
+          19,
+          29
+        ],
+        "limited": null,
+        "line": null,
+        "column": null,
+        "reference": {
+          "kind": null,
+          "outcome": "resolved",
+          "reason": null,
+          "limited": null,
+          "candidates": []
+        }
+      },
+      {
+        "kind": "embed",
+        "span": [
+          46,
+          57
+        ],
+        "limited": null,
+        "line": null,
+        "column": null,
+        "reference": {
+          "kind": null,
+          "outcome": "resolved",
+          "reason": null,
+          "limited": null,
+          "candidates": []
+        }
+      },
+      {
+        "kind": "link",
+        "span": [
+          87,
+          102
+        ],
+        "limited": null,
+        "line": null,
+        "column": null,
+        "reference": {
+          "kind": null,
+          "outcome": "resolved",
+          "reason": null,
+          "limited": null,
+          "candidates": []
+        }
+      }
+    ],
+    "ambiguous": [],
+    "unresolved_in_file": null
+  }
+}

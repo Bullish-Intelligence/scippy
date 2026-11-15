@@ -14,7 +14,9 @@ use scippy_core::ScippyError;
 use sha2::{Digest, Sha256};
 
 use crate::schema::{APPLICATION_ID, storage};
-use crate::{FileRecord, Metalayer, SymbolRef, View};
+use crate::{
+    FileRecord, Metalayer, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord, SymbolRef, View,
+};
 
 /// The counts of one revision. Each map holds every known key, also with the count zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -250,6 +252,79 @@ impl View<'_> {
             None => project_root.join(&file.path),
         };
         compare_file(&path, file.size, sha256)
+    }
+}
+
+// ---- The references for `explain` (design section 7, item 8) ----
+
+impl View<'_> {
+    /// The reference at exactly this span of `path`, or `None` when the span is not a reference.
+    ///
+    /// A first version: it filters the references of the file. It is enough for one `explain`.
+    pub fn references_at(
+        &self,
+        path: &str,
+        span: (u32, u32),
+    ) -> Result<Option<ReferenceRecord>, ScippyError> {
+        Ok(self
+            .references(ReferenceQuery {
+                path: Some(path.to_owned()),
+                outcome: None,
+            })?
+            .into_iter()
+            .find(|r| r.span == span))
+    }
+
+    /// The ambiguous references in `path` that list `symbol` as a candidate, sorted by span.
+    ///
+    /// The search did not pick the symbol. These references show where the file may depend on it.
+    pub fn ambiguous_with(
+        &self,
+        path: &str,
+        symbol: &SymbolRef,
+    ) -> Result<Vec<ReferenceRecord>, ScippyError> {
+        Ok(self
+            .references(ReferenceQuery {
+                path: Some(path.to_owned()),
+                outcome: Some(OutcomeKind::Ambiguous),
+            })?
+            .into_iter()
+            .filter(|r| matches!(&r.outcome, Outcome::Ambiguous(c) if c.contains(symbol)))
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::*;
+    use crate::tests::{layer, publish, rich};
+
+    #[test]
+    fn references_at_and_ambiguous_with_read_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut layer = layer(dir.path());
+        publish(&mut layer, &rich());
+        let view = layer.view().unwrap().unwrap();
+        let at = view.references_at("a.py", (14, 15)).unwrap().unwrap();
+        assert_eq!(at.outcome, Outcome::Resolved(SymbolRef::global("g f().")));
+        assert!(view.references_at("a.py", (14, 16)).unwrap().is_none());
+        assert!(view.references_at("b.py", (14, 15)).unwrap().is_none());
+
+        let ambiguous = view
+            .ambiguous_with("a.py", &SymbolRef::global("g ext."))
+            .unwrap();
+        assert_eq!(ambiguous.len(), 1);
+        assert_eq!(ambiguous[0].span, (44, 45));
+        assert!(
+            view.ambiguous_with("a.py", &SymbolRef::global("g f()."))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            view.ambiguous_with("b.py", &SymbolRef::global("g ext."))
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 

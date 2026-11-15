@@ -1,0 +1,97 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "explain",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<tmp>/scratch/explain-edited.dir/project",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 6,
+  "value": {
+    "file": {
+      "path": "pkg/child.py",
+      "status": "indexed",
+      "reason": null,
+      "pack": "python",
+      "language": "Python",
+      "sha256": "01449e6d24ab78886f3ef4d79c031c050d42fd7798c3dbd76c1a2a364f317f96",
+      "size": 260,
+      "stale": false
+    },
+    "target": {
+      "symbol": "scippy python demo . pkg/base/Base#",
+      "file": null,
+      "kind": "Class",
+      "display_name": "Base",
+      "external": false,
+      "defined_in": "pkg/base.py"
+    },
+    "source": "changed",
+    "relations": [
+      {
+        "kind": "import",
+        "supports": 1,
+        "limited": 0
+      },
+      {
+        "kind": "use",
+        "supports": 1,
+        "limited": 0
+      }
+    ],
+    "supports": [
+      {
+        "kind": "import",
+        "span": [
+          33,
+          37
+        ],
+        "limited": null,
+        "line": null,
+        "column": null,
+        "reference": {
+          "kind": "plain",
+          "outcome": "resolved",
+          "reason": null,
+          "limited": null,
+          "candidates": []
+        }
+      },
+      {
+        "kind": "use",
+        "span": [
+          163,
+          167
+        ],
+        "limited": null,
+        "line": null,
+        "column": null,
+        "reference": {
+          "kind": "plain",
+          "outcome": "resolved",
+          "reason": null,
+          "limited": null,
+          "candidates": []
+        }
+      }
+    ],
+    "ambiguous": [],
+    "unresolved_in_file": null
+  }
+}

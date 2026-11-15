@@ -2,6 +2,101 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scippy.invalid/schema/metalayer-v1/explain.value.json",
   "title": "The value of `metalayer explain`",
-  "description": "A stub. The lane that builds the command replaces this file.",
-  "type": "object"
+  "description": "Why file F depends on symbol S. `line` and `column` are 1-based. The column counts characters. They are null when `source` is not `ok`. `unresolved_in_file` is a count when there is no relation, and null otherwise.",
+  "type": "object",
+  "required": ["file", "target", "source", "relations", "supports", "ambiguous", "unresolved_in_file"],
+  "properties": {
+    "file": {
+      "type": "object",
+      "required": ["path", "status", "reason", "pack", "language", "sha256", "size", "stale"],
+      "properties": {
+        "path": {"type": "string"},
+        "status": {"type": "string", "examples": ["indexed", "skipped", "failed", "shadowed"]},
+        "reason": {"type": ["string", "null"]},
+        "pack": {"type": ["string", "null"]},
+        "language": {"type": ["string", "null"]},
+        "sha256": {"type": ["string", "null"]},
+        "size": {"type": ["integer", "null"], "minimum": 0},
+        "stale": {"type": "boolean"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["symbol", "file", "kind", "display_name", "external", "defined_in"],
+      "properties": {
+        "symbol": {"type": "string"},
+        "file": {"type": ["string", "null"], "description": "The file of a local symbol, otherwise null."},
+        "kind": {"type": "string", "examples": ["Class", "Function", "Module", "Unspecified"]},
+        "display_name": {"type": "string"},
+        "external": {"type": "boolean"},
+        "defined_in": {"type": ["string", "null"]}
+      }
+    },
+    "source": {
+      "description": "Whether the file on disk has the stored hash.",
+      "type": "string",
+      "examples": ["ok", "changed", "missing"]
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "supports", "limited"],
+        "properties": {
+          "kind": {"type": "string", "examples": ["import", "use", "link", "embed"]},
+          "supports": {"type": "integer", "minimum": 0},
+          "limited": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "supports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "span", "limited", "line", "column", "reference"],
+        "properties": {
+          "kind": {"type": "string", "examples": ["import", "use", "link", "embed"]},
+          "span": {"$ref": "../metalayer-v1.schema.json#/$defs/span"},
+          "limited": {"type": ["string", "null"], "examples": ["work", "queue-length", "arena-cells", "failed"]},
+          "line": {"type": ["integer", "null"], "minimum": 1},
+          "column": {"type": ["integer", "null"], "minimum": 1},
+          "reference": {
+            "description": "The reference at the same span, or null for a support that is not a reference.",
+            "oneOf": [{"type": "null"}, {"$ref": "#/$defs/reference"}]
+          }
+        }
+      }
+    },
+    "ambiguous": {
+      "description": "The ambiguous references in the file that list the target as a candidate.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["span", "line", "column", "reference"],
+        "properties": {
+          "span": {"$ref": "../metalayer-v1.schema.json#/$defs/span"},
+          "line": {"type": ["integer", "null"], "minimum": 1},
+          "column": {"type": ["integer", "null"], "minimum": 1},
+          "reference": {"$ref": "#/$defs/reference"}
+        }
+      }
+    },
+    "unresolved_in_file": {"type": ["integer", "null"], "minimum": 0}
+  },
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "required": ["kind", "outcome", "reason", "limited", "candidates"],
+      "properties": {
+        "kind": {"type": ["string", "null"], "examples": ["plain", "member", "keyword"]},
+        "outcome": {"type": "string", "examples": ["resolved", "ambiguous", "unresolved", "bounded"]},
+        "reason": {"type": ["string", "null"]},
+        "limited": {"type": ["string", "null"], "examples": ["work", "queue-length", "arena-cells", "failed"]},
+        "candidates": {
+          "type": "array",
+          "items": {"$ref": "../metalayer-v1.schema.json#/$defs/symbol"}
+        }
+      }
+    }
+  }
 }

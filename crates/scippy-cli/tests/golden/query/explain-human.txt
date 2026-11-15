@@ -1,0 +1,5 @@
+pkg/child.py  depends on  scippy python demo . pkg/base/Base#  Class Base  defined in pkg/base.py
+relation  import  x1  limited 0
+relation  use  x1  limited 0
+  pkg/child.py:3:22  import  [plain resolved]
+  pkg/child.py:12:13  use  [plain resolved]

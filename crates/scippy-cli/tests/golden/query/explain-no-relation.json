@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "explain",
+  "ok": true,
+  "revision": {
+    "id": 1,
+    "input_digest": "<input_digest>",
+    "created_at": "<created_at>",
+    "tool_version": "<tool_version>",
+    "scip_sha256": "<scip_sha256>",
+    "scip_size": 0
+  },
+  "root_set": {
+    "key": "<root_key>",
+    "project_root": "<root>",
+    "shards": []
+  },
+  "input_complete": false,
+  "analysis_exact": true,
+  "position_encoding": "utf8-byte",
+  "schema_version": 6,
+  "value": {
+    "file": {
+      "path": "notes/index.md",
+      "status": "indexed",
+      "reason": null,
+      "pack": "loci",
+      "language": "Markdown",
+      "sha256": "f747dd93d77b4214acbccc0f079646ffe742ccb106df99698399b4866e0093b9",
+      "size": 204,
+      "stale": false
+    },
+    "target": {
+      "symbol": "scippy python demo . pkg/base/Base#",
+      "file": null,
+      "kind": "Class",
+      "display_name": "Base",
+      "external": false,
+      "defined_in": "pkg/base.py"
+    },
+    "source": "ok",
+    "relations": [],
+    "supports": [],
+    "ambiguous": [],
+    "unresolved_in_file": 2
+  }
+}
