@@ -74,6 +74,9 @@ pub struct IndexRequest {
     pub memory_budget: u64,
     /// Reuse file graphs from this disposable SQLite cache.
     pub graph_cache: Option<PathBuf>,
+    /// The cache file keeps under this many bytes. After a run, the cache deletes its least
+    /// recently used rows to fit. Zero means no cap.
+    pub graph_cache_max_bytes: u64,
     /// How long a cache query waits for a locked cache file. A timeout turns the cache off.
     pub graph_cache_timeout: std::time::Duration,
     /// Limits for the work of the search for each reference. A bounded search has no target.
@@ -94,6 +97,7 @@ impl IndexRequest {
             jobs: schedule::default_jobs(),
             memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
             graph_cache: None,
+            graph_cache_max_bytes: cache::DEFAULT_MAX_BYTES,
             graph_cache_timeout: std::time::Duration::from_secs(30),
             resolve_limits: ResolveLimits::default(),
         }

@@ -122,6 +122,7 @@ pub(crate) fn run(
     let cache = Arc::new(CacheGate::new(
         request.graph_cache.as_deref(),
         request.graph_cache_timeout,
+        request.graph_cache_max_bytes,
     ));
     let mut report = IndexReport {
         files_discovered: found.files_discovered,

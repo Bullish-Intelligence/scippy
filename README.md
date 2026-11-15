@@ -37,9 +37,17 @@ scippy index PROJECT_ROOT --output index.scip \
   --metalayer ~/.local/state/scippy/metalayer.sqlite
 ```
 
-The graph cache stores each code file's stack graph and partial paths. The cache key covers the
-source, path, resolver settings, dialect, and executable. A new executable gets a new cache.
-The cache is disposable. It can grow until the user deletes it.
+The graph cache stores each code file's stack graph and partial paths. A row holds the graph in
+the `bincode` format, compressed with `zstd`. The cache key covers the
+source, path, resolver settings, dialect, and executable. A new executable gets a new cache:
+a run deletes the rows of other executables when it opens the file, so two executables must not
+share one cache file. The cache is disposable.
+The file uses the SQLite WAL mode and the `NORMAL` sync mode. A power loss can lose the newest
+rows, and the cache then rebuilds them.
+Each row records the run that last used it. After a run, if the file exceeds the cap, the cache
+deletes the least recently used rows and returns the pages to the file system.
+`--graph-cache-max-bytes` sets the cap. The default is 1G. Zero means no cap.
+A cap smaller than the rows that one run needs makes each run rebuild some graphs.
 Each row carries a checksum of its key and value. A row that fails the check is rebuilt.
 A cache error turns the cache off for the rest of the run. The run prints one warning and goes on
 without the cache. A damaged cache file moves to `<path>.bad`.

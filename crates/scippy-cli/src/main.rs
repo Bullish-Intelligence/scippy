@@ -64,6 +64,10 @@ struct IndexArgs {
     /// Reuse file graphs in this SQLite database.
     #[arg(long)]
     graph_cache: Option<PathBuf>,
+    /// Keep the graph cache file under this size, such as `1G` or `512M`. After a run, the cache
+    /// deletes its least recently used rows to fit. Zero means no cap. The default is 1G.
+    #[arg(long, value_parser = parse_size)]
+    graph_cache_max_bytes: Option<u64>,
     /// Publish the analysis to this metalayer SQLite database.
     #[arg(long)]
     metalayer: Option<PathBuf>,
@@ -204,6 +208,7 @@ fn main() -> ExitCode {
                 jobs,
                 memory_budget,
                 graph_cache,
+                graph_cache_max_bytes,
                 metalayer,
                 strict,
                 replace_root_set,
@@ -227,6 +232,9 @@ fn main() -> ExitCode {
             request.trace = trace;
             request.graph_cache = graph_cache;
             request.strict = strict;
+            if let Some(bytes) = graph_cache_max_bytes {
+                request.graph_cache_max_bytes = bytes;
+            }
             if let Some(jobs) = jobs {
                 request.jobs = usize::try_from(jobs).unwrap_or(usize::MAX);
             }
