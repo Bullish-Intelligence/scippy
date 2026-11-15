@@ -31,9 +31,18 @@ pub(crate) const BUILTINS_NAME: &str = "<builtins>";
 ///
 /// The Python rules of the fork at 4738172 add paths for annotations and base classes.
 /// The old limits (30,000 work, 5,000,000 arena cells) stopped about 1,500 more mypy
-/// references than before. These limits bring the count back to the old level.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ResolveLimits {
+/// references than before. The limits of 100,000 work and 20,000,000 arena cells brought
+/// the count back to the old level.
+/// A later measurement (release build, one run each, no cache) found 81 bounded references
+/// in clinch (45 files) and 56 in a 426-file project set (mr). All of them hit the work
+/// limit. No search hit the queue limit or the arena limit, so those two stay as they were.
+/// A work limit of 300,000 removed all 81 in clinch and 50 of 56 in mr.
+/// A work limit of 1,000,000 removed all of them. It raised the peak memory by 8% in clinch
+/// and by 4% in mr, and the wall time did not rise beyond the noise of the runs.
+/// The arena limit is for one search, and `--jobs` searches run at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResolveLimits {
     /// Units of work: one for each path that the search extends, one for each candidate.
     pub max_work: usize,
     /// Paths that wait for extension.
@@ -45,7 +54,7 @@ pub(crate) struct ResolveLimits {
 impl Default for ResolveLimits {
     fn default() -> Self {
         Self {
-            max_work: 100_000,
+            max_work: 1_000_000,
             max_queue_len: 2_000,
             max_arena_cells: 20_000_000,
         }
@@ -420,6 +429,8 @@ impl BindingEngine {
         Ok(())
     }
 
+    // The minimal partial paths of a file use no `ResolveLimits`, so the limits stay out of
+    // the cache key. A change of the limits cannot make a cached file stale.
     fn add_partial_paths(&mut self, file: Handle<File>) -> Option<Vec<PartialPath>> {
         let mut paths: Vec<PartialPath> = Vec::new();
         let result = ForwardPartialPathStitcher::find_minimal_partial_path_set_in_file(

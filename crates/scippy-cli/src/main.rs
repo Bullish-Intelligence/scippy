@@ -66,6 +66,17 @@ struct IndexArgs {
     /// Publish an experimental metalayer snapshot to this SQLite database.
     #[arg(long)]
     metalayer: Option<PathBuf>,
+    /// Stop the search for one reference after this many units of work. The reference has no
+    /// target. The default is in `ResolveLimits`.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    max_work: Option<u64>,
+    /// Stop the search for one reference when this many paths wait for extension.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    max_queue_len: Option<u64>,
+    /// Stop the search for one reference after it adds this many cells to the path arenas.
+    /// This bounds the memory of one search. Each of `--jobs` shards runs one search at a time.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    max_arena_cells: Option<u64>,
 }
 
 /// Read a size such as `8G`, `512M`, `64K`, or a plain number of bytes.
@@ -185,6 +196,9 @@ fn main() -> ExitCode {
                 memory_budget,
                 graph_cache,
                 metalayer,
+                max_work,
+                max_queue_len,
+                max_arena_cells,
             } = *args;
             // A pack that is active for the project can suggest limits. A flag wins over it.
             let suggested = registry()
@@ -203,6 +217,16 @@ fn main() -> ExitCode {
             request.graph_cache = graph_cache;
             if let Some(jobs) = jobs {
                 request.jobs = usize::try_from(jobs).unwrap_or(usize::MAX);
+            }
+            let to_usize = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+            if let Some(n) = max_work {
+                request.resolve_limits.max_work = to_usize(n);
+            }
+            if let Some(n) = max_queue_len {
+                request.resolve_limits.max_queue_len = to_usize(n);
+            }
+            if let Some(n) = max_arena_cells {
+                request.resolve_limits.max_arena_cells = to_usize(n);
             }
             if let Some(bytes) = memory_budget {
                 request.memory_budget = bytes;
@@ -253,6 +277,11 @@ fn main() -> ExitCode {
                         m.ambiguous,
                         m.unresolved,
                         m.bounded
+                    );
+                    let b = &report.bounded_by_kind;
+                    println!(
+                        "bounded by kind: work {}, queue-length {}, arena-cells {}, failed {}",
+                        b.work, b.queue_length, b.arena_cells, b.failed
                     );
                     for (reason, n) in &report.unresolved_reasons {
                         println!("unresolved {reason}: {n}");

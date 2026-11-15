@@ -33,6 +33,7 @@ pub use snapshot::{
     AnalysisSymbol, INCOMPLETE_CODES, Metalayer, PublishedView, ReferenceOutcome,
 };
 
+pub use bindings::ResolveLimits;
 pub use emit::{SymbolKind, write_scip};
 pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
@@ -44,7 +45,7 @@ pub use language::{
     SupportFile, VirtualSymbol, WalkRules,
 };
 pub use project::{InputLimits, ProjectRelativePath};
-pub use report::{Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
+pub use report::{BoundedCounts, Diagnostic, IndexReport, MultiTargetStats, Severity, Stage};
 
 use std::path::PathBuf;
 
@@ -72,6 +73,9 @@ pub struct IndexRequest {
     pub graph_cache: Option<PathBuf>,
     /// How long a cache query waits for a locked cache file. A timeout turns the cache off.
     pub graph_cache_timeout: std::time::Duration,
+    /// Limits for the work of the search for each reference. A bounded search has no target.
+    /// They do not change the graph cache.
+    pub resolve_limits: ResolveLimits,
 }
 
 impl IndexRequest {
@@ -88,6 +92,7 @@ impl IndexRequest {
             memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
             graph_cache: None,
             graph_cache_timeout: std::time::Duration::from_secs(30),
+            resolve_limits: ResolveLimits::default(),
         }
     }
 }

@@ -83,6 +83,19 @@ pub struct MultiTargetStats {
     pub bounded: usize,
 }
 
+/// Reference locations that a bound stopped, by kind of bound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoundedCounts {
+    /// The search used all of `max_work`.
+    pub work: usize,
+    /// The queue of paths grew over `max_queue_len`.
+    pub queue_length: usize,
+    /// The search added more than `max_arena_cells` cells to the path arenas.
+    pub arena_cells: usize,
+    /// The search failed or panicked.
+    pub failed: usize,
+}
+
 /// Counts and diagnostics from one indexing run.
 ///
 /// The reference counts are per unique location in a document.
@@ -112,6 +125,8 @@ pub struct IndexReport {
     pub references_ambiguous: usize,
     /// References whose search hit a work bound. They have no target.
     pub references_bounded: usize,
+    /// The bounded references by kind of bound. The counts add up to `references_bounded`.
+    pub bounded_by_kind: BoundedCounts,
     /// Why the unresolved references have no target, by stable reason code.
     pub unresolved_reasons: BTreeMap<&'static str, usize>,
     /// The `syntax_type` of the resolver ends that joined no declaration, with counts.

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::IndexRequest;
-use crate::bindings::{BindingEngine, CompiledRules, Place, RawBinding, RawEnd, ResolveLimits};
+use crate::bindings::{BindingEngine, Bound, CompiledRules, Place, RawBinding, RawEnd};
 use crate::cache::CacheGate;
 use crate::emit::{self, Document, IndexData, Occurrence, Role, SymbolInfo};
 use crate::error::ScippyError;
@@ -640,7 +640,7 @@ fn index_shard(
     }
     report.graph_cache_hits = engine.cache_hits;
     report.graph_cache_misses = engine.cache_misses;
-    let bindings = engine.resolve(ResolveLimits::default());
+    let bindings = engine.resolve(cx.request.resolve_limits);
     Ok(ShardOutput {
         docs,
         bindings,
@@ -1532,8 +1532,15 @@ fn count(report: &mut IndexReport, r: &Reconciled) {
                 stats.unresolved += 1;
             }
         }
-        BindingOutcome::Bounded(_) => {
+        BindingOutcome::Bounded(bound) => {
             report.references_bounded += 1;
+            let kinds = &mut report.bounded_by_kind;
+            match bound {
+                Bound::Work => kinds.work += 1,
+                Bound::QueueLength => kinds.queue_length += 1,
+                Bound::ArenaCells => kinds.arena_cells += 1,
+                Bound::Failed => kinds.failed += 1,
+            }
             if multi {
                 stats.bounded += 1;
             }
