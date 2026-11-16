@@ -783,3 +783,168 @@ fn end_of(
         echo,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::language::{Builtins, ExternalAsset};
+
+    /// A tiny rule set. Each file defines one symbol, named as the file, and joins it to the root.
+    const TSG: &str = r#"global FILE_PATH
+global ROOT_NODE
+(module) @m {
+  node def
+  attr (def) type = "pop_symbol", symbol = FILE_PATH, is_definition, source_node = @m
+  edge ROOT_NODE -> def
+}
+"#;
+
+    fn rules(prebuilt: Option<&'static [u8]>) -> BindingRules {
+        BindingRules {
+            tsg_path: "test.tsg",
+            tsg_source: TSG,
+            builtins: Some(Builtins {
+                path: "builtins.py",
+                source: "x = 1\n",
+            }),
+            assets: vec![ExternalAsset {
+                name: "stub.py".to_string(),
+                path: "stub.py",
+                source: "y = 2\n",
+                globals: Vec::new(),
+            }],
+            shadow_aware_similar_paths: true,
+            prebuilt_assets: prebuilt,
+        }
+    }
+
+    /// Start an engine. Return it with the partial paths that it built itself. The list is empty
+    /// when the engine loaded a blob.
+    fn start(rules: &BindingRules) -> (BindingEngine, Vec<PartialPath>) {
+        let dialects = vec![DialectRules::new(
+            tree_sitter_python::LANGUAGE.into(),
+            rules.tsg_path,
+            rules.tsg_source,
+        )];
+        let compiled = CompiledRules {
+            dialects: Rc::new(dialects),
+        };
+        let gate = Arc::new(CacheGate::new(
+            None,
+            std::path::Path::new("."),
+            std::time::Duration::ZERO,
+            0,
+        ));
+        BindingEngine::start("test", None, rules, &compiled, &gate, true)
+            .expect("the engine starts")
+    }
+
+    /// The facts of an engine that must not depend on the way it got its assets.
+    fn facts(engine: &BindingEngine) -> (BTreeSet<String>, BTreeSet<String>, usize, usize) {
+        let symbols = engine
+            .graph
+            .iter_symbols()
+            .map(|s| engine.graph[s].to_string())
+            .collect();
+        let external = engine.external.iter().cloned().collect();
+        let nodes = engine.graph.iter_nodes().count();
+        let paths = engine.database.iter_partial_paths().count();
+        (symbols, external, nodes, paths)
+    }
+
+    fn leak(bytes: Vec<u8>) -> &'static [u8] {
+        Box::leak(bytes.into_boxed_slice())
+    }
+
+    fn blob() -> Vec<u8> {
+        prebuild_assets(tree_sitter_python::LANGUAGE.into(), &rules(None)).expect("the blob builds")
+    }
+
+    #[test]
+    fn a_blob_that_matches_the_key_loads() {
+        let (built, built_paths) = start(&rules(None));
+        assert_eq!(built_paths.len(), 2);
+        let (loaded, loaded_paths) = start(&rules(Some(leak(blob()))));
+        // The engine built nothing itself: it loaded the blob.
+        assert!(loaded_paths.is_empty());
+        assert_eq!(facts(&loaded), facts(&built));
+        assert!(facts(&loaded).0.contains("<builtins>"));
+        assert!(facts(&loaded).0.contains("stub.py"));
+    }
+
+    /// An engine with an empty graph, for a call to `load_prebuilt`.
+    fn empty_engine() -> BindingEngine {
+        BindingEngine {
+            pack: "test",
+            cache_key: None,
+            languages: Rc::new(Vec::new()),
+            graph: StackGraph::new(),
+            partials: PartialPaths::new(),
+            database: Database::new(),
+            files: Vec::new(),
+            external: HashSet::new(),
+            shadow_aware: true,
+            cache: None,
+            gate: Arc::new(CacheGate::new(
+                None,
+                std::path::Path::new("."),
+                std::time::Duration::ZERO,
+                0,
+            )),
+            cache_hits: 0,
+            cache_misses: 0,
+        }
+    }
+
+    /// Check that the engine rejects the blob, then falls back to the same result as a build.
+    fn assert_falls_back(blob: Vec<u8>) {
+        let (built, _) = start(&rules(None));
+        let rules = rules(Some(leak(blob)));
+        let rejected = empty_engine().load_prebuilt(&rules, rules.prebuilt_assets.unwrap());
+        assert!(rejected.is_err(), "the blob must not load");
+        let (fallback, paths) = start(&rules);
+        assert_eq!(paths.len(), 2, "the engine builds the assets itself");
+        assert_eq!(facts(&fallback), facts(&built));
+    }
+
+    #[test]
+    fn a_blob_with_a_wrong_key_falls_back_to_the_build() {
+        let mut bad = blob();
+        bad[0] = if bad[0] == b'0' { b'1' } else { b'0' };
+        assert_falls_back(bad);
+    }
+
+    #[test]
+    fn a_blob_from_other_rules_falls_back_to_the_build() {
+        let mut other = rules(None);
+        other.builtins = Some(Builtins {
+            path: "builtins.py",
+            source: "z = 3\n",
+        });
+        let blob = prebuild_assets(tree_sitter_python::LANGUAGE.into(), &other).unwrap();
+        assert_falls_back(blob);
+    }
+
+    #[test]
+    fn a_truncated_blob_falls_back_to_the_build() {
+        let good = blob();
+        let key = assets_key(&rules(None)).len();
+        assert_falls_back(good[..key + (good.len() - key) / 2].to_vec());
+        assert_falls_back(good[..key].to_vec());
+        assert_falls_back(good[..key / 2].to_vec());
+        assert_falls_back(Vec::new());
+    }
+
+    #[test]
+    fn a_blob_with_a_corrupt_body_falls_back_to_the_build() {
+        let key = assets_key(&rules(None));
+        let mut junk = key.clone().into_bytes();
+        junk.extend_from_slice(b"not a compressed graph");
+        assert_falls_back(junk);
+        let mut flipped = blob();
+        for byte in &mut flipped[key.len()..] {
+            *byte ^= 0xff;
+        }
+        assert_falls_back(flipped);
+    }
+}

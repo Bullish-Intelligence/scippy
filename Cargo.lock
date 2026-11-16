@@ -1552,6 +1552,7 @@ dependencies = [
  "streaming-iterator",
  "tempfile",
  "tree-sitter",
+ "tree-sitter-python",
  "tree-sitter-stack-graphs",
  "zstd",
 ]
