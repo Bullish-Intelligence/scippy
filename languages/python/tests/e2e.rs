@@ -1199,6 +1199,40 @@ def outer(a, b):
     assert_eq!(indexed.report.references_ambiguous, 0);
 }
 
+#[test]
+fn a_lambda_parameter_is_a_local_symbol_of_its_own() {
+    let text = "\
+def outer(z, a):
+    f = lambda z: z + a
+    g = lambda z: z * 2
+    return f, g
+";
+    let (_scratch, indexed) = index_files(&[("use.py", text)]);
+    let outer_z = global("use/outer().(z)");
+    // The parameter of `outer` keeps its global symbol.
+    assert_eq!(indexed.find("use.py", "outer(z", "z")[0].symbol, outer_z);
+    // The parameter of each lambda is a local symbol. Definition and use share it.
+    let first = indexed.find("use.py", "lambda z", "z")[0].symbol.clone();
+    assert!(first.starts_with("local "), "{first}");
+    assert_eq!(indexed.symbols_of("use.py", "z + a", "z"), [first.as_str()]);
+    // The two lambdas do not share one symbol. `outer` does not hold either one.
+    let second = indexed.find("use.py", "lambda z: z * 2", "z")[0]
+        .symbol
+        .clone();
+    assert!(second.starts_with("local "), "{second}");
+    assert_ne!(first, second);
+    assert_eq!(
+        indexed.symbols_of("use.py", "z * 2", "z"),
+        [second.as_str()]
+    );
+    // The body still sees a parameter of the enclosing function.
+    assert_eq!(
+        indexed.symbols_of("use.py", "z + a", "a"),
+        [global("use/outer().(a)")]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.

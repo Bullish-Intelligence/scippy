@@ -10,6 +10,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `scippy metalayer check` takes `--project-root`. The old `--root` stays as a hidden alias.
 - Metalayer facts schema version 9: the unused `root_id` column is gone. Older facts databases rebuild on open.
 
+### Fixed
+
+- A lambda parameter is a local symbol of its own, not the parameter symbol of the enclosing function (item 32).
+
 ## [0.1.0] - 2026-11-16
 
 ### Added

@@ -51,8 +51,6 @@ Exit codes of `scippy index`: 0 complete, 3 finished but incomplete, 1 failure, 
 The architecture notes list the open items (`SCIPPY_ARCHITECTURE.md`, section 11, in the notes
 project, through the `.loci` link):
 
-- Fork item 32: a lambda parameter shares the parameter symbol of its enclosing function
-  (section 11.5, open items).
 - A whole-string annotation such as `"Optional[Foo]"` is not followed. `Optional["Foo"]` is
   (fork item 31, section 11.1).
 - `a.b.c` chains need a type for the receiver. Pack rules follow written annotations only (ADR-009).

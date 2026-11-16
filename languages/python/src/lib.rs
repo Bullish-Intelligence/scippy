@@ -51,8 +51,7 @@
 //! descriptor, as in `scip-python`. A keyword argument names it from another document:
 //! `f(name=1)` references `module/f().(name)`. `self` and `cls` are parameters like the others.
 //! A parameter of a function that another function holds is local. No other document can call
-//! that function. A parameter of a lambda gets the identity that the nearest function gives
-//! it, because the query does not see lambdas as containers.
+//! that function. A lambda is an anonymous scope. Its parameters are local.
 //!
 //! A variable that rebinds a parameter of its own function, as in `size = max(size, 1)`, is that
 //! parameter. It has the symbol of the parameter and a definition occurrence. This keeps the
@@ -657,6 +656,11 @@ impl PythonModel {
     }
 }
 
+/// An anonymous scope has a name that starts with `@`, followed by a byte offset.
+fn is_anonymous(scope: &Scope) -> bool {
+    scope.name.starts_with('@')
+}
+
 /// The identity of a declaration below the given module descriptors.
 fn describe(
     module_descriptors: Vec<Descriptor>,
@@ -668,7 +672,10 @@ fn describe(
 
     // A function that no other function holds can be called from another document.
     // Its parameters get global symbols, so that a keyword argument can name one.
-    let function_is_global = scopes.last().is_some_and(|s| s.kind == DeclKind::Function)
+    // A lambda is a function without a name. No other document can call it.
+    let function_is_global = scopes
+        .last()
+        .is_some_and(|s| s.kind == DeclKind::Function && !is_anonymous(s))
         && !scopes[..scopes.len() - 1]
             .iter()
             .any(|s| s.kind == DeclKind::Function);

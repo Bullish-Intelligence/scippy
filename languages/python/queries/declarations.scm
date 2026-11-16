@@ -177,3 +177,6 @@
      (attribute attribute: (identifier) @supertype)
      (subscript value: (identifier) @supertype)
      (subscript value: (attribute attribute: (identifier) @supertype))]))
+
+; A lambda holds its parameters. It has no name, so it is an anonymous scope.
+(lambda) @scope
