@@ -10,13 +10,18 @@
 //! Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots.
 
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 use protobuf::Message;
 use scip::types::{Index, Occurrence, SymbolRole};
 use scippy_core::{IndexReport, IndexRequest, InputLimits, Severity, index_project};
 use scippy_python::PythonPack;
+
+#[path = "../../../test-support/shared_cache.rs"]
+mod shared_cache;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
@@ -26,12 +31,31 @@ fn fixture(name: &str) -> PathBuf {
     Path::new(FIXTURES).join(name)
 }
 
-struct Indexed {
+/// A parsed index that the tests only read.
+struct Cached {
     root: PathBuf,
-    _scratch: tempfile::TempDir,
     path: PathBuf,
-    report: IndexReport,
     index: Index,
+}
+
+/// An index that this test made itself. It adds the report of the run.
+struct Indexed {
+    _scratch: tempfile::TempDir,
+    report: IndexReport,
+    view: Cached,
+}
+
+impl Deref for Indexed {
+    type Target = Cached;
+    fn deref(&self) -> &Cached {
+        &self.view
+    }
+}
+
+impl DerefMut for Indexed {
+    fn deref_mut(&mut self) -> &mut Cached {
+        &mut self.view
+    }
 }
 
 fn index_at(root: &Path) -> Indexed {
@@ -45,11 +69,13 @@ fn index_with(mut request: IndexRequest) -> Indexed {
     let report = index_project(&request, &[&PythonPack]).unwrap();
     let index = Index::parse_from_bytes(&fs::read(&path).unwrap()).unwrap();
     Indexed {
-        root: request.root,
         _scratch: scratch,
-        path,
         report,
-        index,
+        view: Cached {
+            root: request.root,
+            path,
+            index,
+        },
     }
 }
 
@@ -57,7 +83,27 @@ fn index(name: &str) -> Indexed {
     index_at(&fixture(name))
 }
 
-impl Indexed {
+/// The index of a fixture, shared by all test processes. Use it in a test that reads the index
+/// and the file and does not read the report. The first process that asks for a fixture indexes
+/// it into the target directory, and the others read that file. Nextest runs each test in its
+/// own process, so the index of one fixture would else run once for each test that reads it.
+fn shared(name: &str) -> Cached {
+    static SHARED: OnceLock<shared_cache::Shared> = OnceLock::new();
+    let shared = SHARED.get_or_init(|| {
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("e2e-python");
+        shared_cache::Shared::new(&base, &[Path::new(FIXTURES)])
+    });
+    let root = fixture(name);
+    let path = shared.file(&format!("{name}.scip"), |path| {
+        let mut request = IndexRequest::new(&root, "");
+        request.output = path.to_path_buf();
+        index_project(&request, &[&PythonPack]).unwrap();
+    });
+    let index = Index::parse_from_bytes(&fs::read(&path).unwrap()).unwrap();
+    Cached { root, path, index }
+}
+
+impl Cached {
     fn document(&self, path: &str) -> Option<&scip::types::Document> {
         self.index
             .documents
@@ -180,7 +226,7 @@ fn an_aliased_import_gives_one_symbol_to_the_definition_the_import_and_the_call(
 
 #[test]
 fn a_shadowing_name_never_binds_to_the_outer_definition() {
-    let indexed = index("shadow");
+    let indexed = shared("shadow");
     let outer = global("outer/process().");
     // `process` in other.py resolves to other.py, never to outer.py.
     assert_eq!(
@@ -370,7 +416,7 @@ fn a_member_reference_never_names_a_local_variable() {
 // ---- modules ----
 
 /// The occurrences of a document that carry `symbol`, as `(line, start, end, roles)`.
-fn module_sites(indexed: &Indexed, path: &str, symbol: &str) -> Vec<(i32, i32, i32, i32)> {
+fn module_sites(indexed: &Cached, path: &str, symbol: &str) -> Vec<(i32, i32, i32, i32)> {
     indexed
         .document(path)
         .unwrap()
@@ -388,7 +434,7 @@ fn module_sites(indexed: &Indexed, path: &str, symbol: &str) -> Vec<(i32, i32, i
 
 #[test]
 fn every_document_defines_its_module_at_the_start() {
-    let indexed = index("modules");
+    let indexed = shared("modules");
     let definition = SymbolRole::Definition as i32;
     for (path, module) in [
         ("app.py", "app/"),
@@ -519,7 +565,7 @@ fn a_module_does_not_make_a_name_ambiguous() {
 // ---- override relationships ----
 
 /// The `is_implementation` targets of a symbol, from its symbol information.
-fn implements(indexed: &Indexed, path: &str, symbol: &str) -> Vec<String> {
+fn implements(indexed: &Cached, path: &str, symbol: &str) -> Vec<String> {
     let info = indexed
         .document(path)
         .unwrap()
@@ -541,7 +587,7 @@ fn implements(indexed: &Indexed, path: &str, symbol: &str) -> Vec<String> {
 
 #[test]
 fn an_override_implements_the_method_that_it_shadows() {
-    let indexed = index("overrides");
+    let indexed = shared("overrides");
     let at = |symbol: &str| implements(&indexed, "child.py", &global(symbol));
     // The base class comes through an alias in the import: `Child(Root)`.
     assert_eq!(at("child/Child#run()."), [global("base/Base#run().")]);
@@ -569,7 +615,7 @@ fn an_override_implements_the_method_that_it_shadows() {
 #[test]
 fn an_override_may_implement_a_method_of_a_later_document() {
     // `a_child.py` sorts before `z_base.py`, and the base class lives in `z_base.py`.
-    let indexed = index("overrides_later");
+    let indexed = shared("overrides_later");
     let paths: Vec<&str> = indexed
         .index
         .documents
@@ -670,7 +716,7 @@ fn a_project_module_named_typing_wins_over_the_stub() {
 
 #[test]
 fn a_parameter_of_a_global_function_has_a_global_symbol() {
-    let indexed = index("params");
+    let indexed = shared("params");
     let at = |context, word| indexed.symbols_of("lib.py", context, word);
     let found = indexed.find("lib.py", "def make(width", "width");
     assert_eq!(found.len(), 1);
@@ -748,7 +794,7 @@ fn a_keyword_argument_names_the_parameter_in_another_document() {
 
 #[test]
 fn a_keyword_argument_names_a_field_of_a_synthesized_init() {
-    let indexed = index("synth");
+    let indexed = shared("synth");
     let at = |context, word| indexed.symbols_of("use.py", context, word);
     assert_eq!(at("Point(x=1", "x"), [global("lib/Point#x.")]);
     assert_eq!(at("y=2", "y"), [global("lib/Point#y.")]);
@@ -760,7 +806,7 @@ fn a_keyword_argument_names_a_field_of_a_synthesized_init() {
 
 #[test]
 fn a_keyword_argument_names_a_field_of_a_model_class_or_a_typeddict() {
-    let indexed = index("synth");
+    let indexed = shared("synth");
     let at = |context, word| indexed.symbols_of("use.py", context, word);
     assert_eq!(at("Model(title", "title"), [global("lib/Model#title.")]);
     // A model class takes the fields of its model base classes.
@@ -781,7 +827,7 @@ fn a_keyword_argument_names_a_field_of_a_model_class_or_a_typeddict() {
 
 #[test]
 fn a_global_name_resolves_to_the_module_binding() {
-    let indexed = index("synth");
+    let indexed = shared("synth");
     let at = |context, word| indexed.symbols_of("use.py", context, word);
     let count = global("use/count.");
     assert_eq!(at("global count", "count"), [count.as_str()]);
@@ -796,7 +842,7 @@ fn a_global_name_resolves_to_the_module_binding() {
 
 #[test]
 fn a_type_parameter_binds_in_its_own_scope() {
-    let indexed = index("syntax");
+    let indexed = shared("syntax");
     let at = |context, word| indexed.find("generic.py", context, word);
     let declared = at("class Box[T", "T");
     assert_eq!(declared.len(), 1);
@@ -827,7 +873,7 @@ fn a_type_parameter_binds_in_its_own_scope() {
 
 #[test]
 fn a_type_alias_is_a_definition() {
-    let indexed = index("syntax");
+    let indexed = shared("syntax");
     let at = |context, word| indexed.find("generic.py", context, word);
     let defined = at("type Alias", "Alias");
     assert_eq!(defined.len(), 1);
@@ -839,7 +885,7 @@ fn a_type_alias_is_a_definition() {
 
 #[test]
 fn an_assignment_expression_binds_in_the_enclosing_function() {
-    let indexed = index("syntax");
+    let indexed = shared("syntax");
     let at = |context, word| indexed.find("walrus.py", context, word);
     let defined = at("(found :=", "found");
     assert_eq!(defined.len(), 1);
@@ -854,7 +900,7 @@ fn an_assignment_expression_binds_in_the_enclosing_function() {
 
 #[test]
 fn a_match_statement_binds_captures_and_references_its_names() {
-    let indexed = index("syntax");
+    let indexed = shared("syntax");
     let at = |context: &str, word: &str| indexed.find("match.py", context, word);
     let symbol = |context: &str, word: &str| {
         let found = at(context, word);
@@ -1008,7 +1054,7 @@ def store(item, value):
 
 #[test]
 fn a_relative_import_with_three_dots_resolves() {
-    let indexed = index("syntax");
+    let indexed = shared("syntax");
     let at = |context, word| indexed.find("pkg/sub/deep/mod.py", context, word);
     let limit = global("pkg/top/LIMIT.");
     assert!(
@@ -1039,7 +1085,7 @@ fn an_assignment_to_a_self_attribute_is_one_definition() {
 
 #[test]
 fn an_assignment_to_an_attribute_of_another_value_is_a_reference() {
-    let indexed = index("assign");
+    let indexed = shared("assign");
     let at = |context, word| indexed.find("child.py", context, word);
     // The receiver decides the target: the field of the class of the value.
     let child = at("item.size = 5", "size");
@@ -1143,7 +1189,7 @@ fn builtins_resolve_to_external_symbols() {
 
 #[test]
 fn a_local_definition_shadows_the_builtin() {
-    let indexed = index("builtins");
+    let indexed = shared("builtins");
     assert_eq!(
         indexed.symbols_of("own.py", "size = len([])", "len"),
         [global("own/len().")]
@@ -1175,7 +1221,7 @@ fn a_local_definition_shadows_the_builtin() {
 
 #[test]
 fn columns_count_utf8_bytes() {
-    let indexed = index("unicode");
+    let indexed = shared("unicode");
     // `from lib import grüße, 日本`: `grüße` starts at byte 16 and is 7 bytes long.
     let o = indexed.at("use.py", 1, 16);
     assert_eq!(o.len(), 1);
@@ -1238,7 +1284,7 @@ fn a_syntax_error_skips_one_file_and_the_others_still_index() {
 
 #[test]
 fn packages_resolve_across_roots_and_cycles_end() {
-    let indexed = index("packages");
+    let indexed = shared("packages");
     // `from pkg import helper` goes through the re-export in pkg/__init__.py.
     assert_eq!(
         indexed.symbols_of("lib/main.py", "x = helper()", "helper"),
@@ -1269,7 +1315,7 @@ fn packages_resolve_across_roots_and_cycles_end() {
 
 #[test]
 fn the_manifest_names_the_package_and_its_folder_sets_the_import_root() {
-    let indexed = index("src_layout");
+    let indexed = shared("src_layout");
     // `src/demo/ns` has no `__init__.py`. The package folder `src/demo` makes it a namespace
     // package below the import root `src`.
     let symbols = indexed.symbols_of("src/demo/main.py", "f()", "f");
@@ -1404,19 +1450,19 @@ fn the_total_limit_stops_the_run_with_an_error_diagnostic() {
 fn another_checkout_root_changes_only_the_root_uri() {
     let copy = tempfile::tempdir().unwrap();
     copy_dir(&fixture("packages"), copy.path());
-    let normalised = |mut indexed: Indexed| {
+    let normalised = |mut indexed: Cached| {
         let metadata = indexed.index.metadata.as_mut().unwrap();
         metadata.project_root.clear();
         metadata.tool_info.as_mut().unwrap().version.clear();
         indexed.index.write_to_bytes().unwrap()
     };
-    let here = index("packages");
+    let here = shared("packages");
     let there = index_at(copy.path());
     assert_ne!(
         here.index.metadata.project_root,
         there.index.metadata.project_root
     );
-    assert_eq!(normalised(here), normalised(there));
+    assert_eq!(normalised(here), normalised(there.view));
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -1545,7 +1591,7 @@ fn lint_problems(text: &str, index: &Index) -> Vec<String> {
 
 #[test]
 fn the_lint_tolerance_accepts_only_a_defined_relationship_target() {
-    let indexed = index("overrides_later");
+    let indexed = shared("overrides_later");
     let target = global("z_base/Base#run().");
     let line = |target: &str| {
         format!(
@@ -1572,7 +1618,7 @@ fn the_lint_tolerance_accepts_only_a_defined_relationship_target() {
 #[ignore = "slow: runs in opt:slow"]
 fn every_relationship_target_has_symbol_information() {
     for name in SCIP_FIXTURES {
-        let indexed = index(name);
+        let indexed = shared(name);
         let defined = defined_symbols(&indexed.index);
         for document in &indexed.index.documents {
             for info in &document.symbols {
@@ -1594,7 +1640,7 @@ fn every_relationship_target_has_symbol_information() {
 fn scip_lint_accepts_every_fixture_index() {
     let Some(scip) = scip() else { return };
     for name in SCIP_FIXTURES {
-        let indexed = index(name);
+        let indexed = shared(name);
         let output = run(
             &scip,
             &fixture(name),
@@ -1612,7 +1658,7 @@ fn scip_lint_accepts_every_fixture_index() {
 fn scip_test_accepts_the_annotated_sources() {
     let Some(scip) = scip() else { return };
     for name in SCIP_FIXTURES {
-        let indexed = index(name);
+        let indexed = shared(name);
         let mut args = vec![
             "test",
             "--from",
@@ -1656,7 +1702,7 @@ fn scip_snapshot_matches_the_golden_files() {
         ("shadow", &["outer.py", "other.py"][..]),
         ("unicode", &["lib.py", "use.py"][..]),
     ] {
-        let indexed = index(name);
+        let indexed = shared(name);
         let out = scratch.path().join(name);
         let output = run(
             &scip,

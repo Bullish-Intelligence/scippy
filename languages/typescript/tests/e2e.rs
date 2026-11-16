@@ -10,13 +10,18 @@
 //! Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots.
 
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 use protobuf::Message;
 use scip::types::{Index, Occurrence, SymbolRole};
 use scippy_core::{IndexReport, IndexRequest, InputLimits, Severity, index_project};
 use scippy_typescript::TypeScriptPack;
+
+#[path = "../../../test-support/shared_cache.rs"]
+mod shared_cache;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
@@ -26,12 +31,31 @@ fn fixture(name: &str) -> PathBuf {
     Path::new(FIXTURES).join(name)
 }
 
-struct Indexed {
+/// A parsed index that the tests only read.
+struct Cached {
     root: PathBuf,
-    _scratch: tempfile::TempDir,
     path: PathBuf,
-    report: IndexReport,
     index: Index,
+}
+
+/// An index that this test made itself. It adds the report of the run.
+struct Indexed {
+    _scratch: tempfile::TempDir,
+    report: IndexReport,
+    view: Cached,
+}
+
+impl Deref for Indexed {
+    type Target = Cached;
+    fn deref(&self) -> &Cached {
+        &self.view
+    }
+}
+
+impl DerefMut for Indexed {
+    fn deref_mut(&mut self) -> &mut Cached {
+        &mut self.view
+    }
 }
 
 fn index_at(root: &Path) -> Indexed {
@@ -45,11 +69,13 @@ fn index_with(mut request: IndexRequest) -> Indexed {
     let report = index_project(&request, &[&TypeScriptPack]).unwrap();
     let index = Index::parse_from_bytes(&fs::read(&path).unwrap()).unwrap();
     Indexed {
-        root: request.root,
         _scratch: scratch,
-        path,
         report,
-        index,
+        view: Cached {
+            root: request.root,
+            path,
+            index,
+        },
     }
 }
 
@@ -57,7 +83,27 @@ fn index(name: &str) -> Indexed {
     index_at(&fixture(name))
 }
 
-impl Indexed {
+/// The index of a fixture, shared by all test processes. Use it in a test that reads the index
+/// and the file and does not read the report. The first process that asks for a fixture indexes
+/// it into the target directory, and the others read that file. Nextest runs each test in its
+/// own process, so the index of one fixture would else run once for each test that reads it.
+fn shared(name: &str) -> Cached {
+    static SHARED: OnceLock<shared_cache::Shared> = OnceLock::new();
+    let shared = SHARED.get_or_init(|| {
+        let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("e2e-typescript");
+        shared_cache::Shared::new(&base, &[Path::new(FIXTURES)])
+    });
+    let root = fixture(name);
+    let path = shared.file(&format!("{name}.scip"), |path| {
+        let mut request = IndexRequest::new(&root, "");
+        request.output = path.to_path_buf();
+        index_project(&request, &[&TypeScriptPack]).unwrap();
+    });
+    let index = Index::parse_from_bytes(&fs::read(&path).unwrap()).unwrap();
+    Cached { root, path, index }
+}
+
+impl Cached {
     fn document(&self, path: &str) -> Option<&scip::types::Document> {
         self.index
             .documents
@@ -187,7 +233,7 @@ fn an_aliased_import_gives_one_symbol_to_the_definition_the_import_and_the_call(
 
 #[test]
 fn a_shadowing_name_never_binds_to_the_outer_definition() {
-    let indexed = index("shadow");
+    let indexed = shared("shadow");
     let outer = sym("outer.ts", "process().");
     assert_eq!(
         indexed.symbols_of("other.ts", "second = process(", "process"),
@@ -245,7 +291,7 @@ fn ambiguous_names_get_no_target() {
 
 #[test]
 fn imports_resolve_with_js_extensions_directories_and_names_that_end_in_ts_or_js() {
-    let indexed = index("js_extension");
+    let indexed = shared("js_extension");
     let answer = sym("lib/util.ts", "answer.");
     let helper = sym("lib/index.ts", "helper().");
     for context in ["{ answer } from", "{ answer as again }"] {
@@ -280,7 +326,7 @@ fn imports_resolve_with_js_extensions_directories_and_names_that_end_in_ts_or_js
 
 #[test]
 fn barrels_pass_a_name_through_export_star_and_renamed_exports() {
-    let indexed = index("barrels");
+    let indexed = shared("barrels");
     let alpha = sym("core/a.ts", "alpha.");
     let beta = sym("core/a.ts", "beta().");
     assert_eq!(
@@ -309,7 +355,7 @@ fn barrels_pass_a_name_through_export_star_and_renamed_exports() {
 
 #[test]
 fn default_exports_resolve_to_the_exported_declaration() {
-    let indexed = index("defaults");
+    let indexed = shared("defaults");
     assert_eq!(
         indexed.symbols_of("use.ts", "import Widget", "Widget"),
         [sym("widget.ts", "Widget#")]
@@ -346,7 +392,7 @@ fn default_exports_resolve_to_the_exported_declaration() {
 
 #[test]
 fn a_namespace_import_names_the_module() {
-    let indexed = index("namespace");
+    let indexed = shared("namespace");
     assert_eq!(
         indexed.symbols_of("use.ts", "* as geo", "geo"),
         [sym("geo.ts", "")]
@@ -363,7 +409,7 @@ fn a_namespace_import_names_the_module() {
 
 #[test]
 fn a_type_only_import_resolves_types() {
-    let indexed = index("type_only");
+    let indexed = shared("type_only");
     assert_eq!(
         indexed.symbols_of("use.ts", "import type { Shape", "Shape"),
         [sym("types.ts", "Shape#")]
@@ -382,7 +428,7 @@ fn a_type_only_import_resolves_types() {
 
 #[test]
 fn class_members_resolve_through_this_and_through_a_value() {
-    let indexed = index("members");
+    let indexed = shared("members");
     let count = sym("counter.ts", "Counter#count.");
     let step = sym("counter.ts", "Counter#step.");
     // A field.
@@ -421,7 +467,7 @@ fn class_members_resolve_through_this_and_through_a_value() {
 
 #[test]
 fn enums_and_namespaces_own_their_members() {
-    let indexed = index("members");
+    let indexed = shared("members");
     assert_eq!(
         indexed.symbols_of("enums.ts", "Color.Green", "Green"),
         [sym("enums.ts", "Color#Green.")]
@@ -434,7 +480,7 @@ fn enums_and_namespaces_own_their_members() {
 
 #[test]
 fn a_bare_name_never_names_a_class_member() {
-    let indexed = index("members");
+    let indexed = shared("members");
     // `return area` in the method `area` of `Box` names the module constant.
     assert_eq!(
         indexed.symbols_of("bare.ts", "return area", "area"),
@@ -444,7 +490,7 @@ fn a_bare_name_never_names_a_class_member() {
 
 #[test]
 fn an_implementing_method_gets_a_relationship_to_the_interface_method() {
-    let indexed = index("implements");
+    let indexed = shared("implements");
     let shapes = indexed.document("shapes.ts").unwrap();
     let relationships = |symbol: &str| -> Vec<(String, bool)> {
         shapes
@@ -582,7 +628,7 @@ fn crlf_line_endings_keep_the_columns() {
 
 #[test]
 fn import_cycles_end() {
-    let indexed = index("cycle");
+    let indexed = shared("cycle");
     assert_eq!(
         indexed.symbols_of("a.ts", "return b()", "b"),
         [sym("b.ts", "b().")]
@@ -595,7 +641,7 @@ fn import_cycles_end() {
 
 #[test]
 fn utf8_byte_columns_follow_non_ascii_text() {
-    let indexed = index("unicode");
+    let indexed = shared("unicode");
     // `export const naïve = 日本;`: `日本` starts after `ï`, which has two bytes.
     let (line, column) = indexed.locate("use.ts", "naïve = 日本", "日本");
     assert_eq!(
@@ -660,7 +706,7 @@ fn a_request_can_replace_the_package_name() {
 
 #[test]
 fn every_document_defines_its_module_at_the_start() {
-    let indexed = index("alias");
+    let indexed = shared("alias");
     for (path, module) in [
         ("src/app.ts", "src/app.ts"),
         ("src/services.ts", "src/services.ts"),
@@ -676,7 +722,7 @@ fn every_document_defines_its_module_at_the_start() {
 
 #[test]
 fn same_names_in_two_files_get_distinct_symbols() {
-    let indexed = index("shadow");
+    let indexed = shared("shadow");
     assert_ne!(sym("outer.ts", "process()."), sym("other.ts", "process()."));
     assert!(indexed.has_symbol("outer.ts", &sym("outer.ts", "process().")));
     assert!(indexed.has_symbol("other.ts", &sym("other.ts", "process().")));
@@ -688,19 +734,19 @@ fn same_names_in_two_files_get_distinct_symbols() {
 fn another_checkout_root_changes_only_the_root_uri() {
     let copy = tempfile::tempdir().unwrap();
     copy_dir(&fixture("barrels"), copy.path());
-    let normalised = |mut indexed: Indexed| {
+    let normalised = |mut indexed: Cached| {
         let metadata = indexed.index.metadata.as_mut().unwrap();
         metadata.project_root.clear();
         metadata.tool_info.as_mut().unwrap().version.clear();
         indexed.index.write_to_bytes().unwrap()
     };
-    let here = index("barrels");
+    let here = shared("barrels");
     let there = index_at(copy.path());
     assert_ne!(
         here.index.metadata.project_root,
         there.index.metadata.project_root
     );
-    assert_eq!(normalised(here), normalised(there));
+    assert_eq!(normalised(here), normalised(there.view));
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -840,7 +886,7 @@ fn lint_problems(text: &str, index: &Index) -> Vec<String> {
 
 #[test]
 fn the_lint_tolerance_accepts_only_a_defined_relationship_target() {
-    let indexed = index("implements");
+    let indexed = shared("implements");
     let target = sym("shapes.ts", "Shape#area().");
     let line = |target: &str| {
         format!(
@@ -867,7 +913,7 @@ fn the_lint_tolerance_accepts_only_a_defined_relationship_target() {
 #[ignore = "slow: runs in opt:slow"]
 fn every_relationship_target_has_symbol_information() {
     for name in SCIP_FIXTURES {
-        let indexed = index(name);
+        let indexed = shared(name);
         let defined = defined_symbols(&indexed.index);
         for document in &indexed.index.documents {
             for info in &document.symbols {
@@ -889,7 +935,7 @@ fn every_relationship_target_has_symbol_information() {
 fn scip_lint_accepts_every_fixture_index() {
     let Some(scip) = scip() else { return };
     for name in SCIP_FIXTURES {
-        let indexed = index(name);
+        let indexed = shared(name);
         let output = run(
             &scip,
             &fixture(name),
@@ -907,7 +953,7 @@ fn scip_lint_accepts_every_fixture_index() {
 fn scip_test_accepts_the_annotated_sources() {
     let Some(scip) = scip() else { return };
     for name in SCIP_FIXTURES {
-        let indexed = index(name);
+        let indexed = shared(name);
         let mut args = vec![
             "test",
             "--from",
@@ -954,7 +1000,7 @@ fn scip_snapshot_matches_the_golden_files() {
         ("tsx", &["Button.tsx", "app.tsx"][..]),
         ("unicode", &["lib.ts", "use.ts"][..]),
     ] {
-        let indexed = index(name);
+        let indexed = shared(name);
         let out = scratch.path().join(name);
         let output = run(
             &scip,
