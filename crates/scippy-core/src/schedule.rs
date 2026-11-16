@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 /// The stack of a worker. The main thread has 8 MiB. The workers need no less.
@@ -14,6 +14,13 @@ pub(crate) const DEFAULT_MEMORY_BUDGET: u64 = 50 << 30;
 /// The number of workers that a run uses when the caller gives none.
 pub(crate) fn default_jobs() -> usize {
     thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// Lock a mutex and recover the guard when another thread panicked while it held the lock.
+/// A worker panic is not lost: `run_ordered` raises it again after all jobs end. The data that
+/// the locks guard stays valid, because no code that can panic runs while a lock is held.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct Queue<J> {
@@ -75,7 +82,7 @@ where
                     let mut state = init();
                     loop {
                         let (n, estimate, job) = {
-                            let mut q = queue.lock().unwrap();
+                            let mut q = lock(&queue);
                             loop {
                                 let Some(&(_, estimate, _)) = q.waiting.front() else {
                                     return;
@@ -83,17 +90,19 @@ where
                                 if q.active == 0 || q.running + estimate <= budget {
                                     break;
                                 }
-                                q = changed.wait(q).unwrap();
+                                q = changed.wait(q).unwrap_or_else(PoisonError::into_inner);
                             }
-                            let (n, estimate, job) = q.waiting.pop_front().unwrap();
+                            let Some((n, estimate, job)) = q.waiting.pop_front() else {
+                                return;
+                            };
                             q.running += estimate;
                             q.active += 1;
                             (n, estimate, job)
                         };
                         let outcome =
                             catch_unwind(AssertUnwindSafe(|| work(&mut state, estimate, job)));
-                        results.lock().unwrap()[n] = Some(outcome);
-                        let mut q = queue.lock().unwrap();
+                        lock(&results)[n] = Some(outcome);
+                        let mut q = lock(&queue);
                         q.running -= estimate;
                         q.active -= 1;
                         changed.notify_all();
@@ -107,7 +116,7 @@ where
     });
     results
         .into_inner()
-        .unwrap()
+        .unwrap_or_else(PoisonError::into_inner)
         .into_iter()
         .map(|outcome| match outcome.expect("every job ran") {
             Ok(value) => value,

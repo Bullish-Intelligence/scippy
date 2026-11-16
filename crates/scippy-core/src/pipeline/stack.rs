@@ -104,11 +104,12 @@ pub(super) fn index_pack(
         || None::<CompiledRules>,
         |compiled, estimate, n| {
             let (shard, group) = &groups[n];
-            if compiled.is_none() {
-                *compiled = Some(CompiledRules::new(pack.id(), analysis)?);
-            }
+            let rules = match compiled {
+                Some(rules) => rules,
+                None => compiled.insert(CompiledRules::new(pack.id(), analysis)?),
+            };
             let meter = log.then(MemoryMeter::start);
-            let out = index_shard(&context, compiled.as_ref().unwrap(), *shard, group);
+            let out = index_shard(&context, rules, *shard, group);
             if let Some(meter) = meter {
                 let (start, peak) = meter.finish();
                 eprintln!(
