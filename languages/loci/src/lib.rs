@@ -87,10 +87,10 @@ use std::sync::Mutex;
 
 use scippy_core::{
     DeclKind, Descriptor, Diagnostic, Engine, ExternalIdentity, ExtraFile, ExtraFiles, Identity,
-    InputLimits, LanguagePack, NativeAnalysis, NativeDeclaration, NativeDocument, NativeInput,
-    NativeLink, NativeOutput, NativeReference, NativeTarget, Package, ProjectFile, ProjectModel,
-    ProjectRelativePath, Reach, ReferenceRole, Scope, Severity, Stage, SymbolKind, VirtualSymbol,
-    WalkRules,
+    IdentityFamily, InputLimits, LanguagePack, NativeAnalysis, NativeDeclaration, NativeDocument,
+    NativeInput, NativeLink, NativeOutput, NativeReference, NativeTarget, Package, ProjectFile,
+    ProjectModel, ProjectRelativePath, Reach, ReferenceRole, Scope, Severity, Stage, SymbolKind,
+    VirtualSymbol, WalkRules,
 };
 
 pub use config::{GlobSet, Settings};
@@ -109,6 +109,10 @@ pub struct LociPack;
 impl LanguagePack for LociPack {
     fn id(&self) -> &'static str {
         "loci"
+    }
+
+    fn identity_family(&self) -> IdentityFamily {
+        IdentityFamily::Notes
     }
 
     fn scip_language(&self) -> &'static str {
@@ -469,7 +473,7 @@ fn build_output(
                 name,
                 kind,
                 of_module: false,
-                note: records.get(&anchor.span).cloned(),
+                outline: records.get(&anchor.span).cloned(),
             });
         }
         for (alias, start, end) in &note.aliases {
@@ -481,7 +485,7 @@ fn build_output(
                 name: unique(&mut aliases, &format!("alias:{alias}")),
                 kind: DeclKind::Alias,
                 of_module: true,
-                note: None,
+                outline: None,
             });
         }
         let mut references = Vec::new();
@@ -629,7 +633,7 @@ fn build_output(
             path: rel,
             stub: false,
             module: true,
-            note: Some(ident::note_record(note)),
+            outline: Some(ident::note_record(note)),
             declarations,
             references,
         });
@@ -639,7 +643,7 @@ fn build_output(
             path,
             stub: true,
             module: true,
-            note: None,
+            outline: None,
             declarations: Vec::new(),
             references: Vec::new(),
         });

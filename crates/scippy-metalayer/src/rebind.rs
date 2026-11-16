@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
-use scippy_core::{AnalysisSnapshot, ScippyError};
+use scippy_core::{AnalysisSnapshot, IdentityFamily, OutlineKind, OutlineRecord, ScippyError};
 
 use crate::identity::{
     BindOutcome, EntityKind, Family, IdSource, IdentityStore, Locator, OutcomeRow, Tier,
@@ -176,15 +176,13 @@ impl RebindInput {
         }
         for doc in &snapshot.documents {
             files.insert(doc.path.clone(), doc.sha256.clone());
-            // The note family reads the documents that carry note records.
-            if has_note_record(doc) {
+            // The pack of a document declares its identity family. The notes family reads the
+            // documents of the notes family.
+            if doc.identity == IdentityFamily::Notes {
                 continue;
             }
             for sym in &doc.symbols {
                 let Some(decl) = &sym.decl else { continue };
-                if decl.note.is_some() {
-                    continue;
-                }
                 let Some(key) = symbol_key(&sym.symbol) else {
                     continue;
                 };
@@ -233,17 +231,9 @@ impl RebindInput {
     }
 }
 
-/// The document has a note record. A pack that gives note records declares that its documents
-/// belong to the note family.
-fn has_note_record(doc: &scippy_core::AnalysisDocument) -> bool {
-    doc.symbols
-        .iter()
-        .any(|sym| sym.decl.as_ref().is_some_and(|d| d.note.is_some()))
-}
-
-/// The identity key of a note: `id:<loci.id>`, else `path:<path>`.
-pub(crate) fn note_key(loci_id: Option<&str>, path: &str) -> String {
-    match loci_id {
+/// The identity key of a note: `id:<external id>`, else `path:<path>`.
+pub(crate) fn note_key(external_id: Option<&str>, path: &str) -> String {
+    match external_id {
         Some(id) => format!("id:{id}"),
         None => format!("path:{path}"),
     }
@@ -263,16 +253,22 @@ pub(crate) fn block_suffix(block_id: &str) -> String {
 impl RebindInput {
     /// The input of the note family from a snapshot: the notes, and their headings and blocks.
     ///
-    /// A `loci.id` that two notes carry is ignored: both notes get a path key.
+    /// An external id that two notes carry is ignored: both notes get a path key.
     pub fn notes_from_snapshot(snapshot: &AnalysisSnapshot, input_digest: &str) -> Self {
         let record = |sym: &scippy_core::AnalysisSymbol| {
-            sym.decl.as_ref().and_then(|d| d.note.as_ref()).cloned()
+            sym.decl.as_ref().and_then(|d| d.outline.as_ref()).cloned()
+        };
+        let documents = || {
+            snapshot
+                .documents
+                .iter()
+                .filter(|doc| doc.identity == IdentityFamily::Notes)
         };
         let mut counts: HashMap<String, usize> = HashMap::new();
-        for doc in &snapshot.documents {
+        for doc in documents() {
             for sym in &doc.symbols {
                 if let Some(note) = record(sym) {
-                    if let (Some(id), "note") = (note.loci_id, note.kind.as_str()) {
+                    if let (Some(id), OutlineKind::Document) = (note.external_id, note.kind) {
                         *counts.entry(id).or_default() += 1;
                     }
                 }
@@ -280,21 +276,22 @@ impl RebindInput {
         }
         let mut items = Vec::new();
         let mut files = BTreeMap::new();
-        for doc in &snapshot.documents {
-            let notes: Vec<_> = doc
+        for doc in documents() {
+            let notes: Vec<(_, OutlineRecord)> = doc
                 .symbols
                 .iter()
                 .filter_map(|s| record(s).map(|n| (s, n)))
                 .collect();
-            let Some((sym, note)) = notes.iter().find(|(_, n)| n.kind == "note") else {
+            let Some((sym, note)) = notes.iter().find(|(_, n)| n.kind == OutlineKind::Document)
+            else {
                 continue;
             };
             files.insert(doc.path.clone(), doc.sha256.clone());
-            let loci_id = note
-                .loci_id
+            let external_id = note
+                .external_id
                 .as_deref()
                 .filter(|id| counts.get(*id) == Some(&1));
-            let key = note_key(loci_id, &doc.path);
+            let key = note_key(external_id, &doc.path);
             items.push(Item {
                 key: key.clone(),
                 kind: EntityKind::Note,
@@ -310,8 +307,8 @@ impl RebindInput {
             });
             let mut seen: HashSet<String> = HashSet::new();
             for (sym, note) in &notes {
-                let (kind, suffix, name, container) = match note.kind.as_str() {
-                    "heading" => {
+                let (kind, suffix, name, container) = match note.kind {
+                    OutlineKind::Section => {
                         let (Some(text), Some(ordinal)) = (&note.text, note.ordinal) else {
                             continue;
                         };
@@ -322,7 +319,7 @@ impl RebindInput {
                             join_container(&note.ancestors),
                         )
                     }
-                    "block" => {
+                    OutlineKind::Block => {
                         let Some(id) = &note.block_id else { continue };
                         (
                             EntityKind::Block,

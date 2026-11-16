@@ -86,7 +86,7 @@ pub(super) fn index_native_pack(
             declared: Vec::new(),
         };
         doc.declared = assign_identities(&*model, &mut builder, &doc)?;
-        join_notes(&mut doc, native_doc);
+        join_outlines(&mut doc, native_doc);
         run.report.declarations += doc.declared.len();
         for d in &doc.declared {
             index.insert_scoped(
@@ -183,22 +183,22 @@ fn native_facts(native_doc: &NativeDocument, source_len: usize) -> Facts {
     facts
 }
 
-/// Join the facts of notes, headings, and blocks to the declarations of a document, by span.
-fn join_notes(doc: &mut Doc, native_doc: &NativeDocument) {
-    let notes: HashMap<(u32, u32), &crate::snapshot::NoteRecord> = native_doc
+/// Join the outline records of a document and its declarations to the declarations, by span.
+fn join_outlines(doc: &mut Doc, native_doc: &NativeDocument) {
+    let outlines: HashMap<(u32, u32), &crate::snapshot::OutlineRecord> = native_doc
         .declarations
         .iter()
-        .filter_map(|d| d.note.as_ref().map(|n| (d.span, n)))
+        .filter_map(|d| d.outline.as_ref().map(|n| (d.span, n)))
         .collect();
     for d in &mut doc.declared {
         let record = if d.fact.kind == DeclKind::Module {
-            native_doc.note.as_ref()
+            native_doc.outline.as_ref()
         } else {
             let anchor = &d.fact.anchor;
-            notes.get(&(anchor.start_byte, anchor.end_byte)).copied()
+            outlines.get(&(anchor.start_byte, anchor.end_byte)).copied()
         };
         if let (Some(record), Some(decl)) = (record, d.decl.as_mut()) {
-            decl.note = Some(record.clone());
+            decl.outline = Some(record.clone());
         }
     }
 }

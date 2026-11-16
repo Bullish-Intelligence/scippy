@@ -35,6 +35,7 @@ fn document(path: &str, source: &str) -> AnalysisDocument {
         path: path.into(),
         language: "Python".into(),
         pack: Some("python".into()),
+        identity: scippy_core::IdentityFamily::Code,
         real_path: None,
         sha256: Some(sha256_hex(source.as_bytes())),
         source: source.into(),

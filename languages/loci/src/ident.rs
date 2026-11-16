@@ -4,18 +4,18 @@
 
 use std::collections::HashMap;
 
-use scippy_core::NoteRecord;
+use scippy_core::{OutlineKind, OutlineRecord};
 use sha2::{Digest, Sha256};
 
 use crate::note::Note;
 use crate::scan::AnchorKind;
 
 /// The record of the note itself.
-pub fn note_record(note: &Note) -> NoteRecord {
-    NoteRecord {
-        kind: "note".to_string(),
-        loci_id: note.loci_id.clone(),
-        ..NoteRecord::default()
+pub fn note_record(note: &Note) -> OutlineRecord {
+    OutlineRecord {
+        kind: OutlineKind::Document,
+        external_id: note.loci_id.clone(),
+        ..OutlineRecord::default()
     }
 }
 
@@ -46,7 +46,7 @@ fn section_digest(text: &[u8]) -> (String, u32) {
 /// A heading has its level, its ancestors, its place among equal siblings, and the digest of
 /// its section. The section starts after the heading line. It ends at the next heading of the
 /// same or a higher level, or at the end of the note.
-pub fn anchor_records(note: &Note, text: &str) -> HashMap<(usize, usize), NoteRecord> {
+pub fn anchor_records(note: &Note, text: &str) -> HashMap<(usize, usize), OutlineRecord> {
     let bytes = text.as_bytes();
     let mut out = HashMap::new();
     let headings: Vec<_> = note.headings().collect();
@@ -75,25 +75,25 @@ pub fn anchor_records(note: &Note, text: &str) -> HashMap<(usize, usize), NoteRe
         let (digest, tokens) = section_digest(&bytes[start..end]);
         out.insert(
             heading.span,
-            NoteRecord {
-                kind: "heading".to_string(),
+            OutlineRecord {
+                kind: OutlineKind::Section,
                 level: Some(heading.level),
                 ancestors,
                 text: Some(heading.text.clone()),
                 ordinal: Some(ordinal),
                 section_digest: Some(digest),
                 section_tokens: Some(tokens),
-                ..NoteRecord::default()
+                ..OutlineRecord::default()
             },
         );
     }
     for anchor in note.anchors.iter().filter(|a| a.kind == AnchorKind::Block) {
         out.insert(
             anchor.span,
-            NoteRecord {
-                kind: "block".to_string(),
+            OutlineRecord {
+                kind: OutlineKind::Block,
                 block_id: Some(anchor.text.clone()),
-                ..NoteRecord::default()
+                ..OutlineRecord::default()
             },
         );
     }

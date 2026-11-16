@@ -4,7 +4,10 @@
 //! the Loci pack makes: the real pack has its own tests, which use the same engine.
 
 use rusqlite::Connection;
-use scippy_core::{AnalysisDocument, AnalysisSnapshot, AnalysisSymbol, DeclRecord, NoteRecord};
+use scippy_core::{
+    AnalysisDocument, AnalysisSnapshot, AnalysisSymbol, DeclRecord, IdentityFamily, OutlineKind,
+    OutlineRecord,
+};
 
 use crate::publish::sha256_hex;
 use crate::*;
@@ -43,9 +46,9 @@ fn digest(text: &str) -> (String, u32) {
     )
 }
 
-fn symbol(desc: &str, name: &str, kind: &str, record: NoteRecord) -> AnalysisSymbol {
+fn symbol(desc: &str, name: &str, kind: &str, record: OutlineRecord) -> AnalysisSymbol {
     let mut decl = DeclRecord::default();
-    decl.note = Some(record);
+    decl.outline = Some(record);
     AnalysisSymbol {
         symbol: format!("scip-loci loci vault . {desc}"),
         kind: kind.into(),
@@ -62,10 +65,10 @@ fn document(n: &Note) -> AnalysisDocument {
         &format!("{}/", n.path),
         &n.path,
         "File",
-        NoteRecord {
-            kind: "note".into(),
-            loci_id: n.id.clone(),
-            ..NoteRecord::default()
+        OutlineRecord {
+            kind: OutlineKind::Document,
+            external_id: n.id.clone(),
+            ..OutlineRecord::default()
         },
     )];
     let lines: Vec<&str> = n.text.lines().collect();
@@ -101,15 +104,15 @@ fn document(n: &Note) -> AnalysisDocument {
             &format!("{}/{text}-{k}.", n.path),
             text,
             "Namespace",
-            NoteRecord {
-                kind: "heading".into(),
+            OutlineRecord {
+                kind: OutlineKind::Section,
                 level: Some(*level),
                 ancestors,
                 text: Some(text.clone()),
                 ordinal: Some(ordinal),
                 section_digest: Some(section),
                 section_tokens: Some(tokens),
-                ..NoteRecord::default()
+                ..OutlineRecord::default()
             },
         ));
     }
@@ -119,10 +122,10 @@ fn document(n: &Note) -> AnalysisDocument {
                 &format!("{}/`^{id}`.", n.path),
                 &format!("^{id}"),
                 "Key",
-                NoteRecord {
-                    kind: "block".into(),
+                OutlineRecord {
+                    kind: OutlineKind::Block,
                     block_id: Some(id.into()),
-                    ..NoteRecord::default()
+                    ..OutlineRecord::default()
                 },
             ));
         }
@@ -131,6 +134,7 @@ fn document(n: &Note) -> AnalysisDocument {
         path: n.path.clone(),
         language: "Markdown".into(),
         pack: Some("loci".into()),
+        identity: IdentityFamily::Notes,
         real_path: None,
         sha256: Some(sha256_hex(n.text.as_bytes())),
         source: n.text.clone(),
@@ -727,4 +731,54 @@ fn code_and_notes_publish_together() {
         )
         .unwrap();
     assert_eq!(code, 0);
+}
+
+#[test]
+fn the_rebind_selects_the_family_by_the_declared_identity() {
+    use crate::identity::Family;
+    use crate::rebind::RebindInput;
+
+    let notes = [note("a.md", &long_text("intro"))];
+    let snapshot = |identity: IdentityFamily| {
+        let mut documents: Vec<AnalysisDocument> = notes.iter().map(document).collect();
+        for doc in &mut documents {
+            doc.identity = identity;
+        }
+        AnalysisSnapshot {
+            documents,
+            lost_files: Vec::new(),
+            references: Vec::new(),
+            edges: Vec::new(),
+            external_symbols: Vec::new(),
+            diagnostics: Vec::new(),
+            input_complete: true,
+            analysis_exact: true,
+            bounded_references: 0,
+            scip: b"scip".to_vec(),
+            tool_version: "test".into(),
+            project_root: "/vault".into(),
+            shards: Vec::new(),
+            options: String::new(),
+            support_inputs: Vec::new(),
+        }
+    };
+    // A document of the notes family feeds the notes input and not the code input.
+    let declared = snapshot(IdentityFamily::Notes);
+    let code = RebindInput::from_snapshot(&declared, "d", None);
+    let from_notes = RebindInput::notes_from_snapshot(&declared, "d");
+    assert!(code.items.is_empty());
+    assert_eq!(from_notes.family, Family::Note);
+    assert_eq!(from_notes.items.len(), 4);
+    // The same records under the code family feed the code input and not the notes input.
+    let other = snapshot(IdentityFamily::Code);
+    assert!(
+        RebindInput::notes_from_snapshot(&other, "d")
+            .items
+            .is_empty()
+    );
+    assert!(
+        !RebindInput::from_snapshot(&other, "d", None)
+            .items
+            .is_empty()
+    );
 }

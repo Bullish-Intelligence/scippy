@@ -10,7 +10,7 @@ use crate::cache::CacheGate;
 use crate::emit::{self, Document, IndexData, SymbolInfo};
 use crate::error::ScippyError;
 use crate::identity::SymbolId;
-use crate::language::{Engine, LanguagePack};
+use crate::language::{Engine, IdentityFamily, LanguagePack};
 use crate::project::{self, FoundFile, Router};
 use crate::report::{Diagnostic, IndexReport, Severity, Stage};
 use crate::snapshot::{AnalysisSnapshot, Capture, RunContext};
@@ -201,6 +201,17 @@ fn collect(
         })
         .collect();
 
+    let identities: HashMap<String, IdentityFamily> = found
+        .files
+        .iter()
+        .map(|f| {
+            (
+                f.path.as_str().to_owned(),
+                languages[f.pack].identity_family(),
+            )
+        })
+        .collect();
+
     record_stale_files(&mut report, &store, &documents);
     complete_lost_files(&mut report, &routed);
     report.files_indexed = documents.len();
@@ -220,6 +231,7 @@ fn collect(
         ),
         support_inputs,
         files: routed,
+        identities,
     };
     let data = IndexData {
         project_root: found.root,

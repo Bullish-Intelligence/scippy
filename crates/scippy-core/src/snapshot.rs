@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::bindings::Bound;
 use crate::emit::{self, IndexData, Role, SymbolInfo};
 use crate::error::ScippyError;
-use crate::language::ReferenceKind;
+use crate::language::{IdentityFamily, ReferenceKind};
 use crate::reconcile::{BindingOutcome, Reconciled, UnresolvedReason};
 use crate::report::IndexReport;
 
@@ -20,6 +20,10 @@ pub struct AnalysisDocument {
     /// The id of the language pack that indexed the file. It is `None` for a stub document.
     #[serde(default)]
     pub pack: Option<String>,
+    /// The identity family that the pack declares. A stub document or a file that no pack
+    /// claims has the code family. The snapshot leaves out the code family.
+    #[serde(default, skip_serializing_if = "IdentityFamily::is_code")]
+    pub identity: IdentityFamily,
     /// Where the run read a file that lies outside the project root. `None` for a file below it.
     #[serde(default)]
     pub real_path: Option<String>,
@@ -79,34 +83,48 @@ pub struct DeclRecord {
     pub body_digest: Option<String>,
     /// The number of named tree-sitter nodes in the body, comments excluded.
     pub body_tokens: Option<u32>,
-    /// The facts of a Markdown note, heading, or block. It is `None` for any other symbol.
+    /// The record of a pack that gives its entities a stable identity of their own: a document,
+    /// a section, or a block. It is `None` for any other symbol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<NoteRecord>,
+    pub outline: Option<OutlineRecord>,
 }
 
-/// The facts of a Markdown entity that find it again after an edit, a move, or a rename.
+/// What an [`OutlineRecord`] describes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutlineKind {
+    /// The document itself.
+    #[default]
+    Document,
+    /// A section of a document, with a level and a text.
+    Section,
+    /// A block of a document, with an id.
+    Block,
+}
+
+/// The facts of a pack-defined entity that find it again after an edit, a move, or a rename.
 ///
-/// The Loci pack gives one record to each note, heading, and block that has an entity.
+/// A pack of the notes identity family gives one record to each document, section, and block
+/// that has an entity.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NoteRecord {
-    /// `note`, `heading`, or `block`.
-    pub kind: String,
-    /// The `loci.id` of the front matter, for a note that has a valid one.
-    pub loci_id: Option<String>,
-    /// The level of a heading, from 1 to 6.
+pub struct OutlineRecord {
+    /// What the record describes.
+    pub kind: OutlineKind,
+    /// The stable id that the author wrote for a document, when the document has a valid one.
+    pub external_id: Option<String>,
+    /// The level of a section, from 1 to 6.
     pub level: Option<u8>,
-    /// The texts of the enclosing headings of a heading, from the outermost to the innermost.
+    /// The texts of the enclosing sections of a section, from the outermost to the innermost.
     pub ancestors: Vec<String>,
-    /// The text of a heading, without its marks and without a `~N` suffix.
+    /// The text of a section, without its marks and without a `~N` suffix.
     pub text: Option<String>,
-    /// The place of a heading among the headings with the same text and the same ancestors,
+    /// The place of a section among the sections with the same text and the same ancestors,
     /// counted from 0.
     pub ordinal: Option<u32>,
-    /// The digest of the section of a heading, as 32 lowercase hex digits. The section runs from
-    /// the line after the heading to the next heading of the same or a higher level. The digest
-    /// reads the text with white space normalized. It does not read the text of the heading.
+    /// The digest of the body of a section, as 32 lowercase hex digits. The body runs from
+    /// the line after the section head to the next section of the same or a higher level. The
+    /// digest reads the text with white space normalized. It does not read the text of the head.
     pub section_digest: Option<String>,
-    /// The number of words in the section.
+    /// The number of words in the body of the section.
     pub section_tokens: Option<u32>,
     /// The id of a block, without its caret.
     pub block_id: Option<String>,
@@ -342,6 +360,8 @@ pub(crate) struct RunContext {
     pub support_inputs: Vec<AnalysisInput>,
     /// For each document path: the pack id and the real path of a file outside the root.
     pub files: HashMap<String, (String, Option<String>)>,
+    /// For each document path of a pack: the identity family that the pack declares.
+    pub identities: HashMap<String, IdentityFamily>,
 }
 
 /// The SHA-256 of `bytes` as lowercase hex.
@@ -375,6 +395,11 @@ impl AnalysisSnapshot {
                     path: d.path.as_str().to_owned(),
                     language: d.language.clone(),
                     pack: file.map(|f| f.0.clone()),
+                    identity: context
+                        .identities
+                        .get(d.path.as_str())
+                        .copied()
+                        .unwrap_or_default(),
                     real_path: file.and_then(|f| f.1.clone()),
                     sha256: (!stub).then(|| sha256_hex(d.source.as_bytes())),
                     source: d.source.to_string(),

@@ -34,7 +34,7 @@ mod source;
 pub use snapshot::{
     AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisInput,
     AnalysisOccurrence, AnalysisReference, AnalysisSnapshot, AnalysisSymbol, DeclRecord,
-    INCOMPLETE_CODES, NoteRecord, ReferenceOutcome, file_status,
+    INCOMPLETE_CODES, OutlineKind, OutlineRecord, ReferenceOutcome, file_status,
 };
 
 pub use bindings::{Bound, ResolveLimits, prebuild_assets};
@@ -43,10 +43,10 @@ pub use error::ScippyError;
 pub use identity::{Descriptor, Package};
 pub use language::{
     Analysis, BindingRules, Builtins, DeclKind, Dialect, Engine, ExternalAsset, ExternalIdentity,
-    ExtraFile, ExtraFiles, ExtractionSpec, Identity, LanguagePack, Manifest, NativeAnalysis,
-    NativeDeclaration, NativeDocument, NativeInput, NativeLink, NativeOutput, NativeReference,
-    NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind, ReferenceRole,
-    Scope, SupportFile, VirtualSymbol, WalkRules,
+    ExtraFile, ExtraFiles, ExtractionSpec, Identity, IdentityFamily, LanguagePack, Manifest,
+    NativeAnalysis, NativeDeclaration, NativeDocument, NativeInput, NativeLink, NativeOutput,
+    NativeReference, NativeSource, NativeTarget, ProjectFile, ProjectModel, Reach, ReferenceKind,
+    ReferenceRole, Scope, SupportFile, VirtualSymbol, WalkRules,
 };
 pub use pipeline::discover_files;
 pub use project::{InputLimits, ProjectRelativePath};

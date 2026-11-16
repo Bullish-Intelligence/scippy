@@ -413,6 +413,11 @@ pub struct ExtractionSpec {
 pub trait LanguagePack: Send + Sync {
     /// Short stable identifier, for example `python`.
     fn id(&self) -> &'static str;
+    /// The identity family of the entities of this pack. The metalayer binds the entities of
+    /// each family with the rules of that family. The default is [`IdentityFamily::Code`].
+    fn identity_family(&self) -> IdentityFamily {
+        IdentityFamily::Code
+    }
     /// The SCIP language name written to `Document.language`, for example `Python`.
     fn scip_language(&self) -> &'static str;
     /// Return true when this pack owns the file. `path` is the file name only.
@@ -459,6 +464,27 @@ pub trait LanguagePack: Send + Sync {
     fn input_limits(&self, root: &Path) -> Option<InputLimits> {
         let _ = root;
         None
+    }
+}
+
+/// The kind of identity that the entities of a pack have.
+///
+/// The metalayer reads this value and nothing else to choose the rules that bind an entity
+/// again after an edit, a move, or a rename.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentityFamily {
+    /// Declarations in source code. The identity follows the symbol and the digests.
+    #[default]
+    Code,
+    /// Documents with sections and blocks. The identity follows the external id or the path.
+    Notes,
+}
+
+impl IdentityFamily {
+    /// True for [`IdentityFamily::Code`]. The snapshot leaves out the default value.
+    pub fn is_code(&self) -> bool {
+        *self == Self::Code
     }
 }
 
@@ -558,8 +584,8 @@ pub struct NativeDeclaration {
     /// The declaration is a second name of the module of its document, such as an alias.
     /// The symbol records a reference to the module.
     pub of_module: bool,
-    /// The facts that the identity store needs, for a heading or a block id.
-    pub note: Option<crate::snapshot::NoteRecord>,
+    /// The facts that the identity store needs, for a section or a block id.
+    pub outline: Option<crate::snapshot::OutlineRecord>,
 }
 
 /// The target of a native reference.
@@ -597,8 +623,8 @@ pub struct NativeDocument {
     pub stub: bool,
     /// The document has a module. The module has the empty span `(0, 0)`.
     pub module: bool,
-    /// The facts that the identity store needs, for the note itself.
-    pub note: Option<crate::snapshot::NoteRecord>,
+    /// The facts that the identity store needs, for the document itself.
+    pub outline: Option<crate::snapshot::OutlineRecord>,
     pub declarations: Vec<NativeDeclaration>,
     pub references: Vec<NativeReference>,
 }

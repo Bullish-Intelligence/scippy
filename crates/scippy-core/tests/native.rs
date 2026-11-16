@@ -94,7 +94,7 @@ impl NativeAnalysis for Fake {
                         name: name.to_string(),
                         kind: DeclKind::Section,
                         of_module: false,
-                        note: None,
+                        outline: None,
                     }),
                     (Some("ref"), Some(name)) => {
                         let file = input
@@ -148,7 +148,7 @@ impl NativeAnalysis for Fake {
                 path: source.path.clone(),
                 stub: false,
                 module: true,
-                note: None,
+                outline: None,
                 declarations,
                 references,
             });
@@ -158,7 +158,7 @@ impl NativeAnalysis for Fake {
                 path,
                 stub: true,
                 module: true,
-                note: None,
+                outline: None,
                 declarations: Vec::new(),
                 references: Vec::new(),
             });

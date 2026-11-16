@@ -3,7 +3,9 @@
 
 use std::fs;
 
-use scippy_core::{AnalysisSnapshot, IndexRequest, index_project_with_snapshot};
+use scippy_core::{
+    AnalysisSnapshot, IdentityFamily, IndexRequest, OutlineKind, index_project_with_snapshot,
+};
 use scippy_loci::LociPack;
 use scippy_metalayer::{
     FixedIds, IdentityStore, Metalayer, PublishOptions, RebindReport, default_identity_path,
@@ -107,13 +109,18 @@ fn the_pack_gives_a_record_to_each_note_heading_and_block() {
         .filter_map(|s| {
             s.decl
                 .as_ref()?
-                .note
+                .outline
                 .as_ref()
                 .map(|n| (s.display_name.as_str(), n))
         })
         .collect();
-    let note = records.iter().find(|(_, n)| n.kind == "note").unwrap().1;
-    assert_eq!(note.loci_id.as_deref(), Some(ID));
+    let note = records
+        .iter()
+        .find(|(_, n)| n.kind == OutlineKind::Document)
+        .unwrap()
+        .1;
+    assert_eq!(note.external_id.as_deref(), Some(ID));
+    assert_eq!(doc.identity, IdentityFamily::Notes);
     let subs: Vec<_> = records
         .iter()
         .filter(|(_, n)| n.text.as_deref() == Some("Sub"))
@@ -129,7 +136,11 @@ fn the_pack_gives_a_record_to_each_note_heading_and_block() {
     let top = records.iter().find(|(n, _)| *n == "Top").unwrap().1;
     assert_eq!(top.section_tokens, Some(18));
     assert!(top.section_digest.as_deref().is_some_and(|d| d.len() == 32));
-    let block = records.iter().find(|(_, n)| n.kind == "block").unwrap().1;
+    let block = records
+        .iter()
+        .find(|(_, n)| n.kind == OutlineKind::Block)
+        .unwrap()
+        .1;
     assert_eq!(block.block_id.as_deref(), Some("blk1"));
 }
 
@@ -146,10 +157,10 @@ fn a_note_without_front_matter_has_no_loci_id() {
     let note = doc
         .symbols
         .iter()
-        .filter_map(|s| s.decl.as_ref()?.note.as_ref())
-        .find(|n| n.kind == "note")
+        .filter_map(|s| s.decl.as_ref()?.outline.as_ref())
+        .find(|n| n.kind == OutlineKind::Document)
         .unwrap();
-    assert_eq!(note.loci_id, None);
+    assert_eq!(note.external_id, None);
 }
 
 #[test]
