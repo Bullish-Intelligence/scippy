@@ -39,7 +39,7 @@ in
   # Run `testee doctor` after any edit to this table.
   # `scripts/verify.sh` runs `testee verify --profile quick` for the edit loop.
   # `test:full` runs the fast set. Slow tests carry `#[ignore = "slow: ..."]`.
-  # `opt:slow` runs them. It does not count for GREEN.
+  # `opt:slow` runs them. It runs only on explicit request, and it does not count for GREEN.
   # `opt:slow` also holds the performance and load-sensitive tests: `#[ignore = "perf: ..."]`.
   # A test that asserts on time, speed, or resource use never joins the default set.
   # Testee runs `git clean -ffdx -e .devenv` in its slot, which deletes `target/`.
@@ -61,11 +61,20 @@ in
       cargoEnv = ''
         export CARGO_TARGET_DIR="''${DEVENV_STATE:?DEVENV_STATE is not set}/cargo-target"
       '';
-      # A Testee timeout is a hang guard, not a speed check.
-      # Tasks run under any machine load, so each limit is 4 hours.
+      # A Testee timeout is a hang guard: it is about twice the worst measured time.
+      # Measured 2026-11-16 from Testee run records since the fast gate (7b9e484):
+      # lint 250 s under load (64 s cold slot, warm sccache, load ~10), format 7 s,
+      # types and quick take the lint cold-slot time (warm runs took 5 s and 45 s),
+      # test:full 387 s, opt:slow 753 s, bench:identity 302 s.
+      # A timeout must not trip under the normal shared-host load (15 to 45 on 8 cores).
+      # When a measured time changes, update the limit and this comment.
       # Put benchmarks in an opt-in `bench:*` task, never in a check or test task.
       # Run one with `testee verify bench:<name>`. Its verdict never counts toward green.
-      hangGuard = 14400;
+      timeoutFormat = 60;
+      timeoutCompile = 600;
+      timeoutFull = 800;
+      timeoutSlow = 1500;
+      timeoutBench = 600;
       # The tests call the scip CLI. Make them fail, not skip, when it is missing.
       scipEnv = ''
         scip_dir="''${SCIP_BIN_DIR:-$HOME/.local/state/scippy/tools/scip/v0.10.0/bin}"
@@ -78,7 +87,7 @@ in
       "check:format" = {
         exec = "cargo fmt --check";
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutFormat;
       };
 
       "check:lint" = {
@@ -87,7 +96,7 @@ in
           cargo clippy --workspace --all-targets -- -D warnings
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutCompile;
       };
 
       "check:types" = {
@@ -96,7 +105,7 @@ in
           cargo check --workspace --all-targets
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutCompile;
       };
 
       "test:quick" = {
@@ -106,7 +115,7 @@ in
           cargo test --workspace --lib
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutCompile;
       };
 
       # The fast set: every test that has no `#[ignore]`. It is the required gate.
@@ -119,14 +128,13 @@ in
           cargo test --workspace --doc
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutFull;
       };
 
       # The slow set: end-to-end tests that call the scip CLI, and the cache tests.
       # It also holds the performance and load-sensitive tests. Nextest runs every ignored test.
       # `--run-ignored only` runs the 27 tests that carry `#[ignore]`. Doctests have none.
-      # Run it with `testee verify opt:slow` when a change touches indexing,
-      # resolution, the scip output, or the metalayer cache.
+      # It runs only on explicit request. No lane verify step runs it.
       "opt:slow" = {
         exec = ''
           ${cargoEnv}
@@ -134,7 +142,7 @@ in
           cargo nextest run --workspace --profile ci --run-ignored only
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutSlow;
       };
 
       # Opt-in benchmark. It is not a check or a test. Run it with `testee verify bench:identity`.
@@ -145,7 +153,7 @@ in
           scripts/identity-eval.sh overhead
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = hangGuard;
+        input.testee.timeout_s = timeoutBench;
       };
     };
 }
