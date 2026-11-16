@@ -3,7 +3,39 @@ let
   home = builtins.getEnv "HOME";
   # One sccache server per workspace root. A server reads SCCACHE_BASEDIRS once at start.
   # A shared server would keep the root of the first workspace that started it.
-  port = 20000 + lib.mod (lib.fromHexString (builtins.substring 0 4 (builtins.hashString "sha256" config.devenv.root))) 20000;
+  # The port range is below the Linux ephemeral range (32768 to 60999),
+  # and above the common service ports. Other programs may still hold a port in it.
+  portMin = 10000;
+  portSpan = 8000;
+  port = portMin + lib.mod (lib.fromHexString (builtins.substring 0 4 (builtins.hashString "sha256" config.devenv.root))) portSpan;
+  # sccache waits for ever when a program that is not sccache listens on its port.
+  # This guard keeps the hashed port when no program listens on it, or when its sccache
+  # server uses this root and this cache dir. Otherwise it tries the next port in the range.
+  # After 16 busy ports it unsets RUSTC_WRAPPER and warns, so the build runs without sccache.
+  sccacheGuard = ''
+    sccache_listens() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+    sccache_ours() {
+      SCCACHE_SERVER_PORT=$1 ${pkgs.coreutils}/bin/timeout 2 ${pkgs.sccache}/bin/sccache --show-stats 2>/dev/null |
+        ${pkgs.gawk}/bin/awk -v root="$SCCACHE_BASEDIRS" -v dir="$SCCACHE_DIR" '
+          /^Base directories/ { sub(/^Base directories +/, ""); sub(/\/$/, ""); base = ($0 == root) }
+          /^Cache location/ { loc = index($0, "\"" dir "\"") > 0 }
+          END { exit !(base && loc) }'
+    }
+    sccache_guard() {
+      [ -n "$RUSTC_WRAPPER" ] || return 0
+      local start=$SCCACHE_SERVER_PORT i cand
+      for i in $(seq 0 15); do
+        cand=$(( ${toString portMin} + (start - ${toString portMin} + i) % ${toString portSpan} ))
+        if ! sccache_listens "$cand" || sccache_ours "$cand"; then
+          export SCCACHE_SERVER_PORT=$cand
+          return 0
+        fi
+      done
+      echo "warning: 16 sccache ports are busy from $start. Building without sccache." >&2
+      unset RUSTC_WRAPPER
+    }
+    sccache_guard
+  '';
 in
 {
   packages = [
@@ -12,6 +44,7 @@ in
     pkgs.sccache
   ];
   languages.rust.enable = true;
+  enterShell = sccacheGuard;
 
   # sccache shares compiled external crates and C code between checkouts.
   # Without it, each new workspace and each Testee slot builds them cold.
@@ -61,6 +94,7 @@ in
       ];
       # Keep the Cargo target dir under `.devenv/`. The slot clean keeps that path.
       cargoEnv = ''
+        ${sccacheGuard}
         export CARGO_TARGET_DIR="''${DEVENV_STATE:?DEVENV_STATE is not set}/cargo-target"
       '';
       # A Testee timeout is a hang guard: it is about twice the worst measured time.
