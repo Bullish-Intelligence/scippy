@@ -245,7 +245,12 @@ pub(super) fn index_pack(
         let targeting = Targeting::new(&*model, containers);
         let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
         finisher.account(run, &doc, &reconciled);
-        record_inheritance(&doc, &reconciled, &mut inheritance, run.capture);
+        record_inheritance(
+            &doc,
+            &reconciled,
+            &mut inheritance,
+            run.capture.as_deref_mut(),
+        );
         for d in doc.declared.iter().filter(|d| is_method(d)) {
             method_documents.insert(d.symbol.clone(), out.len());
         }

@@ -20,12 +20,72 @@ use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 
+/// What a run gathers before it builds the snapshot and writes the files.
+struct Collected {
+    report: IndexReport,
+    data: IndexData,
+    context: RunContext,
+    /// The trace lines, when the request asks for a trace.
+    trace: Vec<String>,
+}
+
+/// Run the pipeline and write the SCIP file. It builds no snapshot, except for a strict run:
+/// its flag `input_complete` decides the result.
 pub(crate) fn run(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
-    capture: bool,
+) -> Result<IndexReport, ScippyError> {
+    let mut capture = request.strict.then(Capture::default);
+    let Collected {
+        report,
+        data,
+        context,
+        trace,
+    } = collect(request, languages, capture.as_mut())?;
+    if let Some(capture) = capture {
+        let snapshot = AnalysisSnapshot::new(&data, capture, &report, context)?;
+        // A strict run fails when it lost input, and it writes no file.
+        if !snapshot.input_complete {
+            return Err(ScippyError::Incomplete);
+        }
+    }
+    write_trace(request, trace)?;
+    emit::write_index(data, &request.output)?;
+    Ok(report)
+}
+
+/// Run the pipeline and return the snapshot. Write the SCIP file only when `write_output` is true.
+pub(crate) fn run_with_snapshot(
+    request: &IndexRequest,
+    languages: &[&dyn LanguagePack],
     write_output: bool,
-) -> Result<(IndexReport, Option<AnalysisSnapshot>), ScippyError> {
+) -> Result<(IndexReport, AnalysisSnapshot), ScippyError> {
+    let mut capture = Capture::default();
+    let Collected {
+        report,
+        data,
+        context,
+        trace,
+    } = collect(request, languages, Some(&mut capture))?;
+    let snapshot = AnalysisSnapshot::new(&data, capture, &report, context)?;
+    // A strict run fails when it lost input, and it writes no file.
+    if request.strict && !snapshot.input_complete {
+        return Err(ScippyError::Incomplete);
+    }
+    write_trace(request, trace)?;
+    if write_output {
+        emit::write_index(data, &request.output)?;
+    }
+    Ok((report, snapshot))
+}
+
+/// Discover the files, index each pack, and merge the results. When `capture` is `Some`, the
+/// run adds the facts of the snapshot to it.
+fn collect(
+    request: &IndexRequest,
+    languages: &[&dyn LanguagePack],
+    mut capture: Option<&mut Capture>,
+) -> Result<Collected, ScippyError> {
     // A pack that is not enabled for this project takes no part in the run.
     let languages: Vec<&dyn LanguagePack> = languages
         .iter()
@@ -88,8 +148,6 @@ pub(crate) fn run(
     let mut stubs: Vec<Document> = Vec::new();
     let mut external_symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     let mut trace = Vec::new();
-    // A strict run needs the snapshot, because its flag `input_complete` decides the result.
-    let mut capture = (capture || request.strict).then(Capture::default);
 
     for (index, pack) in languages.iter().enumerate() {
         let files: Vec<&FoundFile> = found.files.iter().filter(|f| f.pack == index).collect();
@@ -97,22 +155,7 @@ pub(crate) fn run(
             continue;
         }
         let Some(engine) = pack.engine() else {
-            report.files_skipped += files.len();
-            for file in &files {
-                lose(&mut report, &file.path, "unsupported-language");
-            }
-            report.diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                stage: Stage::Discover,
-                file: None,
-                range: None,
-                code: "unsupported-language",
-                message: format!(
-                    "the {} pack does not support indexing yet: skipped {} file(s)",
-                    pack.id(),
-                    files.len()
-                ),
-            });
+            skip_unsupported(&mut report, pack.id(), &files);
             continue;
         };
         let mut run = PackRun {
@@ -123,7 +166,7 @@ pub(crate) fn run(
             request,
             report: &mut report,
             trace: &mut trace,
-            capture: &mut capture,
+            capture: capture.as_deref_mut(),
         };
         let indexed = match engine {
             Engine::StackGraphs(analysis) => {
@@ -141,19 +184,7 @@ pub(crate) fn run(
         external_symbols.extend(indexed.external_symbols);
     }
     report.graph_cache_failures = cache.failures();
-    // A stub defines a symbol in a file that another pack may own. Merge it into that document.
-    for stub in stubs {
-        match documents
-            .iter_mut()
-            .find(|d: &&mut Document| d.path == stub.path)
-        {
-            Some(own) => {
-                own.occurrences.extend(stub.occurrences);
-                own.symbols.extend(stub.symbols);
-            }
-            None => documents.push(stub),
-        }
-    }
+    merge_stubs(&mut documents, stubs);
 
     // The pack and the real path of each routed file.
     let routed: HashMap<String, (String, Option<String>)> = found
@@ -170,36 +201,8 @@ pub(crate) fn run(
         })
         .collect();
 
-    // Check each indexed file against the disk once more. The run indexed the content that it
-    // read first, so a file that changed since is stale, not lost. The facts stay.
-    report.stale_files = store.stale(
-        documents
-            .iter()
-            .filter(|d| !d.language.is_empty())
-            .map(|d| d.path.as_str()),
-    );
-    for path in &report.stale_files {
-        report.diagnostics.push(Diagnostic {
-            severity: Severity::Warning,
-            stage: Stage::Discover,
-            file: Some(path.clone()),
-            range: None,
-            code: "stale-file",
-            message: "the file on disk differs from the content that the run indexed".to_string(),
-        });
-    }
-    // Complete the list of the lost files: one entry for each path, in the order of the paths.
-    for lost in &mut report.lost_files {
-        if let Some((pack, real)) = routed.get(&lost.path) {
-            lost.pack.get_or_insert_with(|| pack.clone());
-            if lost.real_path.is_none() {
-                lost.real_path = real.clone();
-            }
-        }
-    }
-    report.lost_files.sort_by(|a, b| a.path.cmp(&b.path));
-    report.lost_files.dedup_by(|b, a| a.path == b.path);
-
+    record_stale_files(&mut report, &store, &documents);
+    complete_lost_files(&mut report, &routed);
     report.files_indexed = documents.len();
     report.occurrences = documents.iter().map(|d| d.occurrences.len()).sum();
 
@@ -223,29 +226,97 @@ pub(crate) fn run(
         documents,
         external_symbols: external_symbols.into_values().collect(),
     };
-    let snapshot = if let Some(capture) = capture {
-        Some(AnalysisSnapshot::new(&data, capture, &report, context)?)
-    } else {
-        None
-    };
-    // A strict run fails when it lost input, and it writes no file.
-    if request.strict && snapshot.as_ref().is_some_and(|s| !s.input_complete) {
-        return Err(ScippyError::Incomplete);
+    Ok(Collected {
+        report,
+        data,
+        context,
+        trace,
+    })
+}
+
+/// Skip the files of a pack that has no engine, and say so.
+fn skip_unsupported(report: &mut IndexReport, pack: &str, files: &[&FoundFile]) {
+    report.files_skipped += files.len();
+    for file in files {
+        lose(report, &file.path, "unsupported-language");
     }
-    if let Some(path) = &request.trace {
-        trace.sort();
-        let io = |source| ScippyError::Io {
-            path: path.clone(),
-            source,
-        };
-        let mut file = File::create(path).map_err(io)?;
-        for line in trace {
-            writeln!(file, "{line}").map_err(io)?;
+    report.diagnostics.push(Diagnostic {
+        severity: Severity::Warning,
+        stage: Stage::Discover,
+        file: None,
+        range: None,
+        code: "unsupported-language",
+        message: format!(
+            "the {pack} pack does not support indexing yet: skipped {} file(s)",
+            files.len()
+        ),
+    });
+}
+
+/// A stub defines a symbol in a file that another pack may own. Merge it into that document.
+fn merge_stubs(documents: &mut Vec<Document>, stubs: Vec<Document>) {
+    for stub in stubs {
+        match documents.iter_mut().find(|d| d.path == stub.path) {
+            Some(own) => {
+                own.occurrences.extend(stub.occurrences);
+                own.symbols.extend(stub.symbols);
+            }
+            None => documents.push(stub),
         }
     }
+}
 
-    if write_output {
-        emit::write_index(data, &request.output)?;
+/// Check each indexed file against the disk once more. The run indexed the content that it
+/// read first, so a file that changed since is stale, not lost. The facts stay.
+fn record_stale_files(report: &mut IndexReport, store: &SourceStore, documents: &[Document]) {
+    report.stale_files = store.stale(
+        documents
+            .iter()
+            .filter(|d| !d.language.is_empty())
+            .map(|d| d.path.as_str()),
+    );
+    for path in &report.stale_files {
+        report.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            stage: Stage::Discover,
+            file: Some(path.clone()),
+            range: None,
+            code: "stale-file",
+            message: "the file on disk differs from the content that the run indexed".to_string(),
+        });
     }
-    Ok((report, snapshot))
+}
+
+/// Complete the list of the lost files: one entry for each path, in the order of the paths.
+fn complete_lost_files(
+    report: &mut IndexReport,
+    routed: &HashMap<String, (String, Option<String>)>,
+) {
+    for lost in &mut report.lost_files {
+        if let Some((pack, real)) = routed.get(&lost.path) {
+            lost.pack.get_or_insert_with(|| pack.clone());
+            if lost.real_path.is_none() {
+                lost.real_path = real.clone();
+            }
+        }
+    }
+    report.lost_files.sort_by(|a, b| a.path.cmp(&b.path));
+    report.lost_files.dedup_by(|b, a| a.path == b.path);
+}
+
+/// Write the trace file, one sorted line for each reference, when the request asks for it.
+fn write_trace(request: &IndexRequest, mut trace: Vec<String>) -> Result<(), ScippyError> {
+    let Some(path) = &request.trace else {
+        return Ok(());
+    };
+    trace.sort();
+    let io = |source| ScippyError::Io {
+        path: path.clone(),
+        source,
+    };
+    let mut file = File::create(path).map_err(io)?;
+    for line in trace {
+        writeln!(file, "{line}").map_err(io)?;
+    }
+    Ok(())
 }

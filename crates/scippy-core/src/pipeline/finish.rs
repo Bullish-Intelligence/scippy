@@ -35,7 +35,7 @@ pub(super) fn record_inheritance(
     doc: &Doc,
     reconciled: &[Reconciled],
     inheritance: &mut Inheritance,
-    capture: &mut Option<Capture>,
+    mut capture: Option<&mut Capture>,
 ) {
     for method in doc.declared.iter().filter(|d| is_method(d)) {
         let (start, end) = method.fact.extent;
@@ -63,7 +63,7 @@ pub(super) fn record_inheritance(
         };
         if !class.symbol.is_local() {
             inheritance.add_supertype(&class.symbol, (*supertype).clone());
-            if let Some(capture) = capture {
+            if let Some(capture) = capture.as_deref_mut() {
                 capture.edges.push(AnalysisEdge {
                     kind: "inheritance".to_owned(),
                     path: doc.path.as_str().to_owned(),
@@ -223,7 +223,7 @@ impl<'a> Finisher<'a> {
     pub(super) fn account(&mut self, run: &mut PackRun, doc: &Doc, reconciled: &[Reconciled]) {
         for r in reconciled {
             count(run.report, r);
-            if let Some(capture) = run.capture {
+            if let Some(capture) = run.capture.as_deref_mut() {
                 capture
                     .references
                     .push(AnalysisReference::from_reconciled(r, self.native));

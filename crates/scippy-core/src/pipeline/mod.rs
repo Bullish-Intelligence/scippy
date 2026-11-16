@@ -16,7 +16,7 @@ mod run;
 mod shard;
 mod stack;
 
-pub(crate) use run::run;
+pub(crate) use run::{run, run_with_snapshot};
 
 use crate::IndexRequest;
 use crate::emit::{Document, SymbolInfo};
@@ -96,7 +96,7 @@ struct PackRun<'a> {
     request: &'a IndexRequest,
     report: &'a mut IndexReport,
     trace: &'a mut Vec<String>,
-    capture: &'a mut Option<Capture>,
+    capture: Option<&'a mut Capture>,
 }
 
 /// What one pack gives back: its documents and the external symbols that they reference.

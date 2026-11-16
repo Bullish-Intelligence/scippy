@@ -57,7 +57,7 @@ pub(super) fn index_native_pack(
         extra,
     });
     run.report.diagnostics.extend(output.diagnostics);
-    if let Some(capture) = run.capture {
+    if let Some(capture) = run.capture.as_deref_mut() {
         for link in &output.links {
             capture.edges.push(AnalysisEdge {
                 kind: if link.embed { "embed" } else { "link" }.to_owned(),

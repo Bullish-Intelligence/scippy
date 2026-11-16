@@ -1,12 +1,14 @@
 //! Language-neutral Scippy indexing API.
 //!
-//! [`index_project`] runs the whole pipeline: it walks the project, routes each file to a
+//! [`index`] runs the whole pipeline: it walks the project, routes each file to a
 //! language pack, extracts declarations, resolves references with a private binding engine,
 //! reconciles the engine results with the declarations by source span, assigns symbol
 //! identities, and writes a SCIP index.
 //!
 //! The public surface has three parts:
-//! - the operation and its request and report: [`index_project`], [`IndexRequest`], [`IndexReport`];
+//! - the operation and its request and report: [`index`], [`IndexRequest`], [`IndexMode`],
+//!   [`IndexReport`], with the shorthands [`index_project`], [`index_project_with_snapshot`],
+//!   and [`index_project_for_publish`];
 //! - the language-pack contract: [`LanguagePack`] and the types that a pack returns;
 //! - the error and diagnostic types.
 //!
@@ -113,12 +115,49 @@ impl IndexRequest {
     }
 }
 
+/// What a run does with its results.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexMode {
+    /// Write `request.output`. Build no snapshot, unless the request is strict.
+    Write,
+    /// Write `request.output` and return the snapshot.
+    WriteWithSnapshot,
+    /// Return the snapshot and do not write `request.output`. The caller writes `snapshot.scip`
+    /// with [`write_scip`] when it chooses.
+    SnapshotOnly,
+}
+
+/// The result of [`index`].
+#[derive(Debug)]
+pub struct IndexOutput {
+    pub report: IndexReport,
+    /// The facts of the run. It is `Some` for every mode but [`IndexMode::Write`].
+    pub snapshot: Option<AnalysisSnapshot>,
+}
+
+/// Index the project at `request.root` as `mode` says.
+pub fn index(
+    request: &IndexRequest,
+    languages: &[&dyn LanguagePack],
+    mode: IndexMode,
+) -> Result<IndexOutput, ScippyError> {
+    let (report, snapshot) = match mode {
+        IndexMode::Write => (pipeline::run(request, languages)?, None),
+        IndexMode::WriteWithSnapshot | IndexMode::SnapshotOnly => {
+            let write_output = mode == IndexMode::WriteWithSnapshot;
+            let (report, snapshot) = pipeline::run_with_snapshot(request, languages, write_output)?;
+            (report, Some(snapshot))
+        }
+    };
+    Ok(IndexOutput { report, snapshot })
+}
+
 /// Index the project at `request.root` and write the SCIP file to `request.output`.
 pub fn index_project(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<IndexReport, ScippyError> {
-    pipeline::run(request, languages, false, true).map(|(report, _)| report)
+    pipeline::run(request, languages)
 }
 
 /// Index the project and return the facts used to write the SCIP file.
@@ -126,8 +165,7 @@ pub fn index_project_with_snapshot(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<(IndexReport, AnalysisSnapshot), ScippyError> {
-    let (report, snapshot) = pipeline::run(request, languages, true, true)?;
-    Ok((report, snapshot.expect("snapshot was requested")))
+    pipeline::run_with_snapshot(request, languages, true)
 }
 
 /// Index the project like [`index_project_with_snapshot`], but do not write `request.output`.
@@ -136,6 +174,5 @@ pub fn index_project_for_publish(
     request: &IndexRequest,
     languages: &[&dyn LanguagePack],
 ) -> Result<(IndexReport, AnalysisSnapshot), ScippyError> {
-    let (report, snapshot) = pipeline::run(request, languages, true, false)?;
-    Ok((report, snapshot.expect("snapshot was requested")))
+    pipeline::run_with_snapshot(request, languages, false)
 }
