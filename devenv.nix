@@ -7,7 +7,7 @@
   # Every task declares `input.testee`, so Testee can reuse a verdict
   # when a commit changes none of the task inputs.
   # Run `testee doctor` after any edit to this table.
-  # `scripts/verify.sh` runs the same three Cargo steps by hand.
+  # `scripts/verify.sh` runs `testee verify --profile quick` for the edit loop.
   # Testee runs `git clean -ffdx -e .devenv` in its slot, which deletes `target/`.
   # Each Cargo task sets `CARGO_TARGET_DIR` under `.devenv/`, so the build stays warm.
   tasks =

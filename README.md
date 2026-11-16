@@ -522,15 +522,23 @@ definition in the corpus, so recall and precision keep their meaning.
 ## Verify
 
 Install the official `scip` CLI from https://github.com/scip-code/scip/releases.
-Then run:
+Then run the gate:
+
+```sh
+devenv shell -- testee verify
+```
+
+`testee verify` is the only gate. Run it before you land a change.
+It runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo check`, and `cargo test --workspace`.
+The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python, TypeScript, and Loci fixtures.
+The Loci expectations come from `loci-core`. To make them again, run `scripts/loci-oracle.sh`.
+During an edit, run the quick local check. It is not the gate:
 
 ```sh
 devenv shell -- scripts/verify.sh
 ```
 
-The script runs `cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test`.
-The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python, TypeScript, and Loci fixtures.
-The Loci expectations come from `loci-core`. To make them again, run `scripts/loci-oracle.sh`.
-Set `SCIP_BIN_DIR` when `scip` is not on `PATH`.
+The script runs `testee verify --profile quick`: lint, format, and the library tests.
+Set `SCIP_BIN_DIR` when `scip` is not in the default Testee tool path.
 Set `UPDATE_GOLDEN=1` to rewrite the golden snapshots in `languages/python/tests/golden` and
 `languages/typescript/tests/golden`, and `languages/loci/tests/golden`.
