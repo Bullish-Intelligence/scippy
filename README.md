@@ -25,9 +25,14 @@ Each root is a repository of its own. The core resolves the code of each root wi
 engine of its own, and frees the engine after the root. A root sees the code of another root
 only through its manifest. The roots run in parallel (see "Parallel roots").
 
-## Metalayer experiment
+## Metalayer (experimental)
 
-Scippy can persist the facts of a run and reuse file graphs in two SQLite databases.
+The metalayer is an experimental part of v0.1. Its goal is one index over notes and code for agent
+consumers. It makes no stability promise for entity IDs or for the schema in v0.1.
+
+Scippy can persist the facts of a run and reuse file graphs in two SQLite databases. With
+`--metalayer`, it also keeps entity IDs in an identity store beside the metalayer database (see
+`--identity` and `--no-identity`).
 Create the database directory, then run:
 
 ```sh
@@ -153,7 +158,8 @@ error diagnostic already makes `input_complete` false. A failed run writes no SC
 no database, and `ScippyError::Incomplete` is the error. The CLI prints the diagnostics first.
 The revision records `strict`.
 
-The database has no stable entity IDs, history, watcher, or query language.
+The identity store keeps entity IDs across edits, moves, and renames. v0.1 makes no stability
+promise for these IDs or for the schema. The metalayer has no history, watcher, or query language.
 The CLI publishes first and then writes the SCIP file. A failed SCIP write reports the
 revision that the database already committed.
 An edit during indexing does not mix two versions of a file. The indexer reads live files and
@@ -269,7 +275,7 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `9a584b8`. That commit speeds up the stitcher and adds the option to turn off the debug
+The pin is `cda555a96e5e26e2bc20922af32092e155b362d2`. Commit `9a584b8` is an ancestor of the pin. It speeds up the stitcher and adds the option to turn off the debug
 attributes (see "Performance" below). Commit `91450c8` resolves the names in `match` patterns. Commit `013c27c` added
 the synthesized `__init__` of model classes and `TypedDict` classes (see below). Commit `be7ece9` added type parameters, type aliases, the walrus, and relative
 imports with any number of dots. Commit `55f33f4` added the synthesized `__init__` of dataclasses
