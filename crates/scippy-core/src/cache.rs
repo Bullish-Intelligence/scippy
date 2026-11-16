@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -43,6 +43,9 @@ pub(crate) struct CacheGate {
     /// The byte cap of the cache file. Zero means no cap.
     max_bytes: u64,
     off: AtomicBool,
+    /// The number of failures that the gate saw. A lock timeout is one failure, and it costs
+    /// one wait of at most `timeout`.
+    failures: AtomicUsize,
     /// The number of this run. It is zero until the cache file is ready.
     run: AtomicI64,
     prepared: OnceLock<()>,
@@ -59,6 +62,7 @@ impl CacheGate {
             timeout,
             max_bytes,
             off: AtomicBool::new(false),
+            failures: AtomicUsize::new(0),
             run: AtomicI64::new(0),
             prepared: OnceLock::new(),
             #[cfg(test)]
@@ -81,12 +85,18 @@ impl CacheGate {
         executable_hash()
     }
 
+    /// The number of failures so far. Each failure ends one wait for the cache file.
+    pub fn failures(&self) -> usize {
+        self.failures.load(Ordering::SeqCst)
+    }
+
     pub fn is_on(&self) -> bool {
         self.path.is_some() && !self.off.load(Ordering::SeqCst)
     }
 
     /// Turn the cache off and print one warning for the whole run.
     pub fn fail(&self, error: &str) {
+        self.failures.fetch_add(1, Ordering::SeqCst);
         if !self.off.swap(true, Ordering::SeqCst) {
             let path = self.path.as_deref().unwrap_or(Path::new(""));
             eprintln!(

@@ -203,6 +203,7 @@ pub(crate) fn run(
         stubs.extend(indexed.stubs);
         external_symbols.extend(indexed.external_symbols);
     }
+    report.graph_cache_failures = cache.failures();
     // A stub defines a symbol in a file that another pack may own. Merge it into that document.
     for stub in stubs {
         match documents

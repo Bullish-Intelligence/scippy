@@ -121,6 +121,9 @@ pub struct IndexReport {
     pub graph_cache_hits: usize,
     /// File graphs built while the cache was enabled.
     pub graph_cache_misses: usize,
+    /// Cache failures in the run, such as a lock timeout. The first failure turns the cache
+    /// off. Each failure waits at most the cache timeout.
+    pub graph_cache_failures: usize,
     pub files_discovered: usize,
     /// Files that became documents.
     pub files_indexed: usize,

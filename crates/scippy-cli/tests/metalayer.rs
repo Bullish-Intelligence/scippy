@@ -599,20 +599,20 @@ fn a_locked_cache_turns_the_cache_off_after_one_timeout() {
     fs::create_dir(&root).unwrap();
     write_files(&root, 8);
     let cache = scratch.path().join("graphs.sqlite");
-    let start = std::time::Instant::now();
     let (_, clean) = run(&root, scratch.path().join("clean.scip"), None);
-    let clean_time = start.elapsed();
     run(&root, scratch.path().join("warm.scip"), Some(cache.clone()));
     let lock = rusqlite::Connection::open(&cache).unwrap();
     lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
     let mut request = IndexRequest::new(&root, scratch.path().join("locked.scip"));
     request.graph_cache = Some(cache.clone());
     request.graph_cache_timeout = std::time::Duration::from_secs(1);
-    let start = std::time::Instant::now();
-    let (_, locked) =
+    let (report, locked) =
         index_project_with_snapshot(&request, &[&PythonPack, &TypeScriptPack, &LociPack]).unwrap();
-    // Eight files at one timeout each would add eight seconds.
-    assert!(start.elapsed() < clean_time + std::time::Duration::from_secs(4));
+    // Each wait for the lock ends in one failure. One failure means one wait, so the later
+    // files did not wait. Eight waits would mean that the cache stayed on. A wall-clock bound
+    // fails under machine load.
+    assert_eq!(report.graph_cache_failures, 1);
+    assert_eq!(report.graph_cache_hits + report.graph_cache_misses, 0);
     assert_eq!(locked, clean);
     assert_eq!(
         fs::read(scratch.path().join("clean.scip")).unwrap(),
