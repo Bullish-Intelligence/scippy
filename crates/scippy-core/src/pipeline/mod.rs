@@ -24,8 +24,10 @@ use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Facts};
 use crate::identity::SymbolId;
 use crate::language::{ExtraFile, LanguagePack, Scope, WalkRules};
-use crate::project::{self, ProjectRelativePath, Router};
-use crate::snapshot::DeclRecord;
+use crate::project::{self, FoundFile, ProjectRelativePath, Router};
+use crate::report::IndexReport;
+use crate::snapshot::{Capture, DeclRecord};
+use crate::source::SourceStore;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -81,6 +83,20 @@ struct Declared {
     /// The identity facts. Only a global declaration and a parameter of a global function carry
     /// them.
     decl: Option<DeclRecord>,
+}
+
+/// What the index of one pack shares with the run: the pack, its files, and the run outputs
+/// that the pack adds to.
+struct PackRun<'a> {
+    pack: &'a dyn LanguagePack,
+    root: &'a Path,
+    /// The files that the router gave to the pack.
+    files: &'a [&'a FoundFile],
+    store: &'a SourceStore,
+    request: &'a IndexRequest,
+    report: &'a mut IndexReport,
+    trace: &'a mut Vec<String>,
+    capture: &'a mut Option<Capture>,
 }
 
 /// What one pack gives back: its documents and the external symbols that they reference.

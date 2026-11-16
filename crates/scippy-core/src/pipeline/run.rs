@@ -1,10 +1,10 @@
 //! The orchestration of one run: discover, index each pack, merge, and write.
 
-use super::PackRoute;
 use super::finish::lose;
 use super::inputs::read_support_inputs;
 use super::native::index_native_pack;
 use super::stack::index_pack;
+use super::{PackRoute, PackRun};
 use crate::IndexRequest;
 use crate::cache::CacheGate;
 use crate::emit::{self, Document, IndexData, SymbolInfo};
@@ -115,33 +115,25 @@ pub(crate) fn run(
             });
             continue;
         };
+        let mut run = PackRun {
+            pack: *pack,
+            root: &found.root,
+            files: &files,
+            store: &store,
+            request,
+            report: &mut report,
+            trace: &mut trace,
+            capture: &mut capture,
+        };
         let indexed = match engine {
-            Engine::StackGraphs(analysis) => index_pack(
-                *pack,
-                analysis,
-                &found.root,
-                &files,
-                &shards,
-                &extra_files,
-                &store,
-                request,
-                &cache,
-                &mut report,
-                &mut trace,
-                &mut capture,
-            )?,
+            Engine::StackGraphs(analysis) => {
+                index_pack(&mut run, analysis, &shards, &extra_files, &cache)?
+            }
             Engine::Native(native) => index_native_pack(
-                *pack,
+                &mut run,
                 native,
-                &found.root,
-                &files,
                 &found.all_files,
                 extra_states[index].as_deref(),
-                &store,
-                request,
-                &mut report,
-                &mut trace,
-                &mut capture,
             )?,
         };
         documents.extend(indexed.documents);

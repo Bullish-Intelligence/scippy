@@ -1,10 +1,11 @@
 //! Symbol identities: give each declaration a symbol, and declare external assets.
 
 use super::{Declared, Doc, SCHEME};
+use crate::IndexRequest;
 use crate::emit::SymbolInfo;
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Extractor, SourceAnchor};
-use crate::identity::{Descriptor, IdentityBuilder, SymbolId};
+use crate::identity::{Descriptor, IdentityBuilder, Package, SymbolId};
 use crate::language::{Analysis, DeclKind, ExternalAsset, ProjectModel, Reach, Scope};
 use crate::project::ProjectRelativePath;
 use crate::reconcile::DeclarationIndex;
@@ -83,6 +84,17 @@ pub(super) fn scope_chain(facts: &[DeclarationFact], containers: &[usize], i: us
             name: a.name.clone(),
         })
         .collect()
+}
+
+/// The identity builder of a run. The request can replace the name and the version of the package.
+pub(super) fn identity_builder(request: &IndexRequest, mut package: Package) -> IdentityBuilder {
+    if let Some(name) = &request.package_name {
+        package.name = name.clone();
+    }
+    if let Some(version) = &request.package_version {
+        package.version = version.clone();
+    }
+    IdentityBuilder::new(SCHEME, package)
 }
 
 /// Give each declaration of a document its symbol.

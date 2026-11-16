@@ -1,6 +1,6 @@
 //! The finishing stage of a document: count, trace, inheritance, and build.
 
-use super::{Declared, Doc};
+use super::{Declared, Doc, PackRun};
 use crate::bindings::Bound;
 use crate::emit::{Document, Occurrence, Role, SymbolInfo};
 use crate::identity::SymbolId;
@@ -10,7 +10,7 @@ use crate::positions::LineIndex;
 use crate::project::ProjectRelativePath;
 use crate::reconcile::{BindingOutcome, Reconciled, UnresolvedReason};
 use crate::report::{IndexReport, LostFile, MultiTargetStats};
-use crate::snapshot::{AnalysisEdge, Capture};
+use crate::snapshot::{AnalysisEdge, AnalysisReference, Capture};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// A method that can override or be overridden: a function that a class directly holds,
@@ -190,6 +190,70 @@ pub(super) fn trace_line(lines: &LineIndex, r: &Reconciled) -> String {
         r.unjoined.join(","),
         r.targets.join(",")
     )
+}
+
+/// The finishing stage that both pack paths share. After a path reconciles a document, the
+/// finisher counts the references, captures and traces them, and builds the document.
+pub(super) struct Finisher<'a> {
+    /// The SCIP language of the documents.
+    language: String,
+    /// True for a native pack. It changes how the snapshot records a reference.
+    native: bool,
+    /// The external symbols that a reference can resolve to.
+    externals: &'a BTreeMap<SymbolId, SymbolInfo>,
+    /// The external symbols that a reference resolved to.
+    referenced: BTreeMap<SymbolId, SymbolInfo>,
+}
+
+impl<'a> Finisher<'a> {
+    pub(super) fn new(
+        language: String,
+        native: bool,
+        externals: &'a BTreeMap<SymbolId, SymbolInfo>,
+    ) -> Self {
+        Self {
+            language,
+            native,
+            externals,
+            referenced: BTreeMap::new(),
+        }
+    }
+
+    /// Count the references of one document, capture them for the snapshot, and trace them.
+    pub(super) fn account(&mut self, run: &mut PackRun, doc: &Doc, reconciled: &[Reconciled]) {
+        for r in reconciled {
+            count(run.report, r);
+            if let Some(capture) = run.capture {
+                capture
+                    .references
+                    .push(AnalysisReference::from_reconciled(r, self.native));
+            }
+            if let BindingOutcome::Resolved(symbol) = &r.outcome {
+                if let Some(info) = self.externals.get(symbol) {
+                    run.report.references_external += 1;
+                    self.referenced
+                        .entry(symbol.clone())
+                        .or_insert_with(|| info.clone());
+                }
+            }
+        }
+        if run.request.trace.is_some() {
+            let lines = LineIndex::new(&doc.source);
+            run.trace
+                .extend(reconciled.iter().map(|r| trace_line(&lines, r)));
+        }
+    }
+
+    /// Build the document. A stub document has no language.
+    pub(super) fn build(&self, doc: Doc, reconciled: &[Reconciled], stub: bool) -> Document {
+        let language = if stub { "" } else { &self.language };
+        build_document(language, doc, reconciled)
+    }
+
+    /// The external symbols that the references of all documents resolved to.
+    pub(super) fn into_referenced(self) -> BTreeMap<SymbolId, SymbolInfo> {
+        self.referenced
+    }
 }
 
 /// Build the document: a definition occurrence for each declaration,

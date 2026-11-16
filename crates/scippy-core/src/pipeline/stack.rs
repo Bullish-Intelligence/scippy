@@ -1,54 +1,51 @@
 //! The stack-graphs pack path: shards, binding engines, reconcile, and identities.
 
-use super::finish::{build_document, count, is_method, record_inheritance, trace_line};
-use super::identities::{anonymous_scope, assign_identities, declare_external};
+use super::finish::{Finisher, is_method, record_inheritance};
+use super::identities::{anonymous_scope, assign_identities, declare_external, identity_builder};
 use super::inputs::read_manifests;
 use super::load::load_file;
 use super::memory::{MemoryMeter, shard_estimate};
 use super::shard::{dependency_closure, shard_groups, shard_of};
-use super::{Doc, PackIndex, SCHEME};
+use super::{Doc, PackIndex, PackRun};
 use crate::IndexRequest;
 use crate::bindings::{BindingEngine, CompiledRules, RawBinding};
 use crate::cache::CacheGate;
-use crate::emit::SymbolInfo;
 use crate::error::ScippyError;
 use crate::extract::{Extractor, SourceAnchor};
-use crate::identity::{IdentityBuilder, SymbolId};
+use crate::identity::SymbolId;
 use crate::inherit::Inheritance;
 use crate::language::{Analysis, DeclKind, ExtraFile, LanguagePack, ProjectModel, Scope};
-use crate::positions::LineIndex;
 use crate::project::{FoundFile, ProjectRelativePath};
-use crate::reconcile::{BindingOutcome, DeclarationIndex, Targeting, reconcile};
+use crate::reconcile::{DeclarationIndex, Targeting, reconcile};
 use crate::report::{Diagnostic, IndexReport, Severity, Stage};
 use crate::schedule;
-use crate::snapshot::{AnalysisReference, Capture};
 use crate::source::SourceStore;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn index_pack(
-    pack: &dyn LanguagePack,
+    run: &mut PackRun,
     analysis: &dyn Analysis,
-    root: &Path,
-    files: &[&FoundFile],
     shards: &[ProjectRelativePath],
     extra_files: &[ExtraFile],
-    store: &SourceStore,
-    request: &IndexRequest,
     cache: &Arc<CacheGate>,
-    report: &mut IndexReport,
-    trace: &mut Vec<String>,
-    capture: &mut Option<Capture>,
 ) -> Result<PackIndex, ScippyError> {
+    let PackRun {
+        pack,
+        root,
+        files,
+        store,
+        request,
+        ..
+    } = *run;
     let paths: Vec<ProjectRelativePath> = files.iter().map(|f| f.path.clone()).collect();
     let (manifests, problems) = analysis
         .manifest_name()
         .map(|name| read_manifests(root, name, shards, extra_files))
         .unwrap_or_default();
-    report.diagnostics.extend(problems);
-    report
+    run.report.diagnostics.extend(problems);
+    run.report
         .diagnostics
         .extend(analysis.input_problems(root, &paths, &manifests));
     let model = analysis.project_model(root, &paths, &manifests);
@@ -126,17 +123,17 @@ pub(super) fn index_pack(
             out
         },
     );
-    report.graph_cache_enabled = request.graph_cache.is_some();
+    run.report.graph_cache_enabled = request.graph_cache.is_some();
     let mut docs: Vec<(usize, Doc)> = Vec::new();
     let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
     for result in results {
         let out = result?;
-        report.files_skipped += out.report.files_skipped;
-        report.files_shadowed += out.report.files_shadowed;
-        report.lost_files.extend(out.report.lost_files);
-        report.graph_cache_hits += out.report.graph_cache_hits;
-        report.graph_cache_misses += out.report.graph_cache_misses;
-        report.diagnostics.extend(out.report.diagnostics);
+        run.report.files_skipped += out.report.files_skipped;
+        run.report.files_shadowed += out.report.files_shadowed;
+        run.report.lost_files.extend(out.report.lost_files);
+        run.report.graph_cache_hits += out.report.graph_cache_hits;
+        run.report.graph_cache_misses += out.report.graph_cache_misses;
+        run.report.diagnostics.extend(out.report.diagnostics);
         docs.extend(out.docs);
         for binding in out.bindings {
             by_document
@@ -150,20 +147,14 @@ pub(super) fn index_pack(
     let mut docs: Vec<Doc> = docs.into_iter().map(|(_, doc)| doc).collect();
 
     // Stage F: assign identities.
-    let mut package = model
+    let package = model
         .package()
         .unwrap_or_else(|| analysis.default_package());
-    if let Some(name) = &request.package_name {
-        package.name = name.clone();
-    }
-    if let Some(version) = &request.package_version {
-        package.version = version.clone();
-    }
-    let mut builder = IdentityBuilder::new(SCHEME, package);
+    let mut builder = identity_builder(request, package);
     let mut index = DeclarationIndex::default();
     for doc in &mut docs {
         doc.declared = assign_identities(&*model, &mut builder, doc)?;
-        report.declarations += doc.declared.len();
+        run.report.declarations += doc.declared.len();
         for d in &doc.declared {
             let extra = d
                 .fact
@@ -186,7 +177,7 @@ pub(super) fn index_pack(
     }
 
     // The declarations of external assets, such as the builtins.
-    let externals = declare_external(&extractors[0], analysis, &*model, report, &mut index);
+    let externals = declare_external(&extractors[0], analysis, &*model, run.report, &mut index);
 
     // A binding name takes the target of its reference. It joins as a module-like binding.
     for doc in &docs {
@@ -222,12 +213,11 @@ pub(super) fn index_pack(
     }
 
     // Stage E: reconcile.
-    let language = pack.scip_language().to_string();
     let mut out = Vec::with_capacity(docs.len());
     let mut inheritance = Inheritance::default();
     // The document that defines each method that can override another.
     let mut method_documents: BTreeMap<SymbolId, usize> = BTreeMap::new();
-    let mut referenced: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
+    let mut finisher = Finisher::new(pack.scip_language().to_string(), false, &externals);
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let members: HashSet<(u32, u32)> = doc.facts.members.iter().copied().collect();
@@ -253,31 +243,12 @@ pub(super) fn index_pack(
             .collect();
         let targeting = Targeting::new(&*model, containers);
         let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
-        for r in &reconciled {
-            count(report, r);
-            if let Some(capture) = capture {
-                capture
-                    .references
-                    .push(AnalysisReference::from_reconciled(r, false));
-            }
-            if let BindingOutcome::Resolved(symbol) = &r.outcome {
-                if let Some(info) = externals.get(symbol) {
-                    report.references_external += 1;
-                    referenced
-                        .entry(symbol.clone())
-                        .or_insert_with(|| info.clone());
-                }
-            }
-        }
-        if request.trace.is_some() {
-            let lines = LineIndex::new(&doc.source);
-            trace.extend(reconciled.iter().map(|r| trace_line(&lines, r)));
-        }
-        record_inheritance(&doc, &reconciled, &mut inheritance, capture);
+        finisher.account(run, &doc, &reconciled);
+        record_inheritance(&doc, &reconciled, &mut inheritance, run.capture);
         for d in doc.declared.iter().filter(|d| is_method(d)) {
             method_documents.insert(d.symbol.clone(), out.len());
         }
-        out.push(build_document(&language, doc, &reconciled));
+        out.push(finisher.build(doc, &reconciled, false));
     }
     // Stage G: an override method implements the method that it shadows.
     for (method, bases) in inheritance.overrides() {
@@ -292,7 +263,7 @@ pub(super) fn index_pack(
     Ok(PackIndex {
         documents: out,
         stubs: Vec::new(),
-        external_symbols: referenced,
+        external_symbols: finisher.into_referenced(),
     })
 }
 

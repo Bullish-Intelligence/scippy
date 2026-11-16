@@ -10,6 +10,31 @@ use crate::report::{Diagnostic, IndexReport, Severity, Stage};
 use crate::source::SourceStore;
 use std::sync::Arc;
 
+/// Read the text of a file from the store. When the read fails, count the file as skipped, lose
+/// it, add a diagnostic, and return `None`.
+pub(super) fn read_source(
+    store: &SourceStore,
+    file: &FoundFile,
+    report: &mut IndexReport,
+) -> Option<Arc<str>> {
+    match store.get(file) {
+        Ok(stored) => Some(Arc::clone(&stored.text)),
+        Err((code, message)) => {
+            report.files_skipped += 1;
+            lose(report, &file.path, code);
+            report.diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                stage: Stage::Discover,
+                file: Some(file.path.as_str().to_string()),
+                range: None,
+                code,
+                message: message.clone(),
+            });
+            None
+        }
+    }
+}
+
 /// Read, parse, and extract one file, and add its graph to the engine.
 /// Return `None` when the pipeline skips the file. A diagnostic then says why.
 #[allow(clippy::too_many_arguments)]
@@ -46,22 +71,7 @@ pub(super) fn load_file(
         ));
         return None;
     }
-    let source = match store.get(file) {
-        Ok(stored) => Arc::clone(&stored.text),
-        Err((code, message)) => {
-            let (code, message) = (*code, message.clone());
-            report.files_skipped += 1;
-            lose(report, &file.path, code);
-            report.diagnostics.push(diagnostic(
-                Stage::Discover,
-                Severity::Warning,
-                code,
-                None,
-                message,
-            ));
-            return None;
-        }
-    };
+    let source = read_source(store, file, report)?;
     let dialect = analysis.dialect_of(&file.path).min(extractors.len() - 1);
     let extractor = &extractors[dialect];
     // The text that the parser and the resolver read. It differs from `source` only when

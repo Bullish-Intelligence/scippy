@@ -1,26 +1,23 @@
 //! The native pack path: the pack declares and resolves, the core finishes.
 
-use super::finish::{build_document, count, lose, trace_line};
-use super::identities::assign_identities;
-use super::{Doc, PackIndex, SCHEME};
-use crate::IndexRequest;
+use super::finish::Finisher;
+use super::identities::{assign_identities, identity_builder};
+use super::load::read_source;
+use super::{Doc, PackIndex, PackRun, SCHEME};
 use crate::bindings::{Place, RawBinding, RawEnd};
 use crate::emit::SymbolInfo;
 use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Facts, SourceAnchor};
 use crate::identity::{IdentityBuilder, SymbolId};
 use crate::language::{
-    DeclKind, LanguagePack, NativeAnalysis, NativeDocument, NativeInput, NativeSource,
-    NativeTarget, ProjectFile, ReferenceRole, Scope,
+    DeclKind, NativeAnalysis, NativeDocument, NativeInput, NativeSource, NativeTarget, ProjectFile,
+    ReferenceRole, Scope,
 };
-use crate::positions::LineIndex;
-use crate::project::{FoundFile, ProjectRelativePath};
+use crate::project::ProjectRelativePath;
 use crate::reconcile::{BindingOutcome, DeclarationIndex, Targeting, UnresolvedReason, reconcile};
-use crate::report::{Diagnostic, IndexReport, Severity, Stage};
-use crate::snapshot::{AnalysisEdge, AnalysisReference, Capture};
-use crate::source::SourceStore;
+use crate::report::{Diagnostic, Severity, Stage};
+use crate::snapshot::AnalysisEdge;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 
 /// Index the files of a native pack: the pack declares and resolves, the core finishes.
@@ -29,40 +26,28 @@ use std::sync::Arc;
 /// declaration by document and span, applies the policy of the project model, assigns the symbol
 /// identities, and builds the documents. The shadow, bounded, and nearest-binding rules of the
 /// reconciler have nothing to act on, because a native reference has no paths.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn index_native_pack(
-    pack: &dyn LanguagePack,
+    run: &mut PackRun,
     native: &dyn NativeAnalysis,
-    root: &Path,
-    files: &[&FoundFile],
     all_files: &[ProjectFile],
     extra: Option<&(dyn std::any::Any + Send + Sync)>,
-    store: &SourceStore,
-    request: &IndexRequest,
-    report: &mut IndexReport,
-    trace: &mut Vec<String>,
-    capture: &mut Option<Capture>,
 ) -> Result<PackIndex, ScippyError> {
+    let PackRun {
+        pack,
+        root,
+        files,
+        store,
+        request,
+        ..
+    } = *run;
     // Read the files that the pack accepts.
     let mut sources: Vec<NativeSource> = Vec::with_capacity(files.len());
     for file in files {
-        match store.get(file) {
-            Ok(stored) => sources.push(NativeSource {
+        if let Some(text) = read_source(store, file, run.report) {
+            sources.push(NativeSource {
                 path: file.path.clone(),
-                text: Arc::clone(&stored.text),
-            }),
-            Err((code, message)) => {
-                report.files_skipped += 1;
-                lose(report, &file.path, code);
-                report.diagnostics.push(Diagnostic {
-                    severity: Severity::Warning,
-                    stage: Stage::Discover,
-                    file: Some(file.path.as_str().to_string()),
-                    range: None,
-                    code,
-                    message: message.clone(),
-                });
-            }
+                text,
+            });
         }
     }
     let output = native.analyze(&NativeInput {
@@ -71,8 +56,8 @@ pub(super) fn index_native_pack(
         sources: &sources,
         extra,
     });
-    report.diagnostics.extend(output.diagnostics);
-    if let Some(capture) = capture {
+    run.report.diagnostics.extend(output.diagnostics);
+    if let Some(capture) = run.capture {
         for link in &output.links {
             capture.edges.push(AnalysisEdge {
                 kind: if link.embed { "embed" } else { "link" }.to_owned(),
@@ -90,14 +75,8 @@ pub(super) fn index_native_pack(
     }
     let model = native.project_model(root);
 
-    let mut package = model.package().unwrap_or_else(|| native.default_package());
-    if let Some(name) = &request.package_name {
-        package.name = name.clone();
-    }
-    if let Some(version) = &request.package_version {
-        package.version = version.clone();
-    }
-    let mut builder = IdentityBuilder::new(SCHEME, package);
+    let package = model.package().unwrap_or_else(|| native.default_package());
+    let mut builder = identity_builder(request, package);
     let mut texts: HashMap<ProjectRelativePath, Arc<str>> =
         sources.into_iter().map(|s| (s.path, s.text)).collect();
 
@@ -170,7 +149,7 @@ pub(super) fn index_native_pack(
                 decl.note = Some(record.clone());
             }
         }
-        report.declarations += doc.declared.len();
+        run.report.declarations += doc.declared.len();
         for d in &doc.declared {
             index.insert_scoped(
                 d.fact.anchor.clone(),
@@ -213,7 +192,7 @@ pub(super) fn index_native_pack(
                     decl: None,
                 });
             }
-            Err(error) => report.diagnostics.push(Diagnostic {
+            Err(error) => run.report.diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 stage: Stage::Identity,
                 file: None,
@@ -267,10 +246,9 @@ pub(super) fn index_native_pack(
     }
 
     // Stage E: reconcile. Stage G: build the documents.
-    let language = pack.scip_language().to_string();
+    let mut finisher = Finisher::new(pack.scip_language().to_string(), true, &externals);
     let mut out = Vec::new();
     let mut stubs = Vec::new();
-    let mut referenced: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
     for (doc, native_doc) in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let targeting = Targeting::new(&*model, Vec::new());
@@ -296,28 +274,8 @@ pub(super) fn index_native_pack(
                 r.outcome = BindingOutcome::Unresolved(UnresolvedReason::TargetSkipped);
             }
         }
-        for r in &reconciled {
-            count(report, r);
-            if let Some(capture) = capture {
-                capture
-                    .references
-                    .push(AnalysisReference::from_reconciled(r, true));
-            }
-            if let BindingOutcome::Resolved(symbol) = &r.outcome {
-                if let Some(info) = externals.get(symbol) {
-                    report.references_external += 1;
-                    referenced
-                        .entry(symbol.clone())
-                        .or_insert_with(|| info.clone());
-                }
-            }
-        }
-        if request.trace.is_some() {
-            let lines = LineIndex::new(&doc.source);
-            trace.extend(reconciled.iter().map(|r| trace_line(&lines, r)));
-        }
-        let document_language = if native_doc.stub { "" } else { &language };
-        let built = build_document(document_language, doc, &reconciled);
+        finisher.account(run, &doc, &reconciled);
+        let built = finisher.build(doc, &reconciled, native_doc.stub);
         if native_doc.stub {
             stubs.push(built);
         } else {
@@ -327,6 +285,6 @@ pub(super) fn index_native_pack(
     Ok(PackIndex {
         documents: out,
         stubs,
-        external_symbols: referenced,
+        external_symbols: finisher.into_referenced(),
     })
 }
