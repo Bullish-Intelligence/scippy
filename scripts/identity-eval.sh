@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Evaluate entity rebinding. Not part of the gate. Run inside the devenv shell.
 #
-#   scripts/identity-eval.sh replay REPO_COPY WORK_DIR [PAIRS] [TIME_PAIRS]
+#   scripts/identity-eval.sh replay REPO_COPY WORK_DIR [PAIRS] [TIME_PAIRS] [MOVES]
 #       Replay PAIRS consecutive commit pairs (default 20) of a COPIED git repository.
 #       Print per-tier precision and recall, the orphan and ambiguity rates, and (for the first
-#       TIME_PAIRS pairs, default 0) the overhead of the rebinding.
+#       TIME_PAIRS pairs, default 0) the overhead of the rebinding. MOVES (default 0) is the
+#       number of pairs chosen from commits that rename files or add and delete files.
+#       Time is CPU time, so machine load does not distort it.
 #       WORK_DIR is a scratch folder under ~/.local/state/scippy/. Never use a real repository.
 #   scripts/identity-eval.sh overhead [WORK_DIR]
 #       Time the rebinding on a synthetic corpus. The devenv task `bench:identity` runs this.
@@ -29,11 +31,11 @@ command=${1:-}
 shift || true
 case "$command" in
   replay)
-    repo=${1:?usage: identity-eval.sh replay REPO_COPY WORK_DIR [PAIRS] [TIME_PAIRS]}
+    repo=${1:?usage: identity-eval.sh replay REPO_COPY WORK_DIR [PAIRS] [TIME_PAIRS] [MOVES]}
     work=${2:?missing WORK_DIR}
     mkdir -p "$work"
     exec python3 -I "$here/scripts/identity_eval.py" replay "$repo" --work "$work" \
-      --scippy "$(binary)" --pairs "${3:-20}" --time-pairs "${4:-0}"
+      --scippy "$(binary)" --pairs "${3:-20}" --time-pairs "${4:-0}" --moves "${5:-0}"
     ;;
   overhead)
     work=${1:-${TMPDIR:-/tmp}}

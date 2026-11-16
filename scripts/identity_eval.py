@@ -17,13 +17,13 @@ import csv
 import hashlib
 import json
 import os
+import resource
 import shutil
 import sqlite3
 import statistics
 import subprocess
 import sys
 import tempfile
-import time
 
 SEP = "\x1f"
 TIERS = ["T1", "T1h", "T2f", "T2", "T3", "T4", "T5", "Param"]
@@ -46,7 +46,10 @@ def git(repo, *args, check=True):
 
 
 def index(binary, root, work, db=None, identity=None, no_identity=False, extra=()):
-    """Run `scippy index` on ROOT. Return the wall time in seconds."""
+    """Run `scippy index` on ROOT. Return the CPU time (user and system) in seconds.
+
+    CPU time stays stable under machine load. Wall time does not.
+    """
     cmd = [binary, "index", root, "--output", os.path.join(work, "out.scip")]
     if db:
         cmd += ["--metalayer", db]
@@ -55,9 +58,10 @@ def index(binary, root, work, db=None, identity=None, no_identity=False, extra=(
         elif identity:
             cmd += ["--identity", identity]
     cmd += list(extra)
-    start = time.perf_counter()
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     result = run(cmd, cwd=work, check=False)
-    elapsed = time.perf_counter() - start
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    elapsed = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
     if result.returncode:
         raise RuntimeError("scippy failed: " + result.stderr.decode("utf-8", "replace")[-500:])
     return elapsed
@@ -270,12 +274,29 @@ def truth_for(a_ents, b_decls, renamed, deleted, proxy_a, proxy_b):
 # ---- Replay ----
 
 
-def pick_pairs(repo, count):
+def has_moves(repo, rev):
+    """True when the commit renames a Python file, or adds and deletes Python files."""
+    text = git(repo, "diff", "-M", "-C", "--name-status", rev + "^", rev, "--", "*.py").decode("utf-8", "replace")
+    status = {line.split("\t")[0][0] for line in text.splitlines() if line}
+    return bool(status & {"R", "C"}) or {"A", "D"} <= status
+
+
+def pick_pairs(repo, count, moves=0):
+    """Pick COUNT commits. Up to MOVES of them are likely refactorings. The rest are spread evenly."""
     revs = git(repo, "log", "--format=%H", "--no-merges", "--", "*.py").decode().split()
     revs = [r for r in revs if git(repo, "rev-parse", "--verify", "-q", r + "^", check=False).strip()]
-    if len(revs) > count:
-        step = len(revs) / count
-        revs = [revs[int(i * step)] for i in range(count)]
+    chosen = []
+    if moves:
+        movers = [r for r in revs if has_moves(repo, r)]
+        step = max(1, len(movers) // moves)
+        chosen = movers[::step][:moves]
+    rest = [r for r in revs if r not in chosen]
+    room = count - len(chosen)
+    if len(rest) > room:
+        step = len(rest) / room
+        rest = [rest[int(i * step)] for i in range(room)]
+    revs = chosen + rest
+    revs = sorted(set(revs), key=revs.index)[:count]
     revs.reverse()
     return revs
 
@@ -415,7 +436,7 @@ def cmd_replay(args):
     os.makedirs(os.path.join(work, "root"), exist_ok=True)
     binary = os.path.abspath(args.scippy)
     extra = args.extra
-    commits = pick_pairs(repo, args.pairs)
+    commits = pick_pairs(repo, args.pairs, args.moves)
     total = collections.Counter()
     details, timings = [], []
     per_pair = []
@@ -480,7 +501,7 @@ def timing_report(timings):
     publish = med["r1"] - med["r0"]
     noop = med["n2"] - med["n1"]
     lines = [
-        "Timing over %d pairs (median seconds): index only %.3f, publish without identity %.3f, publish with identity %.3f."
+        "Timing over %d pairs (median CPU seconds, user and system): index only %.3f, publish without identity %.3f, publish with identity %.3f."
         % (len(timings), med["r0"], med["r1"], med["r2"]),
         "Rebinding overhead: %.3f s. Of the full run (no identity): %.1f%%. Of the publish step alone: %.1f%%."
         % (rebind, 100 * rebind / med["r1"], 100 * rebind / publish if publish > 0 else float("nan")),
@@ -557,6 +578,7 @@ def main():
     rp.add_argument("--work", required=True, help="scratch folder")
     rp.add_argument("--scippy", required=True, help="the scippy binary")
     rp.add_argument("--pairs", type=int, default=20)
+    rp.add_argument("--moves", type=int, default=0, help="include up to K commits that rename or move files")
     rp.add_argument("--time-pairs", type=int, default=0, help="time the first K pairs")
     rp.add_argument("--time-reps", type=int, default=1)
     rp.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="extra `scippy index` arguments")
