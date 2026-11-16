@@ -27,8 +27,11 @@
       cargoEnv = ''
         export CARGO_TARGET_DIR="''${DEVENV_STATE:?DEVENV_STATE is not set}/cargo-target"
       '';
-      # The timeouts cover a cold Cargo build in a new Testee workspace.
-      # Measure a warm run, then set each timeout to about twice that time.
+      # A Testee timeout is a hang guard, not a speed check.
+      # Tasks run under any machine load, so each limit is 4 hours.
+      # Put benchmarks in an opt-in `bench:*` task, never in a check or test task.
+      # Run one with `testee verify bench:<name>`. Its verdict never counts toward green.
+      hangGuard = 14400;
       # The tests call the scip CLI. Make them fail, not skip, when it is missing.
       scipEnv = ''
         scip_dir="''${SCIP_BIN_DIR:-$HOME/.local/state/scippy/tools/scip/v0.10.0/bin}"
@@ -41,6 +44,7 @@
       "check:format" = {
         exec = "cargo fmt --check";
         input.testee.ignores = unread;
+        input.testee.timeout_s = hangGuard;
       };
 
       "check:lint" = {
@@ -49,7 +53,7 @@
           cargo clippy --workspace --all-targets -- -D warnings
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = 900;
+        input.testee.timeout_s = hangGuard;
       };
 
       "check:types" = {
@@ -58,7 +62,7 @@
           cargo check --workspace --all-targets
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = 900;
+        input.testee.timeout_s = hangGuard;
       };
 
       "test:quick" = {
@@ -68,7 +72,7 @@
           cargo test --workspace --lib
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = 900;
+        input.testee.timeout_s = hangGuard;
       };
 
       "test:full" = {
@@ -78,7 +82,7 @@
           cargo test --workspace
         '';
         input.testee.ignores = unread;
-        input.testee.timeout_s = 1800;
+        input.testee.timeout_s = hangGuard;
       };
     };
 }
