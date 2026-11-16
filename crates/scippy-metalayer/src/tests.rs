@@ -17,6 +17,7 @@ fn symbol(name: &str) -> AnalysisSymbol {
         display_name: name.into(),
         implements: Vec::new(),
         references: Vec::new(),
+        decl: None,
     }
 }
 

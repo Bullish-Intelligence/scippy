@@ -53,6 +53,32 @@ pub struct AnalysisSymbol {
     pub display_name: String,
     pub implements: Vec<String>,
     pub references: Vec<String>,
+    /// The facts that the identity store needs. It is `Some` for a global declaration and for
+    /// a parameter of a global function or method. It is `None` for any other symbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decl: Option<DeclRecord>,
+}
+
+/// The facts of a declaration that find it again after an edit, a move, or a rename.
+///
+/// The snapshot carries them. The SCIP index and the facts store do not.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DeclRecord {
+    /// The display names of the enclosing declarations, from the outermost to the innermost.
+    /// The module is not in the list. For a parameter, the last name is the function.
+    pub container: Vec<String>,
+    /// The SCIP symbol of the function or method that holds a parameter. It is `None` for any
+    /// other declaration. The identity key of a parameter is this parent and its name.
+    pub parent: Option<String>,
+    /// The digest of the tokens outside the body and outside the name, as 32 lowercase hex
+    /// digits. It is `None` for a declaration without a `body` field.
+    pub sig_digest: Option<String>,
+    /// The digest of the tokens of the `body` field, as 32 lowercase hex digits. It is `None`
+    /// for a declaration without a `body` field.
+    pub body_digest: Option<String>,
+    /// The number of named tree-sitter nodes in the body, comments excluded.
+    pub body_tokens: Option<u32>,
 }
 
 fn symbol_info(s: &SymbolInfo) -> AnalysisSymbol {
@@ -62,6 +88,7 @@ fn symbol_info(s: &SymbolInfo) -> AnalysisSymbol {
         display_name: s.display_name.clone(),
         implements: s.implements.iter().map(|s| s.as_str().to_owned()).collect(),
         references: s.references.iter().map(|s| s.as_str().to_owned()).collect(),
+        decl: s.decl.clone(),
     }
 }
 

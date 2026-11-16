@@ -31,8 +31,8 @@ mod source;
 
 pub use snapshot::{
     AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisOccurrence,
-    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, INCOMPLETE_CODES, ReferenceOutcome,
-    file_status,
+    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, DeclRecord, INCOMPLETE_CODES,
+    ReferenceOutcome, file_status,
 };
 
 pub use bindings::{Bound, ResolveLimits};

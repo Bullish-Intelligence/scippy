@@ -74,6 +74,8 @@ pub(crate) struct SymbolInfo {
     pub implements: Vec<SymbolId>,
     /// The symbols that this symbol refers to, sorted. An alias refers to its document.
     pub references: Vec<SymbolId>,
+    /// The identity facts. The SCIP output ignores them.
+    pub decl: Option<crate::snapshot::DeclRecord>,
 }
 
 /// One source file.
@@ -442,6 +444,7 @@ mod tests {
             kind: SymbolKind::Function,
             implements: Vec::new(),
             references: Vec::new(),
+            decl: None,
         }
     }
 

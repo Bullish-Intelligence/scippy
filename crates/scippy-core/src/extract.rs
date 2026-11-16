@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use sha2::{Digest, Sha256};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor, Tree};
 
@@ -32,6 +33,25 @@ pub(crate) struct DeclarationFact {
     /// Other spans that the binding rules use as the definition site of this declaration.
     /// A binding path that ends at such a span ends at the declaration.
     pub extra_anchors: Vec<(u32, u32)>,
+    /// The digests of the declaration. It is `None` when the declaration has no `body` field.
+    pub digests: Option<BodyDigests>,
+}
+
+/// The digests of one declaration with a body. They ignore whitespace and comments.
+///
+/// The tokens of the declaration, in document order, split in two parts. The body part holds
+/// the tokens inside the `body` field. The signature part holds all other tokens, except the
+/// name. A token is the kind and the text of a leaf node. The extent of the declaration sets
+/// the tokens. A decorator of a Python function or class is not inside the extent, so it
+/// is in neither digest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BodyDigests {
+    /// The first 128 bits of the SHA-256 of the signature tokens, as lowercase hex.
+    pub sig: String,
+    /// The first 128 bits of the SHA-256 of the body tokens, as lowercase hex.
+    pub body: String,
+    /// The number of named nodes in the body, comments excluded.
+    pub body_tokens: u32,
 }
 
 /// The facts of one document.
@@ -183,6 +203,8 @@ impl Extractor {
         let mut aliases = Vec::new();
         let mut hidden_spans = Vec::new();
         let mut module = None;
+        // The body of each declaration that has one, keyed by the name span and the extent.
+        let mut bodies: BTreeMap<(Span, Span), Span> = BTreeMap::new();
         let mut cursor = QueryCursor::new();
         let mut matches = cursor.matches(&self.query, tree.root_node(), source.as_bytes());
         while let Some(m) = matches.next() {
@@ -202,6 +224,7 @@ impl Extractor {
                     kind: DeclKind::Module,
                     extent: (start, whole.end_byte() as u32),
                     extra_anchors: Vec::new(),
+                    digests: None,
                 });
             }
             if let (Some(name), Some(target)) = (
@@ -253,7 +276,14 @@ impl Extractor {
                         .map(|n| (n.start_byte() as u32, n.end_byte() as u32))
                         .into_iter()
                         .collect(),
+                    digests: None,
                 });
+                if let Some(body) = whole.child_by_field_name("body") {
+                    bodies.insert(
+                        (span, (whole.start_byte() as u32, whole.end_byte() as u32)),
+                        (body.start_byte() as u32, body.end_byte() as u32),
+                    );
+                }
             }
         }
 
@@ -279,6 +309,24 @@ impl Extractor {
                 facts.declarations.push(first);
             }
         }
+        let entries: Vec<DigestEntry> = facts
+            .declarations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, d)| {
+                let name = (d.anchor.start_byte, d.anchor.end_byte);
+                let body = *bodies.get(&(name, d.extent))?;
+                Some(DigestEntry {
+                    index,
+                    extent: d.extent,
+                    name,
+                    body,
+                })
+            })
+            .collect();
+        for (index, digests) in digest_declarations(tree, source, entries) {
+            facts.declarations[index].digests = Some(digests);
+        }
         imports.sort_unstable();
         imports.dedup();
         facts.imports = imports;
@@ -302,6 +350,137 @@ impl Extractor {
         facts.hidden = hidden_spans;
         facts
     }
+}
+
+/// A byte span: start and end.
+type Span = (u32, u32);
+
+/// A declaration that has a body, with the spans that split its tokens.
+struct DigestEntry {
+    /// The index of the declaration in `Facts::declarations`.
+    index: usize,
+    extent: (u32, u32),
+    name: (u32, u32),
+    body: (u32, u32),
+}
+
+/// The running hashes of one declaration.
+struct DigestState {
+    sig: Sha256,
+    body: Sha256,
+    body_tokens: u32,
+}
+
+fn hex128(hash: Sha256) -> String {
+    use std::fmt::Write;
+    hash.finalize()[..16]
+        .iter()
+        .fold(String::with_capacity(32), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}
+
+/// Compute the digests of all declarations with a body in one walk of the tree.
+///
+/// The walk visits each node once, in document order. A token goes to the hash of every
+/// declaration whose extent holds it. Nested declarations need no second walk. Comments and
+/// zero-width nodes add nothing, so whitespace and comments never change a digest.
+fn digest_declarations(
+    tree: &Tree,
+    source: &str,
+    mut entries: Vec<DigestEntry>,
+) -> Vec<(usize, BodyDigests)> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    entries.sort_by_key(|e| (e.extent.0, std::cmp::Reverse(e.extent.1)));
+    let mut states: Vec<DigestState> = entries
+        .iter()
+        .map(|_| DigestState {
+            sig: Sha256::new(),
+            body: Sha256::new(),
+            body_tokens: 0,
+        })
+        .collect();
+    let bytes = source.as_bytes();
+    let mut token = Vec::new();
+    // The entries that hold the current node, from the outermost to the innermost.
+    let mut active: Vec<usize> = Vec::new();
+    let mut next = 0;
+    let mut cursor = tree.walk();
+    'walk: loop {
+        let node = cursor.node();
+        let (start, end) = (node.start_byte() as u32, node.end_byte() as u32);
+        while active.last().is_some_and(|&i| entries[i].extent.1 <= start) {
+            active.pop();
+        }
+        while next < entries.len() && entries[next].extent.0 <= start {
+            if entries[next].extent.1 > start {
+                active.push(next);
+            }
+            next += 1;
+        }
+        let outside = active.is_empty() && entries.get(next).is_none_or(|e| end <= e.extent.0);
+        let mut descend = !outside && !node.kind().contains("comment");
+        if descend && !active.is_empty() {
+            if node.is_named() {
+                for &i in &active {
+                    let body = entries[i].body;
+                    if body.0 <= start && end <= body.1 {
+                        states[i].body_tokens += 1;
+                    }
+                }
+            }
+            if node.child_count() == 0 {
+                descend = false;
+                if end > start {
+                    token.clear();
+                    token.extend_from_slice(node.kind().as_bytes());
+                    token.push(0);
+                    token.extend_from_slice(&(end - start).to_le_bytes());
+                    token.extend_from_slice(&bytes[start as usize..end as usize]);
+                    for &i in &active {
+                        let e = &entries[i];
+                        if e.name.0 <= start && end <= e.name.1 {
+                            continue;
+                        }
+                        let state = &mut states[i];
+                        if e.body.0 <= start && end <= e.body.1 {
+                            state.body.update(&token);
+                        } else {
+                            state.sig.update(&token);
+                        }
+                    }
+                }
+            }
+        }
+        if descend && cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                continue 'walk;
+            }
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
+    entries
+        .iter()
+        .zip(states)
+        .map(|(e, s)| {
+            (
+                e.index,
+                BodyDigests {
+                    sig: hex128(s.sig),
+                    body: hex128(s.body),
+                    body_tokens: s.body_tokens,
+                },
+            )
+        })
+        .collect()
 }
 
 /// Find the first error or missing node in document order, without recursion.

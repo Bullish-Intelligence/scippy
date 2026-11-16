@@ -26,7 +26,9 @@ use crate::reconcile::{
 };
 use crate::report::{Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage};
 use crate::schedule;
-use crate::snapshot::{AnalysisEdge, AnalysisReference, AnalysisSnapshot, Capture, RunContext};
+use crate::snapshot::{
+    AnalysisEdge, AnalysisReference, AnalysisSnapshot, Capture, DeclRecord, RunContext,
+};
 use crate::source::SourceStore;
 
 /// The SCIP scheme of every symbol that Scippy writes.
@@ -77,6 +79,9 @@ struct Declared {
     /// The enclosing declarations and the declaration itself, for the target policy of the pack.
     scopes: Vec<Scope>,
     declaration: Scope,
+    /// The identity facts. Only a global declaration and a parameter of a global function carry
+    /// them.
+    decl: Option<DeclRecord>,
 }
 
 pub(crate) fn run(
@@ -1106,6 +1111,7 @@ fn index_native_pack(
                 kind: DeclKind::Module,
                 extent: (0, source.len() as u32),
                 extra_anchors: Vec::new(),
+                digests: None,
             });
         }
         for d in &native_doc.declarations {
@@ -1115,6 +1121,7 @@ fn index_native_pack(
                 kind: d.kind,
                 extent: d.span,
                 extra_anchors: Vec::new(),
+                digests: None,
             });
             if d.of_module {
                 facts.module_aliases.push(d.span);
@@ -1174,6 +1181,7 @@ fn index_native_pack(
                     display_name: identity.display_name.clone(),
                     implements: Vec::new(),
                     references: Vec::new(),
+                    decl: None,
                 });
             }
             Err(error) => report.diagnostics.push(Diagnostic {
@@ -1319,6 +1327,7 @@ fn anonymous_facts(doc: &Doc) -> Vec<DeclarationFact> {
             kind: DeclKind::Function,
             extent,
             extra_anchors: Vec::new(),
+            digests: None,
         })
         .collect()
 }
@@ -1484,6 +1493,7 @@ fn declare_asset(
                     display_name: identity.display_name,
                     implements: Vec::new(),
                     references: Vec::new(),
+                    decl: None,
                 });
             }
             Err(error) => report
@@ -1572,6 +1582,7 @@ fn assign_identities(
                     name: identity.display_name.clone(),
                 },
                 display_name: identity.display_name,
+                decl: Some(DeclRecord::default()),
             });
         }
     }
@@ -1586,6 +1597,9 @@ fn assign_identities(
             name: fact.name.clone(),
         });
     }
+    // The index of the first declaration in `out`. The module can come before it.
+    let first = out.len();
+    let mut global = vec![false; declared_count];
     for (i, fact) in facts.iter().enumerate().take(declared_count) {
         let scopes = scope_chain(facts, &containers, i);
         let declaration = Scope {
@@ -1605,6 +1619,15 @@ fn assign_identities(
                 SymbolId::local(*locals.entry(identity.descriptors).or_insert(next))
             }
         };
+        global[i] = identity.reach == Reach::Global;
+        let carries = !matches!(fact.kind, DeclKind::TypeParameter | DeclKind::Parameter);
+        let decl = (global[i] && carries).then(|| DeclRecord {
+            container: scopes.iter().map(|s| s.name.clone()).collect(),
+            sig_digest: fact.digests.as_ref().map(|d| d.sig.clone()),
+            body_digest: fact.digests.as_ref().map(|d| d.body.clone()),
+            body_tokens: fact.digests.as_ref().map(|d| d.body_tokens),
+            ..DeclRecord::default()
+        });
         out.push(Declared {
             fact: fact.clone(),
             symbol,
@@ -1612,6 +1635,30 @@ fn assign_identities(
             display_name: identity.display_name,
             scopes,
             declaration,
+            decl,
+        });
+    }
+    // A parameter carries its facts when a global function or method holds it. The rule reads
+    // the holder, not the reach of the parameter. The parent symbol builds the identity key.
+    for i in 0..declared_count {
+        if facts[i].kind != DeclKind::Parameter {
+            continue;
+        }
+        let Some(holder) = innermost_container(facts, &containers, i) else {
+            continue;
+        };
+        if holder >= declared_count || facts[holder].kind != DeclKind::Function || !global[holder] {
+            continue;
+        }
+        let parent = out[first + holder].symbol.as_str().to_owned();
+        out[first + i].decl = Some(DeclRecord {
+            container: out[first + i]
+                .scopes
+                .iter()
+                .map(|s| s.name.clone())
+                .collect(),
+            parent: Some(parent),
+            ..DeclRecord::default()
         });
     }
     Ok(out)
@@ -1746,6 +1793,7 @@ fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Docume
                 display_name: d.display_name.clone(),
                 implements: Vec::new(),
                 references: Vec::new(),
+                decl: d.decl.clone(),
             });
     }
     // A second name of the module refers to the module.
