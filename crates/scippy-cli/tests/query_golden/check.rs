@@ -9,10 +9,10 @@ use std::process::Command;
 use crate::harness::{golden, golden_db, golden_text, project_root, run, scratch_db};
 
 /// An indexed copy of the fixture project that a test may change.
-struct Copy {
-    root: PathBuf,
-    db: PathBuf,
-    scip: PathBuf,
+pub struct Copy {
+    pub root: PathBuf,
+    pub db: PathBuf,
+    pub scip: PathBuf,
 }
 
 fn copy_tree(from: &Path, to: &Path) {
@@ -28,7 +28,7 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-fn indexed_copy(name: &str) -> Copy {
+pub fn indexed_copy(name: &str) -> Copy {
     let db = scratch_db(name);
     let dir = db.with_file_name(format!("{name}-project"));
     let _ = fs::remove_dir_all(&dir);

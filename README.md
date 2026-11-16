@@ -169,12 +169,63 @@ writes. The design and the JSON contract are in `METALAYER_QUERY.md`.
 
 - `show` prints the revision, the root set, the flags, and the counts.
 - `files` lists the input manifest. Filters: `--status`, `--language`, `--prefix`.
+- `relations` lists the file-to-symbol relations. Filters: `--from`, `--to`, `--target-name`,
+  `--kind`, `--external`, `--internal`.
+- `edges` lists single edges: one site for each item.
+- `explain --from PATH --to SYMBOL` shows why a file depends on a symbol: the relations, the
+  supports with line and column, and the ambiguous references that list the symbol.
+- `check` compares the files on disk with the stored hashes. Options: `--root`, `--scip`,
+  `--discover`.
 
-With `--json`, a command prints one envelope with `format_version` 1. The schema is
-`crates/scippy-cli/schema/metalayer-v1.schema.json`. A reader must ignore unknown fields and
-unknown enum values. A failure prints `scippy: {error}` on stderr, or an error envelope with
-`--json`. Exit codes: 0 success, 1 error, 2 usage error, 4 no revision in the database.
-To update the golden test files, run `UPDATE_GOLDEN=1 cargo test -p scippy-cli --test query_golden`.
+### The JSON contract
+
+With `--json`, a command prints one envelope. The CLI output is the contract. The tables of the
+database are private: never query them. The Rust API of `scippy-metalayer` is a secondary contract.
+
+- `format_version` is an integer. It is 1 now. `schema_version` is the storage version. It is
+  informational: do not switch on it.
+- The envelope also holds `tool`, `command`, `ok`, `revision`, `root_set`, `input_complete`,
+  `analysis_exact`, `position_encoding`, and `value`. A list value is `{items, total, truncated}`.
+- An error envelope holds `ok: false` and `error: {kind, message}`. It has no `value`. The kinds
+  are stable kebab-case strings.
+- Key order is not part of the contract.
+
+Compatibility policy (`METALAYER_QUERY.md`, section 5):
+
+- An additive change keeps `format_version`: a new field, enum value, error kind, command,
+  option, or filter.
+- A breaking change raises `format_version`: the removal, rename, or retyping of a field; a
+  change of the meaning or unit of a field, or of a sort order; an optional field that becomes
+  required; a change of the meaning of an exit code.
+- After a bump, the tool accepts `--format-version N` for the previous version for two minor
+  releases. The changelog names each step.
+- A reader must ignore unknown fields and unknown enum values. It treats an unknown value as an
+  opaque string.
+
+Exit codes, for every command:
+
+| Code | Meaning |
+|---|---|
+| 0 | Success. For `check`: the index is fresh. |
+| 1 | Error: bad database, schema mismatch, bad argument, I/O failure. |
+| 2 | Usage error (clap). Text on stderr, no envelope. |
+| 3 | `check` only: the index is stale. The envelope has `ok: true`. |
+| 4 | The database holds no revision. Run `scippy index --metalayer` first. |
+
+On exit 1, the error goes to stderr as `scippy: {error}`, or to stdout as an error envelope with
+`--json`.
+
+The JSON Schema (2020-12) is `crates/scippy-cli/schema/metalayer-v1.schema.json`. It refers to
+one file for each command in `crates/scippy-cli/schema/metalayer-v1/`. It allows additional
+properties. Every golden output must validate against it.
+
+The golden files are in `crates/scippy-cli/tests/golden/query/`. To update them, run
+`UPDATE_GOLDEN=1 cargo test -p scippy-cli --test query_golden`. A change in a golden file is a
+contract change: check the policy above first.
+
+A coding agent can use the three recipes of the skill `.agents/skills/scippy-metalayer/SKILL.md`:
+who imports a symbol, why a file depends on a symbol, and whether the index is fresh. The test
+`crates/scippy-cli/tests/query_golden/skill.rs` runs the recipes.
 
 ## Manifests
 

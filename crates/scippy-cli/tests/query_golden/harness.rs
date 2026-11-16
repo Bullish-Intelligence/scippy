@@ -156,6 +156,11 @@ pub fn project_root() -> &'static Path {
     &fixture().root
 }
 
+/// The path of the fixture database, for a test that runs commands itself.
+pub fn fixture_db() -> &'static Path {
+    &fixture().db
+}
+
 fn update() -> bool {
     std::env::var_os("UPDATE_GOLDEN").is_some_and(|v| !v.is_empty())
 }

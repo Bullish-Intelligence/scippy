@@ -17,3 +17,4 @@ mod explain;
 mod files;
 mod relations;
 mod show;
+mod skill;
