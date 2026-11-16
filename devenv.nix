@@ -101,7 +101,11 @@ in
       # Measured 2026-11-16 from Testee run records since the fast gate (7b9e484):
       # lint 250 s under load (64 s cold slot, warm sccache, load ~10), format 7 s,
       # types and quick take the lint cold-slot time (warm runs took 5 s and 45 s),
-      # test:full 387 s, opt:slow 753 s, bench:identity 302 s.
+      # test:full 387 s, bench:identity 302 s.
+      # opt:slow: 44 s and 66 s since the e2e fixture cache (90fd8c1), was 753 s before it.
+      # Twice that is 133 s. A cold slot build of the gate profile (b1e8d9b) takes 260 to 400 s
+      # at load, and the task builds first. Limit 600 s = 400 s build + 66 s run + margin.
+      # Updated 2026-11-16.
       # A timeout must not trip under the normal shared-host load (15 to 45 on 8 cores).
       # When a measured time changes, update the limit and this comment.
       # Put benchmarks in an opt-in `bench:*` task, never in a check or test task.
@@ -109,7 +113,7 @@ in
       timeoutFormat = 60;
       timeoutCompile = 600;
       timeoutFull = 800;
-      timeoutSlow = 1500;
+      timeoutSlow = 600;
       timeoutBench = 600;
       # The tests call the scip CLI. Make them fail, not skip, when it is missing.
       scipEnv = ''
