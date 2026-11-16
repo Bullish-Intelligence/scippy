@@ -704,6 +704,31 @@ fn the_unicode_fixture_uses_byte_columns() {
     );
 }
 
+#[test]
+fn crlf_line_endings_keep_the_lines_and_the_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join(".loci")).unwrap();
+    fs::write(root.join(".loci/vault.toml"), "schema = 1\nid = \"x\"\n").unwrap();
+    fs::write(
+        root.join("a.md"),
+        "# A\r\n\r\nSee [[b]] here\r\nAnd [[b]] again\r\n",
+    )
+    .unwrap();
+    fs::write(root.join("b.md"), "# B\r\n").unwrap();
+    let indexed = index_with(IndexRequest::new(root, ""), &[&LociPack]);
+    let doc = indexed.document("a.md").unwrap();
+    let mut links: Vec<_> = doc
+        .occurrences
+        .iter()
+        .filter(|o| !is_definition(o) && o.symbol.contains("b.md"))
+        .map(typed_range)
+        .collect();
+    links.sort();
+    // Each link spans its `[[b]]`. The carriage returns never move a line or a column.
+    assert_eq!(links, [(2, 4, 2, 9), (3, 4, 3, 9)]);
+}
+
 // ---- selection and mixed roots ----
 
 #[test]
