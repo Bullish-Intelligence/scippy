@@ -570,3 +570,48 @@ Cost (timed runs, no other load on the machine):
 The Loci oracle is unchanged: `verify.sh` passes. Left open: a container class of the project, a dict
 subclass with type arguments in its base class, and the types of values that need `isinstance`
 or value flow.
+
+## Run 2026-11-16: v0.1 release record
+
+Scippy `main` at `554f5321`. The code equals `68bdda69`: the commits after it change tests and the
+identity rebind in `scippy-metalayer` only. The binary is a release build in a scratch target
+directory. The fork pin is the one in that commit.
+
+Method as in the earlier runs. Corpora: mypy 1.19.1 sdist (187 files) and rich (100 files). The
+`scip-python` 0.6.8 indexes of 2026-11-10 (empty environment) are reused, because the corpora and the
+tool did not change. Scripts: `run_tools.sh`, `run_trace.sh`, `recompute.sh` in this folder.
+The mypy `--trace` run read the graph cache that the first run wrote (187 cached).
+
+| Metric | mypy 2026-11-11 | mypy now | rich 2026-11-11 | rich now |
+|---|---|---|---|---|
+| Wrong targets | 0 | 0 | 0 | 0 |
+| Precision, plausible counted correct | 100.00% | 100.00% | 100.00% | 100.00% |
+| Raw recall | 93.82% | 94.11% (144,939 of 154,016) | 96.72% | 96.77% (19,752 of 20,411) |
+| Recall without design gaps | - | 98.44% | - | 97.87% |
+| Coverage, raw / without the artifact | - | 2.64% / 1.89% | - | 2.95% / 0.80% |
+| Import-prefix class (statements / usage sites) | - | 1,030 / 782 | - | 109 / 0 |
+| References bounded | - | 330 | - | 4 |
+| Skipped files | 0 | 0 | 0 | 0 |
+
+The plausible precision of the earlier release record (2026-11-09, `645af584`) was 99.98% (mypy) and
+99.96% (rich). Wrong targets then: 23 and 8.
+
+Verdict, Gate 3: no drop in the correct-target rate, no new wrong target. Still met.
+Both `scippy index` runs exit with code 3 (finished, bounded references; see README, "The result of
+`scippy index`"). Run time and memory are no measure: other agents shared the machine. The two mypy
+runs ran together; the first took 29:59 and peaked at 6.26 GB. The second ran alone: 15:33.
+
+### Loci comparison
+
+The comparison uses the real `~/Notes` vault (read-only) and its roots. Scippy side: the
+`relations` example of `scippy-loci` (release build of `554f5321`). Loci side: loci-core `a076136`,
+`loci --json graph/relations`. A record is keyed by source, span, and kind. The vault changed
+since 2026-11-09 (notes and roots grew).
+
+| Date | Relations (loci-core / Scippy) | Disagreements |
+|---|---|---|
+| 2026-11-09 (saved) | 35,333 / 35,333 | 0 |
+| 2026-11-16, `554f5321` | 61,261 / 61,261 | 0 |
+
+Kinds: wikilink 9,597, embed 211, frontmatter_link 17,402, markdown_link 23,603, markdown_embed 13,
+tag 10,435. Verdict, Gate 5: still met, now rerun after `04caacd`.
