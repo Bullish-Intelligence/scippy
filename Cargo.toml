@@ -35,6 +35,7 @@ caseless = "0.2"
 unicode-normalization = "0.1"
 unicode-general-category = "1"
 percent-encoding = "2"
+uuid = { version = "1", features = ["v7"] }
 
 # The resolver engine is our fork of Stack Graphs. All four crates use one pin.
 # To bump the pin, change the `rev` of the four lines below to the same commit.

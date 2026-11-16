@@ -12,6 +12,8 @@ path = "src/lib.rs"
 scippy-core = { path = "../scippy-core" }
 rusqlite = { version = "0.28", features = ["bundled"] }
 sha2 = "0.10"
+uuid.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

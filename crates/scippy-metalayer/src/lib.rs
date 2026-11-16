@@ -4,6 +4,7 @@
 //! [`Metalayer::view`] reads one revision in one transaction. The tables are in
 //! `METALAYER_SCHEMA.md`. The database is rebuildable: the SCIP file stays the canonical output.
 
+mod identity;
 mod publish;
 mod query;
 mod read;
@@ -17,6 +18,13 @@ use scippy_core::{AnalysisSnapshot, ScippyError};
 
 pub use scippy_core::{Bound, ReferenceKind};
 
+/// The state of an entity binding. It differs from [`Outcome`], the outcome of a reference.
+pub use identity::Outcome as BindOutcome;
+pub use identity::{
+    Annotation, CONTAINER_SEPARATOR, Entity, EntityKind, Family, FixedIds, IDENTITY_VERSION,
+    IdSource, Identity, IdentityOptions, LOCATOR_HISTORY, Locator, OutcomeRow, SystemIds, Tier,
+    default_identity_path, join_container, split_container,
+};
 pub use publish::{PublishOptions, Published};
 pub use query::{Counts, Probe, SymbolRecord};
 pub use query::{EdgeQuery, RelationQuery2, RelationRecord};
@@ -76,5 +84,7 @@ impl Metalayer {
     }
 }
 
+#[cfg(test)]
+mod identity_tests;
 #[cfg(test)]
 mod tests;
