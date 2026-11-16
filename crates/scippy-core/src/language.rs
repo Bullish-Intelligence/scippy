@@ -445,6 +445,15 @@ pub trait LanguagePack: Send + Sync {
         let _ = root;
         ExtraFiles::default()
     }
+    /// The configuration files that change the facts of this project, such as `tsconfig.json`
+    /// or the vault settings. A path is relative to `root`, or absolute. The default is none.
+    /// The core hashes each file at the start of a run, and the metalayer stores the hashes in
+    /// its input manifest. A file that does not exist counts too: when it appears, the input
+    /// changes. The core adds the manifests that [`Analysis::manifest_name`] names by itself.
+    fn support_inputs(&self, root: &Path) -> Vec<PathBuf> {
+        let _ = root;
+        Vec::new()
+    }
     /// The input limits that suit this project, when the pack knows them. The command-line
     /// tool uses them for a limit that the user did not set. The default is none.
     fn input_limits(&self, root: &Path) -> Option<InputLimits> {

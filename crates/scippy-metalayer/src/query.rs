@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::read::{optional_symbol_at, symbol_at, symbol_columns};
 use crate::schema::{APPLICATION_ID, storage};
 use crate::{
-    EdgeKind, EdgeRecord, FileRecord, Metalayer, Outcome, OutcomeKind, ReferenceQuery,
+    EdgeKind, EdgeRecord, FileRecord, InputRecord, Metalayer, Outcome, OutcomeKind, ReferenceQuery,
     ReferenceRecord, RelationKind, SymbolRef, View,
 };
 
@@ -254,6 +254,29 @@ impl View<'_> {
             None => project_root.join(&file.path),
         };
         compare_file(&path, file.size, sha256)
+    }
+}
+
+impl View<'_> {
+    /// Compare one support file with the disk. A file that did not exist at the start of the run
+    /// gives `Ok` while it is still absent, and `Changed` once it exists.
+    pub fn input_state(
+        &self,
+        project_root: &Path,
+        input: &InputRecord,
+    ) -> Result<FileState, ScippyError> {
+        let path = match &input.real_path {
+            Some(real) => PathBuf::from(real),
+            None => project_root.join(&input.path),
+        };
+        match input.sha256.as_deref() {
+            Some(sha256) => compare_file(&path, None, sha256),
+            None => Ok(if path.is_file() {
+                FileState::Changed
+            } else {
+                FileState::Ok
+            }),
+        }
     }
 }
 

@@ -75,8 +75,8 @@ fn open_creates_the_tables_and_stamps_the_file() {
 }
 
 #[test]
-fn facts_schema_version_stays_7() {
-    assert_eq!(SCHEMA_VERSION, 7);
+fn the_schema_versions_are_known() {
+    assert_eq!(SCHEMA_VERSION, 8);
     assert_eq!(IDENTITY_VERSION, 1);
 }
 
@@ -552,4 +552,67 @@ fn id_sources() {
     assert_eq!(format_utc(0), "1970-01-01T00:00:00Z");
     assert_eq!(format_utc(1_784_116_800), "2026-07-15T12:00:00Z");
     assert_eq!(format_utc(951_782_400), "2000-02-29T00:00:00Z");
+}
+
+/// The SHA-256 of each shipped identity DDL, by version. Add an entry with a migration when
+/// `IDENTITY_DDL` changes. Never edit an old entry.
+const IDENTITY_DDL_HISTORY: &[(i32, &str)] = &[(
+    1,
+    "2b75755fb17a0d9d8c1ac8e0820b42ffbd719e6d5de6577386d39f38ffc26458",
+)];
+
+#[test]
+fn the_identity_ddl_hash_follows_the_version() {
+    let (version, hash) = IDENTITY_DDL_HISTORY.last().copied().unwrap();
+    assert_eq!(
+        version, IDENTITY_VERSION,
+        "the last entry of IDENTITY_DDL_HISTORY must be IDENTITY_VERSION"
+    );
+    assert_eq!(
+        crate::publish::sha256_hex(crate::identity::IDENTITY_DDL.as_bytes()),
+        hash,
+        "IDENTITY_DDL changed but IDENTITY_VERSION did not: raise IDENTITY_VERSION, add a \
+         migration, and add an entry (new version, new hash) to IDENTITY_DDL_HISTORY"
+    );
+    assert_eq!(
+        crate::identity::MIGRATIONS.len() as i32,
+        IDENTITY_VERSION - 1,
+        "each version after the first needs one migration"
+    );
+}
+
+#[test]
+fn a_foreign_file_is_refused_before_the_wal_mode_is_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("foreign.db");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1);")
+        .unwrap();
+    let state = |p: &Path| {
+        let mut names: Vec<String> = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        (std::fs::read(p).unwrap(), names)
+    };
+    let before = state(&path);
+    // Bytes 18 and 19 of the header are 1 in rollback mode and 2 in WAL mode.
+    assert_eq!(before.0[18], 1);
+    assert!(
+        error_text(Identity::open(&path, &IdentityOptions::default())).contains("not a Scippy")
+    );
+    assert_eq!(state(&path), before);
+    // A file with another application id and no tables.
+    let other = dir.path().join("other.db");
+    Connection::open(&other)
+        .unwrap()
+        .execute_batch("PRAGMA application_id=1234; PRAGMA user_version=3;")
+        .unwrap();
+    let before = state(&other);
+    assert!(
+        error_text(Identity::open(&other, &IdentityOptions::default())).contains("not a Scippy")
+    );
+    assert_eq!(state(&other), before);
 }

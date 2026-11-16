@@ -174,6 +174,18 @@ pub struct FileRecord {
     pub real_path: Option<String>,
 }
 
+/// A support file that the run read, such as `pyproject.toml`. It is part of the input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InputRecord {
+    /// The path below the project root, or the virtual path of a file in a shard.
+    pub path: String,
+    /// The path that the run read, when the file lies outside the project root.
+    pub real_path: Option<String>,
+    /// The SHA-256 at the start of the run. `None` when the file did not exist.
+    pub sha256: Option<String>,
+}
+
 /// An occurrence. The span is in UTF-8 bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

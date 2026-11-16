@@ -30,9 +30,9 @@ mod snapshot;
 mod source;
 
 pub use snapshot::{
-    AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisOccurrence,
-    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, DeclRecord, INCOMPLETE_CODES, NoteRecord,
-    ReferenceOutcome, file_status,
+    AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisInput,
+    AnalysisOccurrence, AnalysisReference, AnalysisSnapshot, AnalysisSymbol, DeclRecord,
+    INCOMPLETE_CODES, NoteRecord, ReferenceOutcome, file_status,
 };
 
 pub use bindings::{Bound, ResolveLimits, prebuild_assets};

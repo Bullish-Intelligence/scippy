@@ -22,19 +22,20 @@
   "input_complete": false,
   "analysis_exact": true,
   "position_encoding": "utf8-byte",
-  "schema_version": 7,
+  "schema_version": 8,
   "value": {
     "fresh": false,
     "counts": {
       "ok": 0,
       "changed": 0,
-      "missing": 11,
+      "missing": 13,
       "stale": 0,
       "new": 0,
       "unchecked": 1
     },
     "changed": [],
     "missing": [
+      ".loci/vault.toml",
       "notes/a/dup.md",
       "notes/b/dup.md",
       "notes/index.md",
@@ -45,7 +46,8 @@
       "pkg/café.py",
       "pkg/child.py",
       "pkg/left.py",
-      "pkg/right.py"
+      "pkg/right.py",
+      "pyproject.toml"
     ],
     "stale": [],
     "new": [],

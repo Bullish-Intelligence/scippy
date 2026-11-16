@@ -1,6 +1,7 @@
 //! `scippy metalayer check`: is the index fresh.
 //!
-//! The command compares each manifest file that has a stored hash with the disk. It can also
+//! The command compares each manifest file that has a stored hash with the disk. It does the
+//! same for the support files, such as `pyproject.toml`. It can also
 //! compare the SCIP file (`--scip`) and look for new files (`--discover`). It exits 3 when the
 //! index is stale. It ignores `--limit`: a list of this value is never cut.
 
@@ -71,6 +72,18 @@ pub fn run(args: Args) -> ExitCode {
                 _ => unchecked += 1,
             }
         }
+
+        // The support files shape the facts, so a change in one makes the index stale. The
+        // paths go to the same lists as the files: a client reads one set of lists.
+        for input in view.support_inputs()? {
+            match view.input_state(&root, &input)? {
+                FileState::Changed => changed.push(input.path),
+                FileState::Missing => missing.push(input.path),
+                _ => {}
+            }
+        }
+        changed.sort();
+        missing.sort();
 
         let mut new = Vec::new();
         if args.discover {

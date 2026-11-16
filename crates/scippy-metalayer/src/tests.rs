@@ -86,6 +86,7 @@ fn empty() -> AnalysisSnapshot {
         project_root: "/project".into(),
         shards: Vec::new(),
         options: "options".into(),
+        support_inputs: Vec::new(),
     }
 }
 
@@ -1271,4 +1272,147 @@ fn the_support_view_uses_the_edge_indexes() {
     let plan = plan.join("\n");
     assert!(plan.contains("edge_reference"), "{plan}");
     assert!(plan.contains("edge_anchor"), "{plan}");
+}
+
+// ---- Integrity: the DDL hash, the foreign file, the support files ----
+
+fn sha256_of(text: &str) -> String {
+    sha256_hex(text.as_bytes())
+}
+
+#[test]
+fn the_ddl_hash_follows_the_version() {
+    use crate::schema::{DDL, DDL_HISTORY};
+    let versions: Vec<i32> = DDL_HISTORY.iter().map(|(v, _)| *v).collect();
+    assert!(
+        versions.windows(2).all(|w| w[0] < w[1]),
+        "the versions in DDL_HISTORY must rise: {versions:?}"
+    );
+    let (last_version, last_hash) = DDL_HISTORY.last().copied().unwrap();
+    assert_eq!(
+        last_version, SCHEMA_VERSION,
+        "the last entry of DDL_HISTORY must be SCHEMA_VERSION"
+    );
+    assert_eq!(
+        sha256_of(DDL),
+        last_hash,
+        "DDL changed but SCHEMA_VERSION did not: raise SCHEMA_VERSION and add an entry \
+         (new version, new hash) to DDL_HISTORY"
+    );
+}
+
+/// The bytes of a file and the names of the files beside it.
+fn snapshot_of_dir(path: &Path) -> (Vec<u8>, Vec<String>) {
+    let mut names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    (std::fs::read(path).unwrap(), names)
+}
+
+#[test]
+fn a_foreign_file_is_refused_before_the_wal_mode_is_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("foreign.sqlite");
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1);")
+        .unwrap();
+    let before = snapshot_of_dir(&path);
+    // Bytes 18 and 19 of the header are 1 in rollback mode and 2 in WAL mode.
+    assert_eq!(before.0[18], 1);
+    assert!(open_error(&path).contains("not a Scippy"));
+    assert_eq!(snapshot_of_dir(&path), before);
+    // A file with another application id gets the same care.
+    let other = dir.path().join("other.sqlite");
+    Connection::open(&other)
+        .unwrap()
+        .execute_batch("PRAGMA application_id=1234; PRAGMA user_version=1; CREATE TABLE t (x);")
+        .unwrap();
+    let before = snapshot_of_dir(&other);
+    assert!(open_error(&other).contains("not a Scippy"));
+    assert_eq!(snapshot_of_dir(&other), before);
+}
+
+fn input(path: &str, sha256: Option<&str>) -> scippy_core::AnalysisInput {
+    scippy_core::AnalysisInput {
+        path: path.into(),
+        real_path: None,
+        sha256: sha256.map(str::to_owned),
+    }
+}
+
+fn digest_of(layer: &mut Metalayer) -> String {
+    layer
+        .view()
+        .unwrap()
+        .unwrap()
+        .revision()
+        .input_digest
+        .clone()
+}
+
+#[test]
+fn a_support_file_is_part_of_the_input_digest() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let mut s = snapshot("a");
+    publish(&mut layer, &s);
+    let plain = digest_of(&mut layer);
+    s.support_inputs = vec![input("pyproject.toml", Some("aa"))];
+    publish(&mut layer, &s);
+    let with = digest_of(&mut layer);
+    assert_ne!(plain, with);
+    s.support_inputs = vec![input("pyproject.toml", Some("bb"))];
+    publish(&mut layer, &s);
+    assert_ne!(digest_of(&mut layer), with);
+    // The same file that did not exist is another input than a file with a hash.
+    s.support_inputs = vec![input("pyproject.toml", None)];
+    publish(&mut layer, &s);
+    let absent = digest_of(&mut layer);
+    assert_ne!(absent, plain);
+    // The same input gives the same digest.
+    publish(&mut layer, &s);
+    assert_eq!(digest_of(&mut layer), absent);
+    let view = layer.view().unwrap().unwrap();
+    assert_eq!(
+        view.support_inputs().unwrap(),
+        vec![crate::InputRecord {
+            path: "pyproject.toml".into(),
+            real_path: None,
+            sha256: None,
+        }]
+    );
+}
+
+#[test]
+fn a_support_file_is_checked_against_the_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    let root = dir.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("pyproject.toml");
+    std::fs::write(&file, "[project]\n").unwrap();
+    let mut s = snapshot("a");
+    s.support_inputs = vec![
+        input("pyproject.toml", Some(&sha256_of("[project]\n"))),
+        input("tsconfig.json", None),
+    ];
+    publish(&mut layer, &s);
+    let view = layer.view().unwrap().unwrap();
+    let inputs = view.support_inputs().unwrap();
+    let state = |name: &str| {
+        let record = inputs.iter().find(|i| i.path == name).unwrap();
+        view.input_state(&root, record).unwrap()
+    };
+    assert_eq!(state("pyproject.toml"), FileState::Ok);
+    assert_eq!(state("tsconfig.json"), FileState::Ok);
+    std::fs::write(&file, "[project]\nname = 'x'\n").unwrap();
+    assert_eq!(state("pyproject.toml"), FileState::Changed);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(state("pyproject.toml"), FileState::Missing);
+    // A file that appears after the run changes the input.
+    std::fs::write(root.join("tsconfig.json"), "{}").unwrap();
+    assert_eq!(state("tsconfig.json"), FileState::Changed);
 }

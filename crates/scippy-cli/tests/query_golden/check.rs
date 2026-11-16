@@ -164,3 +164,49 @@ fn stale_flag_of_the_run_exits_3() {
     drop(conn);
     golden_db("stale", &copy.db, &["check"], 3);
 }
+
+#[test]
+fn an_edited_support_file_makes_the_index_stale() {
+    // The pack reads `pyproject.toml`, `tsconfig.json`, and `.loci/vault.toml`. A change in
+    // one of them changes the facts, so `check` must report it.
+    let copy = indexed_copy("check-support");
+    let db = copy.db.to_str().unwrap();
+    let fresh = run(&["check", "--db", db]);
+    assert_eq!(fresh.status, 0, "{}", fresh.stdout);
+
+    let manifest = copy.root.join("pyproject.toml");
+    let original = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, format!("{original}\n# edit\n")).unwrap();
+    let out = run(&["check", "--db", db]);
+    assert_eq!(out.status, 3, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("changed  pyproject.toml\n"),
+        "{}",
+        out.stdout
+    );
+    fs::write(&manifest, original).unwrap();
+    assert_eq!(run(&["check", "--db", db]).status, 0);
+
+    // A file that did not exist at the run changes the input when it appears.
+    let tsconfig = copy.root.join("tsconfig.json");
+    fs::write(&tsconfig, "{}").unwrap();
+    let out = run(&["check", "--db", db]);
+    assert_eq!(out.status, 3, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("changed  tsconfig.json\n"),
+        "{}",
+        out.stdout
+    );
+    fs::remove_file(&tsconfig).unwrap();
+
+    let vault = copy.root.join(".loci/vault.toml");
+    let original = fs::read_to_string(&vault).unwrap();
+    fs::write(&vault, format!("{original}\n# edit\n")).unwrap();
+    let out = run(&["check", "--db", db]);
+    assert_eq!(out.status, 3, "{}", out.stdout);
+    assert!(
+        out.stdout.contains("changed  .loci/vault.toml\n"),
+        "{}",
+        out.stdout
+    );
+}

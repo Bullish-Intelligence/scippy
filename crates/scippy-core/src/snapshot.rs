@@ -226,6 +226,19 @@ pub struct AnalysisEdge {
     pub anchor_state: Option<String>,
 }
 
+/// A support file that the run read: a manifest, or a configuration file that a pack names.
+/// The file shapes the facts, and no document holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnalysisInput {
+    /// The path below the project root, or the virtual path of a file in a shard. A file that
+    /// lies outside the root has its full path here.
+    pub path: String,
+    /// Where the run read a file that lies outside the project root.
+    pub real_path: Option<String>,
+    /// The SHA-256 of the bytes at the start of the run. `None` when the file did not exist.
+    pub sha256: Option<String>,
+}
+
 /// What the pipeline captures for a snapshot.
 #[derive(Default)]
 pub(crate) struct Capture {
@@ -316,6 +329,9 @@ pub struct AnalysisSnapshot {
     /// and the package overrides. It is text with a fixed order.
     #[serde(default)]
     pub options: String,
+    /// The support files that the run read, sorted by path. Each one is part of the input.
+    #[serde(default)]
+    pub support_inputs: Vec<AnalysisInput>,
 }
 
 /// What the pipeline knows about a run, beyond the facts.
@@ -323,6 +339,7 @@ pub(crate) struct RunContext {
     pub project_root: String,
     pub shards: Vec<String>,
     pub options: String,
+    pub support_inputs: Vec<AnalysisInput>,
     /// For each document path: the pack id and the real path of a file outside the root.
     pub files: HashMap<String, (String, Option<String>)>,
 }
@@ -433,6 +450,7 @@ impl AnalysisSnapshot {
             project_root: context.project_root,
             shards: context.shards,
             options: context.options,
+            support_inputs: context.support_inputs,
         })
     }
 }

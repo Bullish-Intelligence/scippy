@@ -498,6 +498,24 @@ fn not_identity() -> ScippyError {
     ScippyError::Storage("the file is not a Scippy identity store".into())
 }
 
+/// Refuse a file that is not empty and not an identity store. The check reads only: it must run
+/// before any write, so that a foreign file stays as it was.
+fn refuse_foreign(found: &Header) -> Result<(), ScippyError> {
+    if found.application_id == 0 && found.version == 0 {
+        if found.has_tables {
+            return Err(ScippyError::Storage(
+                "the file is not a Scippy identity store: it has tables and no application id"
+                    .into(),
+            ));
+        }
+        Ok(())
+    } else if found.application_id != IDENTITY_APPLICATION_ID {
+        Err(not_identity())
+    } else {
+        Ok(())
+    }
+}
+
 fn newer(found: i32, reads: i32) -> ScippyError {
     ScippyError::Storage(format!(
         "the identity store has format version {found}, but this build reads version {reads}; use a newer scippy"
@@ -557,6 +575,8 @@ impl Identity {
     ) -> Result<Self, ScippyError> {
         let mut db = Connection::open(path).map_err(storage)?;
         db.busy_timeout(Duration::from_secs(30)).map_err(storage)?;
+        // Check the application id first. The WAL pragma writes the header of the file.
+        refuse_foreign(&header(&db)?)?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=OFF;")
             .map_err(storage)?;
 
@@ -578,21 +598,15 @@ impl Identity {
             .map_err(storage)?;
         let found = header(&tx)?;
         let mut version = found.version;
+        // The file can change between the first check and the lock. Check again.
+        refuse_foreign(&found)?;
         if found.application_id == 0 && found.version == 0 {
-            if found.has_tables {
-                return Err(ScippyError::Storage(
-                    "the file is not a Scippy identity store: it has tables and no application id"
-                        .into(),
-                ));
-            }
             tx.execute_batch(IDENTITY_DDL).map_err(storage)?;
             tx.execute_batch(&format!(
                 "PRAGMA application_id={IDENTITY_APPLICATION_ID}; PRAGMA user_version={target};"
             ))
             .map_err(storage)?;
             version = target;
-        } else if found.application_id != IDENTITY_APPLICATION_ID {
-            return Err(not_identity());
         } else if found.version > target {
             return Err(newer(found.version, target));
         } else {

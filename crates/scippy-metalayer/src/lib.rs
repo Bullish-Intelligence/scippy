@@ -40,8 +40,9 @@ pub use rebind::{
 };
 pub use records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
-    OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord,
-    RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord, SymbolRef,
+    InputRecord, OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery,
+    ReferenceRecord, RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord,
+    SymbolRef,
 };
 pub use schema::SCHEMA_VERSION;
 

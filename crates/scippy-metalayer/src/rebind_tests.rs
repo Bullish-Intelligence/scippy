@@ -219,6 +219,7 @@ impl World {
             } else {
                 self.tag.clone()
             },
+            support_inputs: Vec::new(),
         }
     }
 
@@ -1240,4 +1241,29 @@ fn a_version_only_bump_rebinds_and_updates_the_symbol_in_place() {
 fn the_minimum_body_size_reads_the_environment() {
     // The variable is read when a run starts. Only a whole number counts.
     assert_eq!(min_body_tokens(), MIN_BODY_TOKENS);
+}
+
+#[test]
+fn the_bound_digest_is_set_only_after_both_families_commit() {
+    let mut w = World::new();
+    let one = vec![file("a.py", vec![func("a/f().", "f")])];
+    w.publish(&one);
+    let first = w.store().bound_input_digest().unwrap().unwrap();
+    assert_ne!(first, "second");
+    // The publish commits the code family, then the notes family. Stop after the first commit.
+    let snapshot = w.snapshot(&one);
+    let code = RebindInput::from_snapshot(&snapshot, "second", None);
+    let notes = RebindInput::notes_from_snapshot(&snapshot, "second");
+    crate::rebind::rebind_not_last(&mut w.store(), &code, &w.ids).unwrap();
+    assert_eq!(
+        w.store().bound_input_digest().unwrap().as_deref(),
+        Some(first.as_str()),
+        "a reader must not see the new digest while the notes are unbound"
+    );
+    // The second commit binds the notes and sets the digest in one transaction.
+    rebind(&mut w.store(), &notes, &w.ids).unwrap();
+    assert_eq!(
+        w.store().bound_input_digest().unwrap().as_deref(),
+        Some("second")
+    );
 }

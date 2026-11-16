@@ -197,6 +197,7 @@ impl World {
             project_root: "/vault".into(),
             shards: Vec::new(),
             options: String::new(),
+            support_inputs: Vec::new(),
         };
         let identity = self.dir.path().join("layer.identity.db");
         self.layer
@@ -711,6 +712,7 @@ fn code_and_notes_publish_together() {
         project_root: "/vault".into(),
         shards: Vec::new(),
         options: String::new(),
+        support_inputs: Vec::new(),
     };
     let identity = w.dir.path().join("layer.identity.db");
     w.layer

@@ -10,9 +10,9 @@ use scippy_core::ScippyError;
 use crate::publish::sha256_hex;
 use crate::records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
-    OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord,
-    RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord, SymbolRef,
-    parse_bound, parse_reference_kind,
+    InputRecord, OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery,
+    ReferenceRecord, RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord,
+    SymbolRef, parse_bound, parse_reference_kind,
 };
 use crate::schema::storage;
 
@@ -107,6 +107,26 @@ impl<'a> View<'a> {
             project_root,
             shards,
         })
+    }
+
+    /// The support files that the run read, sorted by path. They are part of the input, and no
+    /// `file` row holds them.
+    pub fn support_inputs(&self) -> Result<Vec<InputRecord>, ScippyError> {
+        let mut statement = self
+            .tx
+            .prepare("SELECT path, real_path, sha256 FROM support_input ORDER BY path")
+            .map_err(storage)?;
+        statement
+            .query_map([], |r| {
+                Ok(InputRecord {
+                    path: r.get(0)?,
+                    real_path: r.get(1)?,
+                    sha256: r.get(2)?,
+                })
+            })
+            .map_err(storage)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(storage)
     }
 
     /// The files of the input manifest, sorted by path.

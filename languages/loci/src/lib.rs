@@ -82,7 +82,7 @@ mod scan;
 mod text;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use scippy_core::{
@@ -191,6 +191,26 @@ impl LanguagePack for LociPack {
         }
         extra.state = Some(Box::new(listing));
         extra
+    }
+
+    /// The vault settings, the ignore list, and the roots file. All three change the facts.
+    fn support_inputs(&self, root: &Path) -> Vec<PathBuf> {
+        let vault = Path::new(".loci").join("vault.toml");
+        let mut files = vec![vault.clone()];
+        let configured = std::fs::read_to_string(root.join(vault))
+            .ok()
+            .and_then(|text| Settings::parse(&text).ok());
+        for name in configured
+            .iter()
+            .flat_map(|s| [&s.ignore_file, &s.roots_file])
+            .flatten()
+        {
+            // The pack expands `~` and a relative path as loci-core does.
+            if let Ok(path) = policy::expand_user(name) {
+                files.push(path);
+            }
+        }
+        files
     }
 
     fn input_limits(&self, root: &Path) -> Option<InputLimits> {

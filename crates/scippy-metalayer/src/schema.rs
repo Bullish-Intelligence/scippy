@@ -9,7 +9,21 @@ use scippy_core::ScippyError;
 /// Marks a database file as a Scippy read model. The bytes spell "SCPY".
 pub(crate) const APPLICATION_ID: i32 = 0x5343_5059;
 /// The storage format version that this code reads and writes.
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
+/// The SHA-256 of `DDL` for each version that shipped, oldest first. The last entry is the
+/// current version. A change of `DDL` needs a new entry with a higher `SCHEMA_VERSION`: the
+/// test `the_ddl_hash_follows_the_version` fails otherwise. Never edit an old entry.
+#[cfg(test)]
+pub(crate) const DDL_HISTORY: &[(i32, &str)] = &[
+    (
+        7,
+        "628c3a98261c0f3fe65869d75dd9133ab882663d9660614bc742c3f196a0386a",
+    ),
+    (
+        8,
+        "9700c08e00268552fa6c38b14c4f632567ae9d7ebd7d8acc1ab6cbb26d7497e7",
+    ),
+];
 
 /// The tables and views. The design is in `METALAYER_SCHEMA.md`, section 3.
 pub(crate) const DDL: &str = "
@@ -36,6 +50,14 @@ CREATE TABLE revision (
   scip_sha256 TEXT NOT NULL, scip_size INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
+
+-- A support file that the run read, such as `pyproject.toml`. It is not a source file.
+-- `sha256` is NULL when the file did not exist at the start of the run.
+CREATE TABLE support_input (
+  path TEXT PRIMARY KEY,
+  real_path TEXT,
+  sha256 TEXT
+) WITHOUT ROWID;
 
 CREATE TABLE file (
   id INTEGER PRIMARY KEY,
@@ -181,19 +203,9 @@ fn header(db: &Connection) -> Result<Header, ScippyError> {
     })
 }
 
-/// Open the database for writing. Create the tables, or rebuild a database with an older version.
-pub(crate) fn open(path: &Path) -> Result<Connection, ScippyError> {
-    let mut db = Connection::open(path).map_err(storage)?;
-    db.busy_timeout(Duration::from_secs(30)).map_err(storage)?;
-    // A rebuild drops tables in one step. The foreign keys must wait until it ends.
-    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=OFF;")
-        .map_err(storage)?;
-    // An immediate transaction makes concurrent first opens take turns.
-    let tx = db
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(storage)?;
-    let found = header(&tx)?;
-    let mut rebuilt = None;
+/// Refuse a file that is not empty and not a Scippy database. The check reads only: it must
+/// run before any write, so that a foreign file stays as it was.
+fn refuse_foreign(found: &Header) -> Result<(), ScippyError> {
     if found.application_id == 0 && found.version == 0 {
         if found.has_tables {
             return Err(ScippyError::Storage(
@@ -205,6 +217,29 @@ pub(crate) fn open(path: &Path) -> Result<Connection, ScippyError> {
         return Err(ScippyError::Storage(
             "the file is not a Scippy metalayer database".into(),
         ));
+    }
+    Ok(())
+}
+
+/// Open the database for writing. Create the tables, or rebuild a database with an older version.
+pub(crate) fn open(path: &Path) -> Result<Connection, ScippyError> {
+    let mut db = Connection::open(path).map_err(storage)?;
+    db.busy_timeout(Duration::from_secs(30)).map_err(storage)?;
+    // Check the application id first. The WAL pragma writes the header of the file.
+    refuse_foreign(&header(&db)?)?;
+    // A rebuild drops tables in one step. The foreign keys must wait until it ends.
+    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=OFF;")
+        .map_err(storage)?;
+    // An immediate transaction makes concurrent first opens take turns.
+    let tx = db
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage)?;
+    let found = header(&tx)?;
+    let mut rebuilt = None;
+    // The file can change between the first check and the lock. Check again.
+    refuse_foreign(&found)?;
+    if found.application_id == 0 && found.version == 0 {
+        // A new file.
     } else if found.version > SCHEMA_VERSION {
         return Err(ScippyError::Storage(format!(
             "the metalayer database has format version {}, but this build reads version {SCHEMA_VERSION}; use a newer scippy, or delete the database",

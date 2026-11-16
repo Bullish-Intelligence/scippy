@@ -1442,7 +1442,7 @@ fn apply_bind(
 // ---- The entry point ----
 
 /// Rebind the entities of one family to the items of a new run, in one transaction of the
-/// identity store. The function sets `bound_input_digest` and commits.
+/// identity store. The function sets `bound_input_digest` in the same transaction and commits.
 ///
 /// An entity that no tier binds keeps its row, as `ambiguous` or `orphaned`. A declaration that
 /// no entity claims gets a new id. The function is idempotent: the same input a second time
@@ -1462,11 +1462,31 @@ pub fn rebind_with(
     ids: &dyn IdSource,
     min_tokens: i64,
 ) -> Result<RebindReport, ScippyError> {
+    rebind_commit(identity, input, ids, min_tokens, true)
+}
+
+/// [`rebind`] for a family that is not the last one of a publish. It leaves `bound_input_digest`
+/// as it was. The last family of the publish sets the digest: see `publish`.
+pub(crate) fn rebind_not_last(
+    identity: &mut Identity,
+    input: &RebindInput,
+    ids: &dyn IdSource,
+) -> Result<RebindReport, ScippyError> {
+    rebind_commit(identity, input, ids, min_body_tokens(), false)
+}
+
+fn rebind_commit(
+    identity: &mut Identity,
+    input: &RebindInput,
+    ids: &dyn IdSource,
+    min_tokens: i64,
+    set_bound: bool,
+) -> Result<RebindReport, ScippyError> {
     let tx = identity
         .db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
-    let report = rebind_in(&tx, input, ids, min_tokens)?;
+    let report = rebind_in(&tx, input, ids, min_tokens, set_bound)?;
     tx.commit().map_err(storage)?;
     Ok(report)
 }
@@ -1476,6 +1496,7 @@ fn rebind_in(
     input: &RebindInput,
     ids: &dyn IdSource,
     min_tokens: i64,
+    set_bound: bool,
 ) -> Result<RebindReport, ScippyError> {
     let digest = input.input_digest.as_str();
     let olds = load_olds(tx, input.family)?;
@@ -1640,7 +1661,9 @@ fn rebind_in(
         recent.drain(..recent.len() - ORPHAN_GC_PUBLISHES);
     }
     set_meta(tx, META_RECENT_DIGESTS, &recent.join("\n"))?;
-    set_meta(tx, "bound_input_digest", digest)?;
+    if set_bound {
+        set_meta(tx, "bound_input_digest", digest)?;
+    }
     set_meta(tx, items_meta_key(input.family), &input.items_digest())?;
     orphan_children(tx, input.family, digest)?;
     report.collected = collect_orphans(tx, input.family, &recent)?;

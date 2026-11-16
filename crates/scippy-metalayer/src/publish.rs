@@ -13,12 +13,12 @@ use sha2::{Digest, Sha256};
 
 use crate::identity::{Family, IdSource, Identity, IdentityOptions};
 use crate::rebind::{
-    RebindInput, RebindReport, items_meta_key, orphan_children_of_orphans, rebind,
+    RebindInput, RebindReport, items_meta_key, orphan_children_of_orphans, rebind, rebind_not_last,
 };
 use crate::schema::{SCHEMA_VERSION, storage};
 
 /// The version of the digest format. Change it when the digest input changes.
-const DIGEST_VERSION: u32 = 1;
+const DIGEST_VERSION: u32 = 2;
 
 /// What the caller asks for.
 #[derive(Clone, Copy, Debug, Default)]
@@ -70,7 +70,8 @@ struct ManifestRow<'a> {
     sha256: Option<&'a str>,
 }
 
-/// The digest of the input of a run: the settings and the manifest. It describes an input.
+/// The digest of the input of a run: the settings, the manifest, and the support files. It
+/// describes an input.
 fn input_digest(s: &AnalysisSnapshot, key: &str, manifest: &[ManifestRow<'_>]) -> String {
     let mut text = String::new();
     // Each field has a length prefix, so no field value can imitate a separator.
@@ -87,6 +88,14 @@ fn input_digest(s: &AnalysisSnapshot, key: &str, manifest: &[ManifestRow<'_>]) -
         field(row.status);
         field(row.reason.unwrap_or(""));
         field(row.sha256.unwrap_or(""));
+    }
+    // The support files follow the manifest. The count keeps them apart from the file rows.
+    // A file that did not exist has an empty hash.
+    field(&s.support_inputs.len().to_string());
+    for input in &s.support_inputs {
+        field(&input.path);
+        field(input.real_path.as_deref().unwrap_or(""));
+        field(input.sha256.as_deref().unwrap_or(""));
     }
     sha256_hex(text.as_bytes())
 }
@@ -253,6 +262,7 @@ pub(crate) fn publish(
         "diagnostic",
         "symbol",
         "file",
+        "support_input",
         "root_member",
     ] {
         tx.execute(&format!("DELETE FROM {table}"), [])
@@ -309,6 +319,13 @@ pub(crate) fn publish(
                 );
             }
         }
+    }
+    for input in &s.support_inputs {
+        tx.prepare_cached(
+            "INSERT INTO support_input (path, real_path, sha256) VALUES (?1, ?2, ?3)",
+        )
+        .and_then(|mut st| st.execute(params![input.path, input.real_path, input.sha256]))
+        .map_err(storage)?;
     }
     let mut files: HashMap<&str, i64> = HashMap::with_capacity(rows.len());
     let mut manifest = Vec::with_capacity(rows.len());
@@ -641,7 +658,11 @@ pub(crate) fn publish(
                     ..RebindReport::default()
                 })
             } else {
-                let mut report = rebind(&mut store, &input, ids)?;
+                // Two commits, code then notes. `bound_input_digest` tells a reader that every
+                // family is bound to this input. The notes commit is the last one, so it sets
+                // the digest in the same transaction that binds the notes. A stop after the
+                // code commit leaves the old digest: the next publish then binds again.
+                let mut report = rebind_not_last(&mut store, &input, ids)?;
                 report.merge(rebind(&mut store, &notes, ids)?);
                 Some(report)
             }

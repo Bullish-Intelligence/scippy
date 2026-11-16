@@ -228,6 +228,9 @@ const CONSTRAINT_SCOPE: &str = "
 }
 ";
 
+/// The support files of the project root. `LanguagePack::support_inputs` lists them.
+const SUPPORT_FILE_NAMES: [&str; 2] = ["package.json", "tsconfig.json"];
+
 impl LanguagePack for TypeScriptPack {
     fn id(&self) -> &'static str {
         "typescript"
@@ -245,6 +248,12 @@ impl LanguagePack for TypeScriptPack {
 
     fn analysis(&self) -> Option<&dyn Analysis> {
         Some(self)
+    }
+
+    /// The files that `support_files` reads. A file that does not exist counts: its
+    /// appearance changes the binding rules.
+    fn support_inputs(&self, _root: &Path) -> Vec<std::path::PathBuf> {
+        SUPPORT_FILE_NAMES.iter().map(Into::into).collect()
     }
 }
 
@@ -305,6 +314,7 @@ impl Analysis for TypeScriptPack {
 
     fn support_files(&self, root: &Path, _files: &[ProjectRelativePath]) -> Vec<SupportFile> {
         let mut out = Vec::new();
+        // The names here are the names in `SUPPORT_FILE_NAMES`.
         for (name, analyzer) in [
             (
                 "package.json",
