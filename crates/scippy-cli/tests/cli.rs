@@ -35,6 +35,14 @@ fn normalised_bytes(path: &Path) -> Vec<u8> {
 }
 
 #[test]
+fn index_help_names_the_project_root() {
+    let output = scippy(&["index", "--help"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("<PROJECT_ROOT>"), "{text}");
+}
+
+#[test]
 fn lists_the_built_in_languages() {
     let output = scippy(&["languages"]);
     assert!(output.status.success());

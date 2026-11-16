@@ -45,6 +45,7 @@ enum Command {
 #[derive(Args)]
 struct IndexArgs {
     /// The project root directory.
+    #[arg(value_name = "PROJECT_ROOT")]
     project_root: PathBuf,
     /// The SCIP file to write.
     #[arg(long, short, default_value = "index.scip")]

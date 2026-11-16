@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::common::copy_tree;
-use crate::harness::{golden, golden_db, golden_text, project_root, run, scratch_db};
+use crate::harness::{Run, golden, golden_db, golden_text, project_root, run, scratch_db};
 
 /// An indexed copy of the fixture project that a test may change.
 pub struct Copy {
@@ -118,21 +118,43 @@ fn scip_file_is_compared_with_the_revision() {
     golden_db("scip-missing", &copy.db, &["check", "--scip", scip], 3);
 }
 
-#[test]
-fn root_option_replaces_the_stored_root() {
+fn check_with_root_flag(flag: &str) -> Run {
     let copy = indexed_copy("check-root");
     let other = copy.root.with_file_name("moved");
     let _ = fs::remove_dir_all(&other);
     fs::rename(&copy.root, &other).unwrap();
     golden_db("root-missing", &copy.db, &["check"], 3);
-    let out = run(&[
+    run(&[
         "check",
         "--db",
         copy.db.to_str().unwrap(),
-        "--root",
+        flag,
         other.to_str().unwrap(),
-    ]);
+    ])
+}
+
+#[test]
+fn project_root_option_replaces_the_stored_root() {
+    let out = check_with_root_flag("--project-root");
     assert_eq!(out.status, 0, "{}{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn old_root_option_still_replaces_the_stored_root() {
+    let out = check_with_root_flag("--root");
+    assert_eq!(out.status, 0, "{}{}", out.stdout, out.stderr);
+}
+
+#[test]
+fn help_shows_project_root_and_hides_the_old_alias() {
+    let out = run(&["check", "--help"]);
+    assert_eq!(out.status, 0, "{}{}", out.stdout, out.stderr);
+    assert!(
+        out.stdout.contains("--project-root <PROJECT_ROOT>"),
+        "{}",
+        out.stdout
+    );
+    assert!(!out.stdout.contains("--root"), "{}", out.stdout);
 }
 
 #[test]

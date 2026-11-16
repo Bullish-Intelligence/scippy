@@ -24,9 +24,10 @@ use super::common::{CliError, Common, Output, execute};
 pub struct Args {
     #[command(flatten)]
     common: Common,
-    /// The project root to compare with. The default is the root that the database stores.
-    #[arg(long, value_name = "PATH")]
-    root: Option<PathBuf>,
+    /// The project root to compare with. The default is the project root that the database
+    /// stores.
+    #[arg(long, alias = "root", value_name = "PROJECT_ROOT")]
+    project_root: Option<PathBuf>,
     /// Compare this SCIP file with the size and the SHA-256 of the revision.
     #[arg(long, value_name = "PATH")]
     scip: Option<PathBuf>,
@@ -45,7 +46,7 @@ fn scip_state(state: FileState) -> &'static str {
 
 pub fn run(args: Args) -> ExitCode {
     execute("check", &args.common, |view| {
-        let root = match &args.root {
+        let root = match &args.project_root {
             Some(root) => root.clone(),
             None => PathBuf::from(view.root_set()?.project_root),
         };

@@ -257,8 +257,8 @@ writes. The design and the JSON contract are in `METALAYER_QUERY.md`.
 - `edges` lists single edges: one site for each item.
 - `explain --from PATH --to SYMBOL` shows why a file depends on a symbol: the relations, the
   supports with line and column, and the ambiguous references that list the symbol.
-- `check` compares the files on disk with the stored hashes. Options: `--root`, `--scip`,
-  `--discover`.
+- `check` compares the files on disk with the stored hashes. Options: `--project-root`, `--scip`,
+  `--discover`. The old name `--root` stays as a hidden alias for `--project-root`.
 
 ### The JSON contract
 
