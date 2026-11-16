@@ -29,6 +29,8 @@ SEP = "\x1f"
 TIERS = ["T1", "T1h", "T2f", "T2", "T3", "T4", "T5", "Param"]
 # The size floor of the truth proxy, in Python `ast` nodes. The engine uses named tree-sitter nodes.
 TRUTH_MIN_NODES = 10
+# `scippy index` exits 0 for a complete run and 3 for a finished but incomplete run. 1 and 2 are failures.
+INDEX_OK = (0, 3)
 
 
 def run(cmd, cwd=None, check=True, env=None, stdout=subprocess.PIPE):
@@ -62,7 +64,7 @@ def index(binary, root, work, db=None, identity=None, no_identity=False, extra=(
     result = run(cmd, cwd=work, check=False)
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
     elapsed = (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
-    if result.returncode:
+    if result.returncode not in INDEX_OK:
         raise RuntimeError("scippy failed: " + result.stderr.decode("utf-8", "replace")[-500:])
     return elapsed
 
