@@ -1,10 +1,37 @@
-{ pkgs, ... }:
+{ pkgs, lib, config, ... }:
+let
+  home = builtins.getEnv "HOME";
+  # One sccache server per workspace root. A server reads SCCACHE_BASEDIRS once at start.
+  # A shared server would keep the root of the first workspace that started it.
+  port = 20000 + lib.mod (lib.fromHexString (builtins.substring 0 4 (builtins.hashString "sha256" config.devenv.root))) 20000;
+in
 {
   packages = [
     pkgs.git
     pkgs.cargo-nextest
+    pkgs.sccache
   ];
   languages.rust.enable = true;
+
+  # sccache shares compiled external crates and C code between checkouts.
+  # Without it, each new workspace and each Testee slot builds them cold.
+  # sccache keys on the working directory of rustc, which is the workspace root.
+  # SCCACHE_BASEDIRS strips that root, so every workspace shares one cache.
+  # devenv.root is the root of the workspace that runs this devenv.
+  # sccache does not cache bin, proc-macro, or incremental crates.
+  assertions = [
+    {
+      assertion = home != "";
+      message = "HOME is empty, so SCCACHE_DIR has no safe path.";
+    }
+  ];
+  env = {
+    RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
+    SCCACHE_DIR = "${home}/.local/state/sccache/scippy";
+    SCCACHE_CACHE_SIZE = "20G";
+    SCCACHE_BASEDIRS = config.devenv.root;
+    SCCACHE_SERVER_PORT = toString port;
+  };
 
   # Testee runs the standard tasks (check:*, test:*).
   # Every task declares `input.testee`, so Testee can reuse a verdict
