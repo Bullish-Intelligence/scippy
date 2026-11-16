@@ -4,6 +4,7 @@
 //! in one database, and resolves each reference node with bounded work.
 //! It returns plain anchors. No fork type leaves this module.
 
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -143,45 +144,104 @@ pub(crate) struct BuildFailure {
     pub message: String,
 }
 
-/// The compiled binding rules of a pack: one rule set for each dialect.
-///
-/// Compiling the rules is costly. The pipeline compiles them once and shares them with the
-/// engine of each shard.
-#[derive(Clone)]
-pub(crate) struct CompiledRules {
-    /// The first rule set is the primary dialect.
-    languages: Rc<Vec<StackGraphLanguage>>,
+/// The binding rules of one dialect. The engine compiles them on first use.
+struct DialectRules {
+    grammar: tree_sitter::Language,
+    path: &'static str,
+    source: &'static str,
+    compiled: OnceCell<Result<StackGraphLanguage, String>>,
 }
 
-impl CompiledRules {
-    /// Compile the rules of a pack.
-    pub fn new(pack: &'static str, analysis: &dyn Analysis) -> Result<Self, ScippyError> {
-        let rules = analysis.binding_rules();
-        let bad = |reason: String| ScippyError::Pack { pack, reason };
-        let compile = |grammar, path: &str, source| {
-            StackGraphLanguage::from_source(grammar, PathBuf::from(path), source)
+impl DialectRules {
+    fn new(grammar: tree_sitter::Language, path: &'static str, source: &'static str) -> Self {
+        Self {
+            grammar,
+            path,
+            source,
+            compiled: OnceCell::new(),
+        }
+    }
+
+    /// Compile the rules once and return the result.
+    fn language(&self) -> Result<&StackGraphLanguage, &str> {
+        self.compiled
+            .get_or_init(|| {
+                StackGraphLanguage::from_source(
+                    self.grammar.clone(),
+                    PathBuf::from(self.path),
+                    self.source,
+                )
                 .map(|mut language| {
                     // Scippy never reads the debug information of the nodes.
                     language.set_debug_attributes(false);
                     language
                 })
-                .map_err(|e| bad(format!("the binding rules do not compile: {e}")))
-        };
-        let mut languages = vec![compile(
+                .map_err(|e| format!("the binding rules do not compile: {e}"))
+            })
+            .as_ref()
+            .map_err(String::as_str)
+    }
+}
+
+/// The compiled binding rules of a pack: one rule set for each dialect.
+///
+/// Compiling the rules is costly: it takes about a second for each dialect. Three steps cut
+/// the cost.
+/// - The pipeline compiles the rules once for each worker and shares them with the engine of
+///   each shard.
+/// - A dialect compiles when the first file of that dialect needs it. A project with no TSX
+///   file never compiles the TSX rules.
+/// - A thread keeps the rules that it compiled. A second run on the same thread, for example
+///   a second index call of a test, compiles nothing.
+#[derive(Clone)]
+pub(crate) struct CompiledRules {
+    /// The first rule set is the primary dialect.
+    dialects: Rc<Vec<DialectRules>>,
+}
+
+thread_local! {
+    /// The rules that this thread compiled. The key names the sources of the rules.
+    static COMPILED: RefCell<HashMap<Vec<(usize, usize)>, CompiledRules>> =
+        RefCell::new(HashMap::new());
+}
+
+impl CompiledRules {
+    /// Get the rules of a pack. Compile the primary dialect now, so that a pack with bad
+    /// rules fails at the start of the run.
+    pub fn new(pack: &'static str, analysis: &dyn Analysis) -> Result<Self, ScippyError> {
+        let rules = analysis.binding_rules();
+        let extra = analysis.extra_dialects();
+        // The sources are static text, so their addresses tell the rule sets apart.
+        let key: Vec<(usize, usize)> = std::iter::once(rules.tsg_source)
+            .chain(extra.iter().map(|d| d.tsg_source))
+            .map(|source| (source.as_ptr() as usize, source.len()))
+            .collect();
+        if let Some(found) = COMPILED.with(|cache| cache.borrow().get(&key).cloned()) {
+            return Ok(found);
+        }
+        let mut dialects = vec![DialectRules::new(
             analysis.grammar(),
             rules.tsg_path,
             rules.tsg_source,
-        )?];
-        for dialect in analysis.extra_dialects() {
-            languages.push(compile(
+        )];
+        for dialect in extra {
+            dialects.push(DialectRules::new(
                 dialect.grammar,
                 dialect.tsg_path,
                 dialect.tsg_source,
-            )?);
+            ));
         }
-        Ok(Self {
-            languages: Rc::new(languages),
-        })
+        if let Err(reason) = dialects[0].language() {
+            return Err(ScippyError::Pack {
+                pack,
+                reason: reason.to_owned(),
+            });
+        }
+        let compiled = Self {
+            dialects: Rc::new(dialects),
+        };
+        COMPILED.with(|cache| cache.borrow_mut().insert(key, compiled.clone()));
+        Ok(compiled)
     }
 }
 
@@ -189,7 +249,7 @@ pub(crate) struct BindingEngine {
     pack: &'static str,
     cache_key: Option<String>,
     /// The compiled rules. The shards share them.
-    languages: Rc<Vec<StackGraphLanguage>>,
+    languages: Rc<Vec<DialectRules>>,
     graph: StackGraph,
     partials: PartialPaths,
     database: Database,
@@ -220,7 +280,7 @@ impl BindingEngine {
         let mut engine = Self {
             pack,
             cache_key,
-            languages: Rc::clone(&compiled.languages),
+            languages: Rc::clone(&compiled.dialects),
             graph: StackGraph::new(),
             partials: PartialPaths::new(),
             database: Database::new(),
@@ -252,7 +312,8 @@ impl BindingEngine {
                     .add(name.as_str().into(), value.as_str().into())
                     .map_err(|e| e.to_string())?;
             }
-            self.languages[0]
+            let language = self.languages[0].language().map_err(str::to_owned)?;
+            language
                 .build_stack_graph_into(
                     &mut self.graph,
                     file,
@@ -362,7 +423,9 @@ impl BindingEngine {
                 .add(name.as_str().into(), value.as_str().into())
                 .map_err(|e| fail(e.to_string()))?;
         }
-        let language = &self.languages[dialect];
+        let language = self.languages[dialect]
+            .language()
+            .map_err(|e| fail(e.to_owned()))?;
         let built = catch_unwind(AssertUnwindSafe(|| {
             language.build_stack_graph_into(
                 &mut self.graph,
