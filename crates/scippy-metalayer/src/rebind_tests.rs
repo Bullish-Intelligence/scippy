@@ -509,19 +509,150 @@ fn t1h_binds_a_key_that_an_older_locator_held() {
 }
 
 #[test]
-fn t2_binds_the_same_path_name_and_kind_with_another_container() {
+fn t2_binds_another_container_when_the_signature_and_body_are_equal() {
     let mut w = World::new();
     w.publish(&[file("a.py", vec![func("a/f().", "f")])]);
     let id = w.row("a/f().").id;
-    let report = w.publish(&[file(
-        "a.py",
-        vec![func("a/C#f().", "f").within(&["C"]).sig("s2").body("b2")],
-    )]);
+    let report = w.publish(&[file("a.py", vec![func("a/C#f().", "f").within(&["C"])])]);
     assert_eq!(report.bound.get("T2"), Some(&1));
     let row = w.row("a/C#f().");
     assert_eq!(row.id, id);
     assert_eq!(state_of(&row), "moved:T2");
     assert_eq!(w.count("locator"), 2);
+}
+
+#[test]
+fn t2_does_not_bind_another_container_with_another_body_or_signature() {
+    for edited in [
+        func("a/C#f().", "f").within(&["C"]).body("b2"),
+        func("a/C#f().", "f").within(&["C"]).sig("s2"),
+        // An equal short body is equal in many places.
+        func("a/C#f().", "f")
+            .within(&["C"])
+            .tokens(MIN_BODY_TOKENS as u32 - 1),
+    ] {
+        let mut w = World::new();
+        w.publish(&[file(
+            "a.py",
+            vec![func("a/f().", "f").tokens(MIN_BODY_TOKENS as u32 - 1)],
+        )]);
+        let id = w.row("a/f().").id;
+        let report = w.publish(&[file("a.py", vec![edited])]);
+        assert_eq!(report.bound.get("T2"), None);
+        assert_eq!(report.orphaned, 1);
+        assert_eq!(report.minted, 1);
+        assert_eq!(w.state("a/C#f()."), "matched");
+        assert_ne!(w.row("a/C#f().").id, id);
+    }
+}
+
+#[test]
+fn t2_binds_the_same_container_with_a_new_body_and_signature() {
+    let mut w = World::new();
+    w.publish(&[file(
+        "a.py",
+        vec![
+            func("a/C#f().", "f").within(&["C"]),
+            func("a/pad().", "pad"),
+        ],
+    )]);
+    let id = w.row("a/C#f().").id;
+    let report = w.publish(&[file(
+        "a.py",
+        vec![
+            func("a/D#f().", "f").within(&["C"]).sig("s2").body("b2"),
+            func("a/pad().", "pad"),
+        ],
+    )]);
+    assert_eq!(report.bound.get("T2"), Some(&1));
+    assert_eq!(w.row("a/D#f().").id, id);
+}
+
+#[test]
+fn t3_does_not_bind_a_method_of_another_class_with_another_body() {
+    // A.__init__ is deleted. B.__init__ is new. The signature digest is equal for both.
+    let mut w = World::new();
+    w.publish(&[
+        file(
+            "a.py",
+            vec![
+                func("a/A#__init__().", "__init__").within(&["A"]),
+                param("a/A#__init__().", "a/A#__init__().(self)", "self").within(&["A"]),
+            ],
+        ),
+        file("b.py", vec![func("b/pad().", "pad")]),
+    ]);
+    let init = w.row("a/A#__init__().").id;
+    let own = w.param("a/A#__init__().", "self").id;
+    let report = w.publish(&[
+        file("a.py", vec![]),
+        file(
+            "b.py",
+            vec![
+                func("b/pad().", "pad"),
+                func("b/B#__init__().", "__init__")
+                    .within(&["B"])
+                    .sig("sig-__init__")
+                    .body("other"),
+                param("b/B#__init__().", "b/B#__init__().(self)", "self").within(&["B"]),
+            ],
+        ),
+    ]);
+    assert_eq!(report.bound.get("T3"), None);
+    assert_eq!(report.bound.get("T4"), None);
+    assert_eq!(w.state("b/B#__init__()."), "matched");
+    assert_ne!(w.row("b/B#__init__().").id, init);
+    // The parameter follows its own parent: the old one is orphaned and the new one is minted.
+    let state = |id: &str| state_of(&w.rows().into_iter().find(|r| r.id == id).unwrap());
+    assert_eq!(state(&init), "orphaned");
+    assert_eq!(state(&own), "orphaned");
+    assert_ne!(w.param("b/B#__init__().", "self").id, own);
+}
+
+#[test]
+fn t3_does_not_bind_a_short_body_in_another_container() {
+    let mut w = World::new();
+    let short = |d: &str, c: &str| {
+        func(d, "__init__")
+            .within(&[c])
+            .tokens(MIN_BODY_TOKENS as u32 - 1)
+    };
+    w.publish(&[
+        file("a.py", vec![short("a/A#__init__().", "A")]),
+        file("b.py", vec![func("b/pad().", "pad")]),
+    ]);
+    let report = w.publish(&[
+        file("a.py", vec![]),
+        file(
+            "b.py",
+            vec![func("b/pad().", "pad"), short("b/B#__init__().", "B")],
+        ),
+    ]);
+    assert_eq!(report.bound.get("T3"), None);
+    assert_eq!(report.orphaned, 1);
+}
+
+#[test]
+fn t3_binds_another_container_when_the_body_is_equal() {
+    let mut w = World::new();
+    w.publish(&[
+        file("a.py", vec![func("a/A#run().", "run").within(&["A"])]),
+        file("b.py", vec![func("b/pad().", "pad")]),
+    ]);
+    let id = w.row("a/A#run().").id;
+    let report = w.publish(&[
+        file("a.py", vec![]),
+        file(
+            "b.py",
+            vec![
+                func("b/pad().", "pad"),
+                func("b/B#run().", "run").within(&["B"]),
+            ],
+        ),
+    ]);
+    assert_eq!(report.bound.get("T3"), Some(&1));
+    assert_eq!(w.row("b/B#run().").id, id);
+    assert_eq!(w.state("b/B#run()."), "moved:T3");
 }
 
 #[test]

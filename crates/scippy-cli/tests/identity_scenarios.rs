@@ -354,6 +354,68 @@ fn move_of_a_declaration_is_moved_by_t3() {
 }
 
 #[test]
+fn a_method_of_a_deleted_class_does_not_bind_to_a_method_of_a_new_class_in_another_file() {
+    // Widget is deleted. Gadget is new, in another file. `run` and `reset` have equal signatures.
+    let (before, after) = pair("wrong_t3");
+    assert_orphan_and_mint(&before, &after, "demo/g.py", "Gadget");
+}
+
+#[test]
+fn a_method_of_a_deleted_class_does_not_bind_to_a_method_of_a_new_class_in_the_same_file() {
+    // Widget is deleted. Draft is new, in the same file. `run` and `reset` have equal signatures.
+    let (before, after) = pair("wrong_t2");
+    assert_orphan_and_mint(&before, &after, "demo/a.py", "Draft");
+}
+
+/// The methods of Widget are orphaned, and the methods of `class` are new, with new parameters.
+fn assert_orphan_and_mint(before: &Snap, after: &Snap, path: &str, class: &str) {
+    for name in ["run", "reset"] {
+        let old = before.find("demo/a.py", "method", name);
+        after.assert_orphaned(&old.id);
+        assert_eq!(after.ents[&old.id].path, "demo/a.py", "{name} did not move");
+        // The orphan keeps its last locator, so look for the new entity by its id.
+        let fresh: Vec<&Ent> = after
+            .ents
+            .values()
+            .filter(|e| e.path == path && e.kind == "method" && e.name == name)
+            .filter(|e| !before.ents.contains_key(&e.id))
+            .collect();
+        assert_eq!(fresh.len(), 1, "{class}.{name} is new: {fresh:?}");
+        let new = fresh[0];
+        assert!(after.outcome(&new.id).is_none());
+        // The parameters follow their own parent.
+        let first = if name == "run" { "count" } else { "value" };
+        let old_param = before.param(&old.id, first).unwrap();
+        after.assert_orphaned(&old_param.id);
+        let new_param = after.param(&new.id, first).unwrap();
+        assert!(!before.ents.contains_key(&new_param.id));
+    }
+    let moved = after
+        .outcomes
+        .values()
+        .filter(|o| o.outcome == "moved")
+        .count();
+    assert_eq!(moved, 0, "{:?}", after.outcomes);
+}
+
+#[test]
+fn a_renamed_class_with_equal_members_moves_its_methods_by_t2() {
+    let (before, after) = pair("class_rename");
+    for name in ["run", "reset"] {
+        let old = before.find("demo/a.py", "method", name);
+        after.assert_moved(&old.id, &["T2"]);
+        assert_eq!(after.ents[&old.id].path, "demo/a.py");
+        for param in before
+            .ents
+            .values()
+            .filter(|e| e.parent_id.as_deref() == Some(&old.id))
+        {
+            after.assert_matched(&param.id);
+        }
+    }
+}
+
+#[test]
 fn rename_of_a_file_moves_its_declarations_and_variables() {
     let (before, after) = pair("move_file");
     let moved: Vec<&Ent> = before

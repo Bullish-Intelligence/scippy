@@ -480,6 +480,24 @@ pub(crate) struct Pool<'a> {
     min_tokens: i64,
 }
 
+/// True when both digests of the signature exist and are equal.
+fn same_sig(o: &Old, i: &Item) -> bool {
+    o.cur.sig_digest.is_some() && o.cur.sig_digest == i.sig_digest
+}
+
+/// True when both digests of the body exist and are equal, and the body has `min` tokens or
+/// more. A short body, such as `pass`, is equal in many places.
+fn same_body(min: i64, o: &Old, i: &Item) -> bool {
+    o.cur.body_digest.is_some()
+        && o.cur.body_digest == i.body_digest
+        && i.body_tokens.is_some_and(|t| t >= min)
+}
+
+/// T3 accepts a pair in another path that has an equal container or an equal body.
+fn t3_accept(min: i64, o: &Old, i: &Item) -> bool {
+    o.cur.path != i.path && (o.cur.container == i.container || same_body(min, o, i))
+}
+
 impl<'a> Pool<'a> {
     fn item(&self, n: usize) -> &Item {
         &self.items[n]
@@ -670,12 +688,15 @@ impl<'a> Pool<'a> {
             });
         }
 
+        // T2: the same path, name, and kind. Another container needs an equal signature and body.
         let by_place = |path: &str, name: &str, kind: &str| format!("{path}{SEP}{name}{SEP}{kind}");
         self.run(&Spec {
             tier: Tier::T2,
             old_keys: &|o| vec![by_place(&o.cur.path, &o.cur.name, &o.cur.kind)],
             new_key: &|i| Some(by_place(&i.path, &i.name, i.kind.as_str())),
-            accept: &|_, _| true,
+            accept: &|o, i| {
+                o.cur.container == i.container || (same_sig(o, i) && same_body(min, o, i))
+            },
             narrow: true,
         });
 
@@ -692,7 +713,7 @@ impl<'a> Pool<'a> {
                 Some(sig) if !i.variable() => Some(by_sig(&i.name, i.kind.as_str(), sig)),
                 _ => None,
             },
-            accept: &|o, i| o.cur.path != i.path,
+            accept: &|o, i| t3_accept(min, o, i),
             narrow: true,
         });
 
@@ -1029,7 +1050,7 @@ impl<'a> Pool<'a> {
                     }
                     _ => None,
                 },
-                accept: &|o, i| o.cur.path != i.path,
+                accept: &|o, i| t3_accept(min, o, i),
                 narrow: true,
             },
             Spec {
