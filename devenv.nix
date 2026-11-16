@@ -133,5 +133,16 @@ in
         input.testee.ignores = unread;
         input.testee.timeout_s = hangGuard;
       };
+
+      # Opt-in benchmark. It is not a check or a test. Run it with `testee verify bench:identity`.
+      "bench:identity" = {
+        exec = ''
+          ${cargoEnv}
+          export PATH="${pkgs.python3}/bin:$PATH"
+          scripts/identity-eval.sh overhead
+        '';
+        input.testee.ignores = unread;
+        input.testee.timeout_s = hangGuard;
+      };
     };
 }
