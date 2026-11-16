@@ -3,7 +3,7 @@
 All notable changes to Scippy are in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] - UNRELEASED
+## [0.1.0] - 2026-11-16
 
 ### Added
 
@@ -23,6 +23,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `scippy index` exit codes: 0 complete, 3 finished but incomplete, 1 failure, 2 usage.
 - Accuracy oracle against `scip-python` (`scripts/oracle`).
 - Testee gate and the `opt:slow` task for slow tests.
+- Gate 6 conformance tests: core language names, invalid rules, a mixed run, creation order, and Loci CRLF notes.
+- Oracle rerun for v0.1: Python on mypy and rich, Loci on the real vault.
 
 ### Changed
 
@@ -32,6 +34,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The pipeline and the metalayer publish code are split into named modules and phases.
 - `scippy index` is one entry point with an `IndexMode` value.
 - The tests run with the `gate` profile.
+- Identity tier T3 needs an equal body digest for a top-level class. Two classes with the same name no longer bind as moved.
+- `scippy --version` prints `scippy 0.1.0`.
 
 ### Known limits
 
