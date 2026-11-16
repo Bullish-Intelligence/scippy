@@ -1,9 +1,11 @@
 //! Check the status of each file, the `--strict` flag, and the publish of a lossy run.
 
+mod common;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use scippy_core::{
     AnalysisSnapshot, IndexReport, IndexRequest, LanguagePack, ReferenceOutcome,
@@ -136,7 +138,7 @@ fn the_files_after_the_total_limit_have_rows() {
 }
 
 fn scippy(args: &[&str], paths: &[(&str, &Path)]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    let mut command = common::scippy();
     command.arg("index").args(args);
     for (flag, path) in paths {
         command.arg(flag).arg(path);

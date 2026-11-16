@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use crate::harness::{golden, golden_db, golden_exit, golden_text, scratch_db};
 
@@ -123,7 +122,7 @@ fn edited_copy(name: &str) -> std::path::PathBuf {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/query"),
         &root,
     );
-    let indexed = Command::new(env!("CARGO_BIN_EXE_scippy"))
+    let indexed = crate::common::scippy()
         .args(["index"])
         .arg(&root)
         .arg("--output")

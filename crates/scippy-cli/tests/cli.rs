@@ -2,6 +2,8 @@
 //!
 //! The binary indexes Python and TypeScript files.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -10,10 +12,7 @@ use protobuf::Message;
 use scip::types::Index;
 
 fn scippy(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_scippy"))
-        .args(args)
-        .output()
-        .unwrap()
+    common::scippy().args(args).output().unwrap()
 }
 
 fn write_tree(root: &Path, files: &[&str]) {

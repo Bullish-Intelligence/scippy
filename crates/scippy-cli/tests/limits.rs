@@ -1,8 +1,9 @@
 //! Check the limits of the search for each reference.
 
+mod common;
+
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use scippy_core::{IndexRequest, ReferenceOutcome, ResolveLimits, index_project_with_snapshot};
 use scippy_metalayer::{Metalayer, PublishOptions};
@@ -76,7 +77,7 @@ fn the_limit_flags_are_accepted() {
     project(dir.path());
     let out = dir.path().join("out.scip");
     let run = |extra: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_scippy"))
+        common::scippy()
             .arg("index")
             .arg(dir.path())
             .arg("--output")

@@ -14,6 +14,7 @@ use scippy_metalayer::{Metalayer, PublishOptions, default_identity_path};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
+mod cache_choice;
 mod metalayer;
 
 #[derive(Parser)]
@@ -65,9 +66,16 @@ struct IndexArgs {
     /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is 50G.
     #[arg(long, value_parser = parse_size)]
     memory_budget: Option<u64>,
-    /// Reuse file graphs in this SQLite database.
-    #[arg(long)]
+    /// Reuse file graphs in this SQLite database. The default file is
+    /// `$XDG_CACHE_HOME/scippy/graph-cache.sqlite`, or `$HOME/.cache/scippy/graph-cache.sqlite`.
+    /// The variable `SCIPPY_GRAPH_CACHE` (a path, or `off`) replaces the default. This flag
+    /// replaces both. A failure of the cache file turns the cache off with one warning, and the
+    /// run goes on. The cache is disposable: delete the file at any time.
+    #[arg(long, conflicts_with = "no_graph_cache")]
     graph_cache: Option<PathBuf>,
+    /// Run without the graph cache. This wins over `SCIPPY_GRAPH_CACHE`.
+    #[arg(long)]
+    no_graph_cache: bool,
     /// Keep the graph cache file under this size, such as `1G` or `512M`. After a run, the cache
     /// deletes its least recently used rows to fit. Zero means no cap. The default is 1G.
     #[arg(long, value_parser = parse_size)]
@@ -167,7 +175,7 @@ fn identity_path(args: &IndexArgs) -> Option<PathBuf> {
 
 /// Refuse two output paths that name the same file. A SQLite database also owns the
 /// `-wal`, `-shm`, and `-journal` files beside it.
-fn check_paths(args: &IndexArgs) -> Result<(), String> {
+fn check_paths(args: &IndexArgs, cache: Option<&Path>) -> Result<(), String> {
     let mut named: Vec<(&str, PathBuf)> = vec![("--output", resolve(&args.output))];
     if let Some(path) = &args.trace {
         named.push(("--trace", resolve(path)));
@@ -175,7 +183,7 @@ fn check_paths(args: &IndexArgs) -> Result<(), String> {
     if let Some(path) = &args.metalayer {
         named.push(("--metalayer", resolve(path)));
     }
-    if let Some(path) = &args.graph_cache {
+    if let Some(path) = cache {
         named.push(("--graph-cache", resolve(path)));
     }
     if let Some(path) = identity_path(args) {
@@ -223,7 +231,11 @@ fn main() -> ExitCode {
         }
         Command::Metalayer(args) => metalayer::run(args),
         Command::Index(args) => {
-            if let Err(message) = check_paths(&args) {
+            let choice =
+                cache_choice::choose(args.graph_cache.clone(), args.no_graph_cache, &|name| {
+                    std::env::var_os(name)
+                });
+            if let Err(message) = check_paths(&args, cache_choice::explicit(&choice)) {
                 eprintln!("scippy: {message}");
                 return ExitCode::FAILURE;
             }
@@ -238,7 +250,8 @@ fn main() -> ExitCode {
                 trace,
                 jobs,
                 memory_budget,
-                graph_cache,
+                graph_cache: _,
+                no_graph_cache: _,
                 graph_cache_max_bytes,
                 metalayer,
                 strict,
@@ -263,7 +276,7 @@ fn main() -> ExitCode {
             request.package_name = package_name;
             request.package_version = package_version;
             request.trace = trace;
-            request.graph_cache = graph_cache;
+            request.graph_cache = cache_choice::prepare(choice);
             if let Some(bytes) = graph_cache_max_bytes {
                 request.graph_cache_max_bytes = bytes;
             }

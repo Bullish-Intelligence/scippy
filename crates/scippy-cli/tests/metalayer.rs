@@ -1,8 +1,8 @@
 //! Exercise the persistent experiment against full Scippy runs.
 
+mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use scippy_core::{AnalysisSnapshot, IndexRequest, ReferenceOutcome, index_project_with_snapshot};
 use scippy_loci::LociPack;
@@ -51,7 +51,7 @@ fn cli_publishes_each_run_and_a_parse_failure_gives_a_failed_file() {
     let database = scratch.path().join("layer.sqlite");
     let output = scratch.path().join("index.scip");
     let run = || {
-        Command::new(env!("CARGO_BIN_EXE_scippy"))
+        common::scippy()
             .args([
                 "index",
                 root.to_str().unwrap(),
@@ -357,7 +357,7 @@ fn another_project_root_is_refused_until_the_flag_replaces_it() {
     let database = scratch.path().join("layer.sqlite");
     let output = scratch.path().join("index.scip");
     let index = |root: &Path, replace: bool| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+        let mut command = common::scippy();
         command
             .arg("index")
             .arg(root)
@@ -387,7 +387,7 @@ fn another_project_root_is_refused_until_the_flag_replaces_it() {
 }
 
 fn scippy_index(root: &Path, flags: &[(&str, &Path)]) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    let mut command = common::scippy();
     command.arg("index").arg(root);
     for (flag, path) in flags {
         command.arg(flag).arg(path);
@@ -483,7 +483,7 @@ fn write_files(root: &Path, count: usize) {
 }
 
 fn run_cli(root: &Path, output: &Path, cache: Option<&Path>) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    let mut command = common::scippy();
     command.args(["index", root.to_str().unwrap(), "--output"]);
     command.arg(output);
     if let Some(cache) = cache {

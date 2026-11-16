@@ -1,7 +1,6 @@
 //! Golden cases for `scippy metalayer edges`.
 
 use std::fs;
-use std::process::Command;
 
 use crate::harness::{golden, golden_db, golden_text, project_root, scratch_db};
 
@@ -84,7 +83,7 @@ fn links_with_a_resolved_anchor_name_it() {
     )
     .unwrap();
     fs::write(dir.join("notes/t.md"), "# Top\n\n## Sub\n\ntext ^blk\n").unwrap();
-    let indexed = Command::new(env!("CARGO_BIN_EXE_scippy"))
+    let indexed = crate::common::scippy()
         .arg("index")
         .arg(&dir)
         .arg("--output")

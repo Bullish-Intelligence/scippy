@@ -38,15 +38,31 @@ Create the database directory, then run:
 ```sh
 mkdir -p ~/.local/state/scippy
 scippy index PROJECT_ROOT --output index.scip \
-  --graph-cache ~/.local/state/scippy/graphs.sqlite \
   --metalayer ~/.local/state/scippy/metalayer.sqlite
 ```
+
+The graph cache is on by default. `scippy index` uses the file
+`$XDG_CACHE_HOME/scippy/graph-cache.sqlite`, or `$HOME/.cache/scippy/graph-cache.sqlite` when
+`XDG_CACHE_HOME` is not set to an absolute path. It creates the folder on first use. One file
+serves every project: each row has an owner made from the project root, the pack, the path, and
+the dialect. Choose the cache in this order:
+
+1. `--no-graph-cache` turns the cache off. `--graph-cache PATH` uses another file.
+2. The variable `SCIPPY_GRAPH_CACHE` holds a path, or `off`.
+3. The default file.
+
+If the default file cannot be created or opened, or its lock times out, the run prints one
+warning on stderr and goes on without the cache. A bad `--graph-cache PATH` or
+`SCIPPY_GRAPH_CACHE` path does the same, but the program does not create its folder. The SCIP
+output is the same with and without the cache. The cache is disposable: delete the file at any
+time.
 
 The graph cache stores each code file's stack graph and partial paths. A row holds the graph in
 the `bincode` format, compressed with `zstd`. The cache key covers the
 source, path, resolver settings, dialect, and executable. A new executable gets a new cache:
 a run deletes the rows of other executables when it opens the file, so two executables must not
-share one cache file. The cache is disposable.
+share one cache file. A debug build and a release build are two executables, so they replace
+each other's rows in the default file. The cache is disposable.
 The file uses the SQLite WAL mode and the `NORMAL` sync mode. A power loss can lose the newest
 rows, and the cache then rebuilds them.
 Each row records the run that last used it. After a run, if the file exceeds the cap, the cache

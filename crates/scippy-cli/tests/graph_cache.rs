@@ -1,8 +1,10 @@
 //! Exercise the size and the reuse of the graph cache in full Scippy runs.
 
+mod common;
+
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn write_files(root: &Path, count: usize) {
     fs::create_dir_all(root).unwrap();
@@ -14,7 +16,7 @@ fn write_files(root: &Path, count: usize) {
 }
 
 fn run(root: &Path, output: &Path, cache: Option<&Path>, max_bytes: Option<&str>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_scippy"));
+    let mut command = common::scippy();
     command.args(["index", root.to_str().unwrap(), "--output"]);
     command.arg(output);
     if let Some(cache) = cache {

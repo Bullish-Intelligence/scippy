@@ -4,7 +4,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::harness::{golden, golden_db, golden_text, project_root, run, scratch_db};
 
@@ -36,7 +35,7 @@ pub fn indexed_copy(name: &str) -> Copy {
     let root = dir.join("project");
     copy_tree(project_root(), &root);
     let scip = dir.join("index.scip");
-    let indexed = Command::new(env!("CARGO_BIN_EXE_scippy"))
+    let indexed = crate::common::scippy()
         .args(["index"])
         .arg(&root)
         .arg("--output")

@@ -5,10 +5,11 @@
 //! `tests/fixtures/identity/`. `base` is tree A of every code scenario. `md_base` is tree A of
 //! every Markdown scenario. Every other directory is a complete tree B.
 
+mod common;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -163,7 +164,7 @@ impl Lab {
     /// Put a tree, publish it, and read the identity store.
     fn publish(&self, tree: &str) -> Snap {
         self.put(tree);
-        let run = Command::new(env!("CARGO_BIN_EXE_scippy"))
+        let run = common::scippy()
             .args([
                 "index",
                 self.root.to_str().unwrap(),

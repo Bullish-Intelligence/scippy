@@ -137,7 +137,7 @@ fn shared_fixture(tmp: &Path) -> PathBuf {
         let shared = shared.canonicalize().unwrap();
         let root = shared.join("project");
         copy_tree(&manifest("tests/fixtures/query"), &root);
-        let indexed = Command::new(env!("CARGO_BIN_EXE_scippy"))
+        let indexed = crate::common::scippy()
             .args(["index", root.to_str().unwrap(), "--output"])
             .arg(shared.join("index.scip"))
             .arg("--metalayer")

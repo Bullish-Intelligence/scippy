@@ -8,6 +8,8 @@
 //! `UPDATE_GOLDEN=1 cargo test -p scippy-cli --test query_golden`.
 //! A change in a golden file is a contract change. Check `METALAYER_QUERY.md`, section 5.
 
+#[path = "../common/mod.rs"]
+mod common;
 mod harness;
 
 mod annotate;
