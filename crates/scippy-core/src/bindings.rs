@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use stack_graphs::arena::Handle;
 use stack_graphs::graph::{File, Node, SourceInfo, StackGraph, Symbol};
 use stack_graphs::partial::{PartialPath, PartialPaths};
@@ -20,7 +21,7 @@ use stack_graphs::stitching::{
 };
 use tree_sitter_stack_graphs::{BuildError, NoCancellation, StackGraphLanguage, Variables};
 
-use crate::cache::{CacheGate, CachedGraph, GraphCache};
+use crate::cache::{CacheGate, CachedGraph, GraphCache, decode, encode};
 use crate::error::ScippyError;
 use crate::extract::SourceAnchor;
 use crate::language::{Analysis, BindingRules, SupportFile};
@@ -245,6 +246,66 @@ impl CompiledRules {
     }
 }
 
+/// The key of the inputs that decide the graphs of the external assets.
+///
+/// A blob from [`prebuild_assets`] starts with this key. The key covers the rules and each
+/// asset, so a blob from other inputs never loads.
+fn assets_key(rules: &BindingRules) -> String {
+    let assets: Vec<_> = rules
+        .external_assets()
+        .into_iter()
+        .map(|a| (a.name, a.source, a.globals))
+        .collect();
+    let input = serde_json::to_vec(&(
+        "asset-graphs-v1",
+        rules.tsg_source,
+        assets,
+        rules.shadow_aware_similar_paths,
+    ))
+    .expect("the key input encodes");
+    format!("{:x}", Sha256::digest(input))
+}
+
+/// Build the graphs of the external assets of a pack, such as its builtins, and return them as
+/// bytes. A build script calls this. The pack then sets
+/// [`BindingRules::prebuilt_assets`](crate::BindingRules::prebuilt_assets) to the bytes, and each
+/// run loads the graphs instead of building them.
+///
+/// `grammar` and `rules` are the primary dialect and the rules of the pack.
+pub fn prebuild_assets(
+    grammar: tree_sitter::Language,
+    rules: &BindingRules,
+) -> Result<Vec<u8>, String> {
+    let dialects = vec![DialectRules::new(grammar, rules.tsg_path, rules.tsg_source)];
+    dialects[0].language().map_err(str::to_owned)?;
+    let compiled = CompiledRules {
+        dialects: Rc::new(dialects),
+    };
+    let gate = Arc::new(CacheGate::new(
+        None,
+        std::path::Path::new("."),
+        std::time::Duration::ZERO,
+        0,
+    ));
+    let (mut engine, paths) =
+        BindingEngine::start("prebuild", None, rules, &compiled, &gate, false)
+            .map_err(|e| e.to_string())?;
+    let graph = stack_graphs::serde::StackGraph::from_graph(&engine.graph);
+    let paths = paths
+        .iter()
+        .map(|p| {
+            stack_graphs::serde::PartialPath::from_partial_path(
+                &engine.graph,
+                &mut engine.partials,
+                p,
+            )
+        })
+        .collect();
+    let mut blob = assets_key(rules).into_bytes();
+    blob.extend(encode(&CachedGraph { graph, paths })?);
+    Ok(blob)
+}
+
 pub(crate) struct BindingEngine {
     pack: &'static str,
     cache_key: Option<String>,
@@ -274,8 +335,26 @@ impl BindingEngine {
         gate: &Arc<CacheGate>,
     ) -> Result<Self, ScippyError> {
         let rules = analysis.binding_rules();
+        Self::start(
+            pack,
+            analysis.graph_cache_key(),
+            &rules,
+            compiled,
+            gate,
+            true,
+        )
+        .map(|(engine, _)| engine)
+    }
+
+    fn start(
+        pack: &'static str,
+        cache_key: Option<String>,
+        rules: &BindingRules,
+        compiled: &CompiledRules,
+        gate: &Arc<CacheGate>,
+        use_prebuilt: bool,
+    ) -> Result<(Self, Vec<PartialPath>), ScippyError> {
         let bad = |reason: String| ScippyError::Pack { pack, reason };
-        let cache_key = analysis.graph_cache_key();
         let cache_enabled = cache_key.is_some();
         let mut engine = Self {
             pack,
@@ -292,12 +371,57 @@ impl BindingEngine {
             cache_hits: 0,
             cache_misses: 0,
         };
-        engine.load_assets(&rules).map_err(bad)?;
-        Ok(engine)
+        if use_prebuilt && let Some(blob) = rules.prebuilt_assets {
+            // A blob that does not match the rules, or that fails to load, never serves. The
+            // engine then starts again with an empty graph and builds the assets itself.
+            if engine.load_prebuilt(rules, blob).is_ok() {
+                return Ok((engine, Vec::new()));
+            }
+            engine.graph = StackGraph::new();
+            engine.partials = PartialPaths::new();
+            engine.database = Database::new();
+            engine.external.clear();
+        }
+        let paths = engine.load_assets(rules).map_err(bad)?;
+        Ok((engine, paths))
+    }
+
+    /// Load the graphs that [`prebuild_assets`] made, when they match the rules.
+    fn load_prebuilt(&mut self, rules: &BindingRules, blob: &[u8]) -> Result<(), String> {
+        let key = assets_key(rules);
+        let body = blob
+            .strip_prefix(key.as_bytes())
+            .ok_or("the prebuilt assets do not match the rules")?;
+        let cached = decode(body)?;
+        self.load_cached(&cached)?;
+        for asset in rules.external_assets() {
+            if !asset.source.trim().is_empty() {
+                self.external.insert(asset.name);
+            }
+        }
+        Ok(())
+    }
+
+    /// Add a stored graph and its partial paths to the engine.
+    fn load_cached(&mut self, cached: &CachedGraph) -> Result<(), String> {
+        cached
+            .graph
+            .load_into(&mut self.graph)
+            .map_err(|e| e.to_string())?;
+        for path in &cached.paths {
+            let path = path
+                .to_partial_path(&mut self.graph, &mut self.partials)
+                .map_err(|e| e.to_string())?;
+            self.database
+                .add_partial_path(&self.graph, &mut self.partials, path);
+        }
+        Ok(())
     }
 
     /// Build each external asset as a file of its own and store its partial paths.
-    fn load_assets(&mut self, rules: &BindingRules) -> Result<(), String> {
+    /// Return the partial paths of all assets.
+    fn load_assets(&mut self, rules: &BindingRules) -> Result<Vec<PartialPath>, String> {
+        let mut all = Vec::new();
         for asset in rules.external_assets() {
             if asset.source.trim().is_empty() {
                 continue;
@@ -322,10 +446,12 @@ impl BindingEngine {
                     &NoCancellation,
                 )
                 .map_err(|e| format!("the asset source {} fails to build: {e}", asset.path))?;
-            let _ = self.add_partial_paths(file);
+            if let Some(paths) = self.add_partial_paths(file) {
+                all.extend(paths);
+            }
             self.external.insert(asset.name);
         }
-        Ok(())
+        Ok(all)
     }
 
     /// Build the graph of one file and store its partial paths.
@@ -368,23 +494,7 @@ impl BindingEngine {
         if let (Some(cache), Some((key, _))) = (&self.cache, &cache_key) {
             match cache.get(key) {
                 Ok(Some(cached)) => {
-                    let loaded = cached
-                        .graph
-                        .load_into(&mut self.graph)
-                        .map_err(|e| e.to_string())
-                        .and_then(|()| {
-                            for path in &cached.paths {
-                                let path = path
-                                    .to_partial_path(&mut self.graph, &mut self.partials)
-                                    .map_err(|e| e.to_string())?;
-                                self.database.add_partial_path(
-                                    &self.graph,
-                                    &mut self.partials,
-                                    path,
-                                );
-                            }
-                            Ok(())
-                        });
+                    let loaded = self.load_cached(&cached);
                     // A failed load can leave part of the file in the graph. The engine cannot
                     // rebuild the file, so it reports the file as failed.
                     if let Err(error) = loaded {

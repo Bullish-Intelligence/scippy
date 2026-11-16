@@ -150,15 +150,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use scippy_core::{
-    Analysis, BindingRules, Builtins, DeclKind, Descriptor, Diagnostic, ExternalAsset,
-    ExternalIdentity, ExtractionSpec, Identity, LanguagePack, Manifest, Package, ProjectModel,
-    ProjectRelativePath, Reach, ReferenceKind, Scope, Severity, Stage, SymbolKind,
+    Analysis, BindingRules, DeclKind, Descriptor, Diagnostic, ExternalIdentity, ExtractionSpec,
+    Identity, LanguagePack, Manifest, Package, ProjectModel, ProjectRelativePath, Reach,
+    ReferenceKind, Scope, Severity, Stage, SymbolKind,
 };
 
 mod manifest;
+mod rules;
 
 use manifest::Project;
-use tree_sitter_stack_graphs_python::{STUB_MODULES, STUB_ROOT_PATH, StubModule};
+use tree_sitter_stack_graphs_python::{STUB_MODULES, StubModule};
 
 pub struct PythonPack;
 
@@ -213,25 +214,10 @@ impl Analysis for PythonPack {
     }
 
     fn binding_rules(&self) -> BindingRules {
-        BindingRules {
-            tsg_path: tree_sitter_stack_graphs_python::STACK_GRAPHS_TSG_PATH,
-            tsg_source: tree_sitter_stack_graphs_python::STACK_GRAPHS_TSG_SOURCE,
-            builtins: Some(Builtins {
-                path: tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_PATH,
-                source: tree_sitter_stack_graphs_python::STACK_GRAPHS_BUILTINS_SOURCE,
-            }),
-            assets: STUB_MODULES
-                .iter()
-                .map(|stub| ExternalAsset {
-                    name: stub.file_name(),
-                    path: stub.path,
-                    source: stub.source,
-                    globals: vec![("ROOT_PATH".to_string(), STUB_ROOT_PATH.to_string())],
-                })
-                .collect(),
-            // The Python rules need it. The fork sets the same flag in its language configuration.
-            shadow_aware_similar_paths: true,
-        }
+        let mut rules = rules::binding_rules();
+        // The build script built the graphs of the builtins and the stubs from these rules.
+        rules.prebuilt_assets = Some(include_bytes!(concat!(env!("OUT_DIR"), "/assets.bin")));
+        rules
     }
 
     fn extraction_spec(&self) -> ExtractionSpec {

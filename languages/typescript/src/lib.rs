@@ -266,6 +266,7 @@ impl Analysis for TypeScriptPack {
             }),
             assets: Vec::new(),
             shadow_aware_similar_paths: false,
+            prebuilt_assets: None,
         }
     }
 

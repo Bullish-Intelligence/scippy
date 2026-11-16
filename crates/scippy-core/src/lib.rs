@@ -35,7 +35,7 @@ pub use snapshot::{
     ReferenceOutcome, file_status,
 };
 
-pub use bindings::{Bound, ResolveLimits};
+pub use bindings::{Bound, ResolveLimits, prebuild_assets};
 pub use emit::{SymbolKind, write_scip};
 pub use error::ScippyError;
 pub use identity::{Descriptor, Package};

@@ -318,6 +318,13 @@ pub struct BindingRules {
     /// it, as the Python rules do. The resolver sets it for the indexing step and for the
     /// resolution step. Without it, a name can lose a binding.
     pub shadow_aware_similar_paths: bool,
+    /// The graphs of the external assets, built ahead of time by [`prebuild_assets`]. A pack
+    /// that builds them in a build script sets this to the bytes of the result. The engine
+    /// loads them instead of building them. It checks that they match the rules above, and it
+    /// builds the assets itself when they do not.
+    ///
+    /// [`prebuild_assets`]: crate::prebuild_assets
+    pub prebuilt_assets: Option<&'static [u8]>,
 }
 
 impl BindingRules {

@@ -324,7 +324,7 @@ fn checksum(key: &str, value: &[u8]) -> String {
 }
 
 /// Encode and compress in one pass. The raw encoding never sits in memory as a whole.
-fn encode(value: &CachedGraph) -> Result<Vec<u8>, String> {
+pub(crate) fn encode(value: &CachedGraph) -> Result<Vec<u8>, String> {
     let mut writer =
         zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL).map_err(|e| e.to_string())?;
     bincode::encode_into_std_write(value, &mut writer, bincode::config::standard())
@@ -332,7 +332,7 @@ fn encode(value: &CachedGraph) -> Result<Vec<u8>, String> {
     writer.finish().map_err(|e| e.to_string())
 }
 
-fn decode(bytes: &[u8]) -> Result<CachedGraph, String> {
+pub(crate) fn decode(bytes: &[u8]) -> Result<CachedGraph, String> {
     let mut reader = zstd::stream::Decoder::new(bytes).map_err(|e| e.to_string())?;
     bincode::decode_from_std_read(&mut reader, bincode::config::standard())
         .map_err(|e| e.to_string())
