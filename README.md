@@ -531,6 +531,8 @@ devenv shell -- testee verify
 `testee verify` is the only gate. Run it before you land a change.
 It runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo check`, and `cargo test --workspace`.
 The gate runs the fast tests. Slow tests carry `#[ignore = "slow: runs in opt:slow"]`.
+`opt:slow` also holds the performance and load-sensitive tests, which carry `#[ignore = "perf: runs in opt:slow"]`.
+The default gate holds no test that asserts on time, speed, or resource use. The machine load makes such a test fail at random.
 Run `testee verify opt:slow` when a change touches indexing, resolution, the scip output, or the metalayer cache.
 It is not part of the default gate.
 The slow tests run `scip lint`, `scip snapshot`, and `scip test` on the Python, TypeScript, and Loci fixtures.

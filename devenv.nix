@@ -40,6 +40,8 @@ in
   # `scripts/verify.sh` runs `testee verify --profile quick` for the edit loop.
   # `test:full` runs the fast set. Slow tests carry `#[ignore = "slow: ..."]`.
   # `opt:slow` runs them. It does not count for GREEN.
+  # `opt:slow` also holds the performance and load-sensitive tests: `#[ignore = "perf: ..."]`.
+  # A test that asserts on time, speed, or resource use never joins the default set.
   # Testee runs `git clean -ffdx -e .devenv` in its slot, which deletes `target/`.
   # Each Cargo task sets `CARGO_TARGET_DIR` under `.devenv/`, so the build stays warm.
   tasks =
@@ -121,6 +123,7 @@ in
       };
 
       # The slow set: end-to-end tests that call the scip CLI, and the cache tests.
+      # It also holds the performance and load-sensitive tests. Nextest runs every ignored test.
       # `--run-ignored only` runs the 27 tests that carry `#[ignore]`. Doctests have none.
       # Run it with `testee verify opt:slow` when a change touches indexing,
       # resolution, the scip output, or the metalayer cache.
