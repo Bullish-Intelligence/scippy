@@ -9,7 +9,7 @@ use scippy_core::ScippyError;
 /// Marks a database file as a Scippy read model. The bytes spell "SCPY".
 pub(crate) const APPLICATION_ID: i32 = 0x5343_5059;
 /// The storage format version that this code reads and writes.
-pub const SCHEMA_VERSION: i32 = 8;
+pub const SCHEMA_VERSION: i32 = 9;
 /// The SHA-256 of `DDL` for each version that shipped, oldest first. The last entry is the
 /// current version. A change of `DDL` needs a new entry with a higher `SCHEMA_VERSION`: the
 /// test `the_ddl_hash_follows_the_version` fails otherwise. Never edit an old entry.
@@ -23,6 +23,10 @@ pub(crate) const DDL_HISTORY: &[(i32, &str)] = &[
         8,
         "9700c08e00268552fa6c38b14c4f632567ae9d7ebd7d8acc1ab6cbb26d7497e7",
     ),
+    (
+        9,
+        "aef21da97b62fe2d79dc80a297ca1148025db9e4c88f587c44aecb6bd4a57705",
+    ),
 ];
 
 /// The tables and views. The design is in `METALAYER_SCHEMA.md`, section 3.
@@ -33,13 +37,11 @@ CREATE TABLE root_set (
   project_root TEXT NOT NULL
 );
 CREATE TABLE root_member (
-  root_id INTEGER NOT NULL REFERENCES root_set(id),
-  path TEXT NOT NULL, PRIMARY KEY (root_id, path)
+  path TEXT NOT NULL PRIMARY KEY
 ) WITHOUT ROWID;
 
 CREATE TABLE revision (
   id INTEGER PRIMARY KEY,
-  root_id INTEGER NOT NULL REFERENCES root_set(id),
   parent INTEGER,
   input_digest TEXT NOT NULL,
   tool_version TEXT NOT NULL,
@@ -61,7 +63,6 @@ CREATE TABLE support_input (
 
 CREATE TABLE file (
   id INTEGER PRIMARY KEY,
-  root_id INTEGER NOT NULL REFERENCES root_set(id),
   path TEXT NOT NULL,
   pack TEXT, language TEXT,
   status TEXT NOT NULL CHECK (status IN ('indexed','skipped','failed','shadowed')),
@@ -69,20 +70,19 @@ CREATE TABLE file (
   sha256 TEXT, size INTEGER,
   real_path TEXT,
   stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0,1)),
-  UNIQUE (root_id, path),
+  UNIQUE (path),
   CHECK ((status = 'indexed') = (reason IS NULL))
 );
 
 CREATE TABLE symbol (
   id INTEGER PRIMARY KEY,
-  root_id INTEGER NOT NULL REFERENCES root_set(id),
   symbol TEXT NOT NULL,
   local INTEGER NOT NULL CHECK (local IN (0,1)),
   file_id INTEGER REFERENCES file(id),
   kind TEXT NOT NULL, display_name TEXT NOT NULL,
   CHECK (local = 0 OR file_id IS NOT NULL)
 );
-CREATE UNIQUE INDEX symbol_global ON symbol(root_id, symbol) WHERE local = 0;
+CREATE UNIQUE INDEX symbol_global ON symbol(symbol) WHERE local = 0;
 CREATE UNIQUE INDEX symbol_local  ON symbol(file_id, symbol) WHERE local = 1;
 CREATE INDEX symbol_file ON symbol(file_id);
 
@@ -141,7 +141,6 @@ CREATE INDEX edge_anchor ON edge(anchor_reference_id);
 
 CREATE TABLE diagnostic (
   id INTEGER PRIMARY KEY,
-  root_id INTEGER NOT NULL REFERENCES root_set(id),
   severity TEXT NOT NULL CHECK (severity IN ('error','warning','info')),
   stage TEXT NOT NULL, code TEXT NOT NULL, message TEXT NOT NULL,
   path TEXT,

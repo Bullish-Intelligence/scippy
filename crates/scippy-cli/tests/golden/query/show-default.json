@@ -22,7 +22,7 @@
   "input_complete": false,
   "analysis_exact": true,
   "position_encoding": "utf8-byte",
-  "schema_version": 8,
+  "schema_version": 9,
   "value": {
     "parent": null,
     "strict": false,

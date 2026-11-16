@@ -76,7 +76,7 @@ fn open_creates_the_tables_and_stamps_the_file() {
 
 #[test]
 fn the_schema_versions_are_known() {
-    assert_eq!(SCHEMA_VERSION, 8);
+    assert_eq!(SCHEMA_VERSION, 9);
     assert_eq!(IDENTITY_VERSION, 1);
 }
 

@@ -127,8 +127,8 @@ impl Symbols {
             )));
         }
         tx.prepare_cached(
-            "INSERT INTO symbol (root_id, symbol, local, file_id, kind, display_name)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO symbol (symbol, local, file_id, kind, display_name)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )
         .and_then(|mut s| s.execute(params![symbol, local, file, kind, display_name]))
         .map_err(storage)?;
@@ -340,7 +340,7 @@ fn clear_facts(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(), ScippyE
     }
     for member in std::iter::once("").chain(s.shards.iter().map(String::as_str)) {
         tx.execute(
-            "INSERT OR IGNORE INTO root_member (root_id, path) VALUES (1, ?1)",
+            "INSERT OR IGNORE INTO root_member (path) VALUES (?1)",
             [member],
         )
         .map_err(storage)?;
@@ -417,8 +417,8 @@ fn insert_files<'a>(
     let mut manifest = Vec::with_capacity(rows.len());
     for (path, row) in rows {
         tx.prepare_cached(
-            "INSERT INTO file (root_id, path, pack, language, status, reason, sha256, size, real_path, stale)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO file (path, pack, language, status, reason, sha256, size, real_path, stale)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .and_then(|mut st| {
             st.execute(params![
@@ -659,8 +659,8 @@ fn insert_edges(
 fn insert_diagnostics(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(), ScippyError> {
     for d in &s.diagnostics {
         tx.prepare_cached(
-            "INSERT INTO diagnostic (root_id, severity, stage, code, message, path, start, end)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO diagnostic (severity, stage, code, message, path, start, end)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .and_then(|mut st| {
             st.execute(params![
@@ -741,9 +741,9 @@ struct RevisionRow<'a> {
 /// Insert the revision row. Older revisions go.
 fn insert_revision(tx: &Transaction<'_>, row: &RevisionRow<'_>) -> Result<(), ScippyError> {
     tx.execute(
-        "INSERT INTO revision (id, root_id, parent, input_digest, tool_version, position_encoding,
+        "INSERT INTO revision (id, parent, input_digest, tool_version, position_encoding,
                                input_complete, analysis_exact, strict, scip_sha256, scip_size)
-         VALUES (?1, 1, ?2, ?3, ?4, 'utf8-byte', ?5, ?6, ?7, ?8, ?9)",
+         VALUES (?1, ?2, ?3, ?4, 'utf8-byte', ?5, ?6, ?7, ?8, ?9)",
         params![
             row.revision,
             row.parent,
