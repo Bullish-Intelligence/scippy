@@ -1,0 +1,14 @@
+# Nextest settings for the Scippy gate.
+# `test:full` runs the `ci` profile. Nextest does not run doctests.
+# The `test:full` task runs `cargo test --workspace --doc` after it.
+
+[profile.ci]
+# A retry hides a race: a flaky test passes on the second run. Never retry.
+retries = 0
+# Run every test, so one report lists all failures.
+fail-fast = false
+# Print the output of a failed test at the failure and in the summary.
+failure-output = "immediate-final"
+success-output = "never"
+# Report a test as slow after 60 s. Terminate only far above the slowest test.
+slow-timeout = { period = "60s", terminate-after = 20 }

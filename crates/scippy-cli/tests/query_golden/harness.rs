@@ -4,7 +4,7 @@
 //! `scippy metalayer command --option --db <fixture db> --json`, normalises the envelope,
 //! validates it against the schema, and compares it with
 //! `tests/golden/query/<command>-<case>.json`. The fixture is `tests/fixtures/query/`. The
-//! harness indexes a copy of it once for the whole test binary.
+//! harness indexes a copy of it once for all test processes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,21 +50,98 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-fn fixture() -> &'static Fixture {
-    static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| {
-        let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("query-golden");
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).unwrap();
-        let base = base.canonicalize().unwrap();
-        let root = base.join("project");
+/// The directory of the shared fixture. The name is a key of the inputs: the `scippy` binary,
+/// this test binary, and the fixture files. Another input set gives another directory.
+fn shared_dir(tmp: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    fn stamp(path: &Path, hasher: &mut impl Hasher) {
+        let meta = fs::metadata(path).unwrap();
+        path.hash(hasher);
+        meta.len().hash(hasher);
+        meta.modified().unwrap().hash(hasher);
+    }
+    fn walk(dir: &Path, hasher: &mut impl Hasher) {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, hasher);
+            } else {
+                stamp(&path, hasher);
+            }
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    stamp(Path::new(env!("CARGO_BIN_EXE_scippy")), &mut hasher);
+    stamp(&std::env::current_exe().unwrap(), &mut hasher);
+    walk(&manifest("tests/fixtures/query"), &mut hasher);
+    tmp.join(format!("shared-{:016x}", hasher.finish()))
+}
+
+/// A lock between test processes: the directory `lock.d` exists while its owner holds it.
+/// `File::lock` needs Rust 1.89, and the minimum supported version is 1.85.
+struct DirLock(PathBuf);
+
+impl DirLock {
+    fn acquire(tmp: &Path) -> DirLock {
+        let path = tmp.join("lock.d");
+        let stale = std::time::Duration::from_secs(1800);
+        loop {
+            match fs::create_dir(&path) {
+                Ok(()) => return DirLock(path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // An owner that died leaves the directory. Remove it after 30 minutes.
+                    let age = fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok());
+                    if age.is_some_and(|age| age > stale) {
+                        let _ = fs::remove_dir(&path);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => panic!("cannot take the fixture lock: {e}"),
+            }
+        }
+    }
+}
+
+impl Drop for DirLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+/// Index the fixture once for all test processes. Nextest runs each test in its own process,
+/// so the first process builds the copy under a lock and the others reuse it.
+fn shared_fixture(tmp: &Path) -> PathBuf {
+    let _lock = DirLock::acquire(tmp);
+    let shared = shared_dir(tmp);
+    if !shared.join("done").exists() {
+        // Remove the output of an earlier input set and the scratch of earlier runs.
+        for entry in fs::read_dir(tmp).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|n| n == "lock.d") {
+                continue;
+            }
+            if path.is_dir() {
+                let _ = fs::remove_dir_all(&path);
+            } else {
+                let _ = fs::remove_file(&path);
+            }
+        }
+        fs::create_dir_all(&shared).unwrap();
+        let shared = shared.canonicalize().unwrap();
+        let root = shared.join("project");
         copy_tree(&manifest("tests/fixtures/query"), &root);
-        let db = base.join("layer.sqlite");
         let indexed = Command::new(env!("CARGO_BIN_EXE_scippy"))
             .args(["index", root.to_str().unwrap(), "--output"])
-            .arg(base.join("index.scip"))
+            .arg(shared.join("index.scip"))
             .arg("--metalayer")
-            .arg(&db)
+            .arg(shared.join("layer.sqlite"))
             .output()
             .unwrap();
         assert!(
@@ -72,6 +149,24 @@ fn fixture() -> &'static Fixture {
             "{}",
             String::from_utf8_lossy(&indexed.stderr)
         );
+        fs::write(shared.join("done"), "").unwrap();
+    }
+    shared.canonicalize().unwrap()
+}
+
+fn fixture() -> &'static Fixture {
+    static FIXTURE: OnceLock<Fixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("query-golden");
+        fs::create_dir_all(&tmp).unwrap();
+        let shared = shared_fixture(&tmp);
+        // The scratch of this process. A test writes only here.
+        let base = tmp.join(format!("run-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let base = base.canonicalize().unwrap();
+        let root = shared.join("project");
+        let db = shared.join("layer.sqlite");
         let mut fixture = Fixture {
             base,
             root,

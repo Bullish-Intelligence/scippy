@@ -1,6 +1,9 @@
 { pkgs, ... }:
 {
-  packages = [ pkgs.git ];
+  packages = [
+    pkgs.git
+    pkgs.cargo-nextest
+  ];
   languages.rust.enable = true;
 
   # Testee runs the standard tasks (check:*, test:*).
@@ -79,7 +82,8 @@
         exec = ''
           ${cargoEnv}
           ${scipEnv}
-          cargo test --workspace
+          cargo nextest run --workspace --profile ci
+          cargo test --workspace --doc
         '';
         input.testee.ignores = unread;
         input.testee.timeout_s = hangGuard;
