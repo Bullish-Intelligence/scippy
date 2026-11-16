@@ -1104,6 +1104,221 @@ fn an_assignment_to_an_attribute_of_another_value_is_a_reference() {
     assert!(at("item.fresh = 8", "fresh").is_empty());
 }
 
+// ---- rules of the fork: flow, classmethods, annotations, lambdas ----
+
+/// Index a project of the given files, in a new directory. Keep the directory while the test
+/// reads the source files.
+fn index_files(files: &[(&str, &str)]) -> (tempfile::TempDir, Indexed) {
+    let scratch = tempfile::tempdir().unwrap();
+    for (name, text) in files {
+        fs::write(scratch.path().join(name), text).unwrap();
+    }
+    let indexed = index_at(scratch.path());
+    (scratch, indexed)
+}
+
+#[test]
+fn an_if_with_else_hides_the_binding_before_it() {
+    let lib = "def f():\n    return 0\n\n\ndef g():\n    return 0\n";
+    let text = "\
+from lib import f, g
+
+if cond:
+    def f():
+        return 1
+else:
+    def f():
+        return 2
+
+value = f()
+
+if cond:
+    def g():
+        return 1
+
+other = g()
+";
+    let (_scratch, indexed) = index_files(&[("lib.py", lib), ("use.py", text)]);
+    // Both branches define `f`, so the import of `f` is not reachable after the statement.
+    assert_eq!(
+        indexed.symbols_of("use.py", "value = f()", "f"),
+        [global("use/f().")]
+    );
+    // An `elif` chain with an `else`, and a branch that nests a loop with an `if`.
+    // Every path through the statement binds the name.
+    let more = "\
+from lib import f, g
+
+if cond:
+    def f():
+        return 1
+elif other:
+    def f():
+        return 2
+else:
+    def f():
+        return 3
+
+chain = f()
+
+if cond:
+    def g():
+        return 1
+else:
+    for item in items:
+        if item:
+            def g():
+                return 2
+    def g():
+        return 3
+
+nested = g()
+";
+    let (_more_scratch, more_indexed) = index_files(&[("lib.py", lib), ("use.py", more)]);
+    assert_eq!(
+        more_indexed.symbols_of("use.py", "chain = f()", "f"),
+        [global("use/f().")]
+    );
+    assert_eq!(
+        more_indexed.symbols_of("use.py", "nested = g()", "g"),
+        [global("use/g().")]
+    );
+    // One branch only: the import stays reachable. The reference has two targets and none is
+    // chosen.
+    assert!(indexed.find("use.py", "other = g()", "g").is_empty());
+    assert_eq!(indexed.report.references_ambiguous, 1);
+}
+
+#[test]
+fn a_nested_function_and_a_trailing_comment_do_not_drop_a_path_at_a_join() {
+    let lib = "def f():\n    return 0\n";
+    let text = "\
+from lib import f
+
+
+def outer():
+    def inner():
+        return 1
+    # a comment after the nested function
+
+
+if cond:
+    def f():
+        return 1
+    # a comment in the branch
+else:
+    def f():
+        return 2
+# a comment after the join
+
+value = f()
+
+
+def run(cond):
+    if cond:
+        def helper():
+            return 1
+        # a comment after the nested function
+    else:
+        def helper():
+            return 2
+    # a comment after the join
+    return helper()
+";
+    let (_scratch, indexed) = index_files(&[("lib.py", lib), ("use.py", text)]);
+    assert_eq!(
+        indexed.symbols_of("use.py", "value = f()", "f"),
+        [global("use/f().")]
+    );
+    let helper = indexed.symbols_of("use.py", "return helper()", "helper");
+    assert_eq!(helper.len(), 1, "{helper:?}");
+    assert!(helper[0].starts_with("local "), "{helper:?}");
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
+#[test]
+fn a_call_of_cls_in_a_classmethod_names_the_parameters_of_init() {
+    let lib = "\
+class Box:
+    def __init__(self, size):
+        self.size = size
+
+    @classmethod
+    def make(cls, n):
+        return cls(size=n)
+";
+    let text = "\
+from lib import Box
+
+
+class Local(Box):
+    @classmethod
+    def build(cls, n):
+        return cls(size=n)
+";
+    let (_scratch, indexed) = index_files(&[("lib.py", lib), ("use.py", text)]);
+    assert_eq!(
+        indexed.symbols_of("lib.py", "cls(size=n)", "size"),
+        [global("lib/Box#__init__().(size)")]
+    );
+    assert_eq!(
+        indexed.symbols_of("use.py", "cls(size=n)", "size"),
+        [global("lib/Box#__init__().(size)")]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
+#[test]
+fn an_optional_annotation_gives_the_attributes_of_its_class() {
+    let lib = "class Foo:\n    def bar(self):\n        return 1\n";
+    let text = "\
+from typing import Optional, Union
+
+from lib import Foo
+
+
+def use(a: Optional[Foo], b: Union[Foo, None], c: Foo | None, d: Optional[\"Foo\"]):
+    a.bar()
+    b.bar()
+    c.bar()
+    d.bar()
+";
+    let (_scratch, indexed) = index_files(&[("lib.py", lib), ("use.py", text)]);
+    for context in ["a.bar()", "b.bar()", "c.bar()", "d.bar()"] {
+        assert_eq!(
+            indexed.symbols_of("use.py", context, "bar"),
+            [global("lib/Foo#bar().")],
+            "{context}"
+        );
+    }
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
+#[test]
+fn a_lambda_body_sees_the_parameters_of_the_enclosing_function() {
+    let text = "\
+def outer(a, b):
+    c = 3
+    return lambda z: z + a + b + c
+";
+    let (_scratch, indexed) = index_files(&[("use.py", text)]);
+    assert_eq!(
+        indexed.symbols_of("use.py", "z + a", "a"),
+        [global("use/outer().(a)")]
+    );
+    assert_eq!(
+        indexed.symbols_of("use.py", "+ b", "b"),
+        [global("use/outer().(b)")]
+    );
+    let c = indexed.find("use.py", "c = 3", "c");
+    assert_eq!(c.len(), 1);
+    assert_eq!(
+        indexed.symbols_of("use.py", "+ c", "c"),
+        [c[0].symbol.as_str()]
+    );
+    assert_eq!(indexed.report.references_ambiguous, 0);
+}
+
 // ---- builtins as external symbols ----
 
 /// The symbol of a builtin. The version is the typeshed commit of the stub header.
