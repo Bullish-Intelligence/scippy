@@ -1,0 +1,10 @@
+id  00000000-0000-7000-8000-0000000000e4
+family  code
+kind  function
+locator  pkg/util.py::helper
+state  moved
+tier  T3
+since  digest-2
+locator[0]  pkg/util.py::helper  pkg/util/helper().
+locator[1]  pkg/base.py::helper  pkg/base/helper().
+annotation  00000000-0000-7000-8000-0000000000a3  2026-01-01T11:00:00Z  todo  ann  Move this to the core.

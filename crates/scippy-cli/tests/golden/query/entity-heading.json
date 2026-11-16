@@ -1,0 +1,74 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "entity",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/entity-heading.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "id": "00000000-0000-7000-8000-0000000000f2",
+    "family": "note",
+    "kind": "heading",
+    "parent_id": null,
+    "created_at": "2026-01-01T00:00:00Z",
+    "outcome": {
+      "state": "matched",
+      "tier": null,
+      "candidates": [],
+      "since_digest": null
+    },
+    "locator": {
+      "key": "0xf1/Intro/Setup#0",
+      "symbol": "scippy python demo 0.1.0 0xf1/Intro/Setup#0",
+      "path": "notes/index.md",
+      "kind": "Heading",
+      "name": "Setup",
+      "container": [
+        "Intro"
+      ],
+      "sig_digest": "sigf2",
+      "body_digest": null,
+      "body_tokens": 12,
+      "input_digest": "digest-1",
+      "seq": 0
+    },
+    "locators": [
+      {
+        "key": "0xf1/Intro/Setup#0",
+        "symbol": "scippy python demo 0.1.0 0xf1/Intro/Setup#0",
+        "path": "notes/index.md",
+        "kind": "Heading",
+        "name": "Setup",
+        "container": [
+          "Intro"
+        ],
+        "sig_digest": "sigf2",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1",
+        "seq": 0
+      }
+    ],
+    "vetoes": [],
+    "annotations": [
+      {
+        "id": "00000000-0000-7000-8000-0000000000a7",
+        "entity_id": "00000000-0000-7000-8000-0000000000f2",
+        "created_at": "2026-01-01T15:00:00Z",
+        "author": "ann",
+        "tag": null,
+        "body": "Rewrite the setup steps.",
+        "snapshot": {
+          "path": "notes/index.md",
+          "name": "Setup"
+        }
+      }
+    ]
+  }
+}

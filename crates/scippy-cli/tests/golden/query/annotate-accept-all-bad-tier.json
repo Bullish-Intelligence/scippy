@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate accept",
+  "ok": false,
+  "error": {
+    "kind": "bad-argument",
+    "message": "unknown tier \"T9\"; use one of T1, T1h, T2f, T2, T3, T4, T5, M2, M3, M4, M5, Param"
+  }
+}

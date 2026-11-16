@@ -21,9 +21,11 @@ pub use scippy_core::{Bound, ReferenceKind};
 /// The state of an entity binding. It differs from [`Outcome`], the outcome of a reference.
 pub use identity::Outcome as BindOutcome;
 pub use identity::{
-    Annotation, CONTAINER_SEPARATOR, Entity, EntityKind, Family, FixedIds, IDENTITY_VERSION,
-    IdSource, Identity, IdentityOptions, LOCATOR_HISTORY, Locator, OutcomeRow, SystemIds, Tier,
-    default_identity_path, join_container, split_container,
+    AcceptAction, AcceptResult, Annotation, AnnotationEntry, AnnotationFilter, CONTAINER_SEPARATOR,
+    Entity, EntityDetail, EntityKind, Family, FixedIds, IDENTITY_VERSION, IdSource, Identity,
+    IdentityError, IdentityOptions, IdentityProbe, LOCATOR_HISTORY, Locator, LocatorMatch,
+    OutcomeRow, StatusEntry, SystemIds, Tier, default_identity_path, join_container,
+    split_container,
 };
 pub use publish::{PublishOptions, Published};
 pub use query::{Counts, Probe, SymbolRecord};
@@ -84,6 +86,8 @@ impl Metalayer {
     }
 }
 
+#[cfg(test)]
+mod identity_ops_tests;
 #[cfg(test)]
 mod identity_tests;
 #[cfg(test)]

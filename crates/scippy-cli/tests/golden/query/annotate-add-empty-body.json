@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate add",
+  "ok": false,
+  "error": {
+    "kind": "bad-argument",
+    "message": "the annotation body is empty"
+  }
+}

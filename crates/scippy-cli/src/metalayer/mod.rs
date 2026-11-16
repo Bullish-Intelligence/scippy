@@ -4,9 +4,11 @@
 //! `#[command(flatten)] common: Common`) and `fn run(Args) -> ExitCode`. It calls
 //! [`common::execute`]. Every command is registered here, so a lane edits its own module only.
 
+mod annotate;
 mod check;
 mod common;
 mod edges;
+mod entity;
 mod explain;
 mod files;
 mod relations;
@@ -16,7 +18,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
 
-/// Read a metalayer database.
+/// Read a metalayer database, and read and write its annotations.
 #[derive(Args)]
 pub struct MetalayerArgs {
     #[command(subcommand)]
@@ -31,6 +33,8 @@ enum MetalayerCommand {
     Edges(edges::Args),
     Explain(explain::Args),
     Check(check::Args),
+    Entity(entity::Args),
+    Annotate(annotate::Args),
 }
 
 pub fn run(args: MetalayerArgs) -> ExitCode {
@@ -41,5 +45,7 @@ pub fn run(args: MetalayerArgs) -> ExitCode {
         MetalayerCommand::Edges(args) => edges::run(args),
         MetalayerCommand::Explain(args) => explain::run(args),
         MetalayerCommand::Check(args) => check::run(args),
+        MetalayerCommand::Entity(args) => entity::run(args),
+        MetalayerCommand::Annotate(args) => annotate::run(args),
     }
 }

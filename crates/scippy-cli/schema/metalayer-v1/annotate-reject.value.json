@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/annotate-reject.value.json",
+  "title": "The value of `metalayer annotate reject`",
+  "type": "object",
+  "required": ["entity", "vetoed"],
+  "properties": {
+    "entity": {"$ref": "../metalayer-v1.schema.json#/$defs/entity_summary"},
+    "vetoed": {"type": "array", "items": {"type": "string"}, "description": "The keys that the entity must not bind to."}
+  }
+}

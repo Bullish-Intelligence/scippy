@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate status",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-status.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "items": [
+      {
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e6",
+          "family": "code",
+          "kind": "function",
+          "state": "orphaned",
+          "tier": null,
+          "locator": {
+            "key": "pkg/gone/gone().",
+            "symbol": "scippy python demo 0.1.0 pkg/gone/gone().",
+            "path": "pkg/gone.py",
+            "kind": "Function",
+            "name": "gone",
+            "container": [],
+            "sig_digest": "sige6",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        },
+        "candidates": [],
+        "since_digest": "digest-2",
+        "annotations": 1
+      },
+      {
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e9",
+          "family": "code",
+          "kind": "function",
+          "state": "moved",
+          "tier": "T2",
+          "locator": {
+            "key": "pkg/new/loader().",
+            "symbol": "scippy python demo 0.1.0 pkg/new/loader().",
+            "path": "pkg/new.py",
+            "kind": "Function",
+            "name": "loader",
+            "container": [],
+            "sig_digest": "sige9",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-2",
+            "seq": 0
+          }
+        },
+        "candidates": [],
+        "since_digest": "digest-2",
+        "annotations": 0
+      },
+      {
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e5",
+          "family": "code",
+          "kind": "function",
+          "state": "ambiguous",
+          "tier": null,
+          "locator": {
+            "key": "pkg/old/pick().",
+            "symbol": "scippy python demo 0.1.0 pkg/old/pick().",
+            "path": "pkg/old.py",
+            "kind": "Function",
+            "name": "pick",
+            "container": [],
+            "sig_digest": "sige5",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        },
+        "candidates": [
+          "pkg/a/pick().",
+          "pkg/b/pick()."
+        ],
+        "since_digest": "digest-2",
+        "annotations": 1
+      },
+      {
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e4",
+          "family": "code",
+          "kind": "function",
+          "state": "moved",
+          "tier": "T3",
+          "locator": {
+            "key": "pkg/util/helper().",
+            "symbol": "scippy python demo 0.1.0 pkg/util/helper().",
+            "path": "pkg/util.py",
+            "kind": "Function",
+            "name": "helper",
+            "container": [],
+            "sig_digest": "sige4",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-2",
+            "seq": 0
+          }
+        },
+        "candidates": [],
+        "since_digest": "digest-2",
+        "annotations": 1
+      }
+    ],
+    "total": 4,
+    "truncated": false
+  }
+}

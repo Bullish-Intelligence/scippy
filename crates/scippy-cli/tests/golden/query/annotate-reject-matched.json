@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate reject",
+  "ok": false,
+  "error": {
+    "kind": "bad-argument",
+    "message": "00000000-0000-7000-8000-0000000000e2 is matched: nothing to reject"
+  }
+}

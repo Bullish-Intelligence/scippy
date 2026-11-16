@@ -1,0 +1,56 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate add",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-add-orphan.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "annotation": {
+      "id": "00000000-0000-7000-8000-000000000001",
+      "entity_id": "00000000-0000-7000-8000-0000000000e6",
+      "created_at": "2026-01-02T00:00:00Z",
+      "author": null,
+      "tag": null,
+      "body": "Still wrong.",
+      "snapshot": {
+        "key": "pkg/gone/gone().",
+        "symbol": "scippy python demo 0.1.0 pkg/gone/gone().",
+        "path": "pkg/gone.py",
+        "kind": "Function",
+        "name": "gone",
+        "container": [],
+        "sig_digest": "sige6",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1"
+      }
+    },
+    "entity": {
+      "id": "00000000-0000-7000-8000-0000000000e6",
+      "family": "code",
+      "kind": "function",
+      "state": "orphaned",
+      "tier": null,
+      "locator": {
+        "key": "pkg/gone/gone().",
+        "symbol": "scippy python demo 0.1.0 pkg/gone/gone().",
+        "path": "pkg/gone.py",
+        "kind": "Function",
+        "name": "gone",
+        "container": [],
+        "sig_digest": "sige6",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1",
+        "seq": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "entity",
+  "ok": false,
+  "error": {
+    "kind": "identity-schema-mismatch",
+    "message": "<tmp>/layer.sqlite is not a Scippy identity store"
+  }
+}

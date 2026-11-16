@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "entity",
+  "ok": false,
+  "error": {
+    "kind": "no-identity-store",
+    "message": "no identity store at <tmp>/scratch/entity-missing.identity.db; a publish creates it"
+  }
+}

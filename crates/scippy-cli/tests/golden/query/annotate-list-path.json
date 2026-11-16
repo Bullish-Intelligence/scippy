@@ -1,0 +1,90 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate list",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-list-path.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "items": [
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a1",
+          "entity_id": "00000000-0000-7000-8000-0000000000e2",
+          "created_at": "2026-01-01T09:00:00Z",
+          "author": "ann",
+          "tag": "design",
+          "body": "Root class of the package.",
+          "snapshot": {
+            "path": "pkg/base.py",
+            "name": "Base"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e2",
+          "family": "code",
+          "kind": "class",
+          "state": "matched",
+          "tier": null,
+          "locator": {
+            "key": "pkg/base/Base#",
+            "symbol": "scippy python demo 0.1.0 pkg/base/Base#",
+            "path": "pkg/base.py",
+            "kind": "Class",
+            "name": "Base",
+            "container": [],
+            "sig_digest": "sige2",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a2",
+          "entity_id": "00000000-0000-7000-8000-0000000000e3",
+          "created_at": "2026-01-01T10:00:00Z",
+          "author": null,
+          "tag": null,
+          "body": "Check the cache first.\nThen build.",
+          "snapshot": {
+            "path": "pkg/base.py",
+            "name": "make"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e3",
+          "family": "code",
+          "kind": "method",
+          "state": "matched",
+          "tier": null,
+          "locator": {
+            "key": "pkg/base/Base#make().",
+            "symbol": "scippy python demo 0.1.0 pkg/base/Base#make().",
+            "path": "pkg/base.py",
+            "kind": "Method",
+            "name": "make",
+            "container": [
+              "Base"
+            ],
+            "sig_digest": "sige3",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      }
+    ],
+    "total": 2,
+    "truncated": false
+  }
+}

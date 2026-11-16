@@ -1,0 +1,4 @@
+orphaned  -  00000000-0000-7000-8000-0000000000e6  pkg/gone.py::gone  annotations=1
+moved  T2  00000000-0000-7000-8000-0000000000e9  pkg/new.py::loader  annotations=0
+ambiguous  -  00000000-0000-7000-8000-0000000000e5  pkg/old.py::pick  annotations=1
+moved  T3  00000000-0000-7000-8000-0000000000e4  pkg/util.py::helper  annotations=1

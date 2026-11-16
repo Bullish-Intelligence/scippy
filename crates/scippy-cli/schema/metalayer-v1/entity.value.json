@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/entity.value.json",
+  "title": "The value of `metalayer entity`",
+  "type": "object",
+  "required": ["id", "family", "kind", "parent_id", "created_at", "outcome", "locator", "locators", "vetoes", "annotations"],
+  "properties": {
+    "id": {"type": "string"},
+    "family": {"type": "string", "examples": ["code", "note"]},
+    "kind": {"type": "string"},
+    "parent_id": {"type": ["string", "null"], "description": "The note of a heading or block, the function of a parameter."},
+    "created_at": {"type": "string"},
+    "outcome": {
+      "description": "The binding state. A matched entity has no tier, no candidates, and no since_digest.",
+      "type": "object",
+      "required": ["state", "tier", "candidates", "since_digest"],
+      "properties": {
+        "state": {"type": "string", "examples": ["matched", "moved", "ambiguous", "orphaned"]},
+        "tier": {"type": ["string", "null"]},
+        "candidates": {"type": "array", "items": {"type": "string"}, "description": "The keys of the candidates of an ambiguous entity."},
+        "since_digest": {"type": ["string", "null"], "description": "The input_digest of the publish that set the state."}
+      }
+    },
+    "locator": {"oneOf": [{"type": "null"}, {"$ref": "../metalayer-v1.schema.json#/$defs/entity_locator"}]},
+    "locators": {
+      "description": "The locator history, current first. At most 16.",
+      "type": "array",
+      "items": {"$ref": "../metalayer-v1.schema.json#/$defs/entity_locator"}
+    },
+    "vetoes": {"type": "array", "items": {"type": "string"}, "description": "The keys that the entity must not bind to."},
+    "annotations": {"type": "array", "items": {"$ref": "../metalayer-v1.schema.json#/$defs/annotation"}, "description": "Oldest first."}
+  }
+}

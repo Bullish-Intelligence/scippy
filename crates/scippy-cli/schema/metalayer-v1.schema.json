@@ -17,7 +17,11 @@
     },
     "command": {
       "type": "string",
-      "examples": ["show", "files", "relations", "edges", "explain", "check"]
+      "examples": [
+        "show", "files", "relations", "edges", "explain", "check", "entity",
+        "annotate add", "annotate list", "annotate rm", "annotate status", "annotate accept",
+        "annotate reject"
+      ]
     },
     "ok": {"type": "boolean"}
   },
@@ -42,7 +46,12 @@
                 "not-found",
                 "bad-argument",
                 "storage",
-                "io"
+                "io",
+                "no-identity-store",
+                "no-entity",
+                "ambiguous-locator",
+                "candidate-annotated",
+                "identity-schema-mismatch"
               ]
             },
             "message": {"type": "string"}
@@ -51,6 +60,61 @@
       }
     },
     "success_envelope": {
+      "description": "An envelope with an `identity` block comes from a command of the identity store (`entity`, `annotate`). It has no revision. Any other envelope comes from the facts store.",
+      "if": {"required": ["identity"]},
+      "then": {"$ref": "#/$defs/identity_envelope"},
+      "else": {"$ref": "#/$defs/facts_envelope"}
+    },
+    "identity_envelope": {
+      "type": "object",
+      "required": ["identity", "value"],
+      "properties": {
+        "identity": {
+          "type": "object",
+          "required": ["path", "version", "bound_input_digest"],
+          "properties": {
+            "path": {"type": "string", "description": "The identity store file."},
+            "version": {"type": "integer", "description": "The format version of the identity store."},
+            "bound_input_digest": {
+              "type": ["string", "null"],
+              "description": "The facts input_digest of the last rebinding. Null before the first rebinding. Compare it with revision.input_digest of a facts command."
+            }
+          }
+        },
+        "value": {}
+      },
+      "allOf": [
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "entity"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/entity.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "annotate add"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/annotate-add.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "annotate list"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/annotate-list.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "annotate rm"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/annotate-rm.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "annotate status"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/annotate-status.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "annotate accept"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/annotate-accept.value.json"}}}
+        },
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "annotate reject"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/annotate-reject.value.json"}}}
+        }
+      ]
+    },
+    "facts_envelope": {
       "type": "object",
       "required": [
         "revision",
@@ -133,6 +197,57 @@
       "properties": {
         "symbol": {"type": "string"},
         "file": {"type": ["string", "null"]}
+      }
+    },
+    "entity_locator": {
+      "description": "One locator of an entity. Seq 0 is the current locator. The container lists display names, outer to inner.",
+      "type": "object",
+      "required": ["seq", "key", "path", "kind", "name", "container", "input_digest"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 0},
+        "key": {"type": "string"},
+        "symbol": {"type": ["string", "null"]},
+        "path": {"type": "string"},
+        "kind": {"type": "string"},
+        "name": {"type": "string"},
+        "container": {"type": "array", "items": {"type": "string"}},
+        "sig_digest": {"type": ["string", "null"]},
+        "body_digest": {"type": ["string", "null"]},
+        "body_tokens": {"type": ["integer", "null"]},
+        "input_digest": {"type": "string"}
+      }
+    },
+    "annotation": {
+      "description": "One user annotation. The snapshot is the locator at creation.",
+      "type": "object",
+      "required": ["id", "entity_id", "created_at", "author", "tag", "body", "snapshot"],
+      "properties": {
+        "id": {"type": "string"},
+        "entity_id": {"type": "string"},
+        "created_at": {"type": "string"},
+        "author": {"type": ["string", "null"]},
+        "tag": {"type": ["string", "null"]},
+        "body": {"type": "string"},
+        "snapshot": {}
+      }
+    },
+    "entity_summary": {
+      "description": "An entity in a short form.",
+      "type": "object",
+      "required": ["id", "family", "kind", "state", "tier", "locator"],
+      "properties": {
+        "id": {"type": "string"},
+        "family": {"type": "string", "examples": ["code", "note"]},
+        "kind": {
+          "type": "string",
+          "examples": ["module", "class", "function", "method", "variable", "parameter", "note", "heading", "block"]
+        },
+        "state": {"type": "string", "examples": ["matched", "moved", "ambiguous", "orphaned"]},
+        "tier": {
+          "type": ["string", "null"],
+          "examples": ["T1h", "T2f", "T2", "T3", "T4", "T5", "M2", "M3", "M4", "M5", "Param"]
+        },
+        "locator": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/entity_locator"}]}
       }
     },
     "span": {

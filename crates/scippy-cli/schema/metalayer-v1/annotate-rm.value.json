@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/annotate-rm.value.json",
+  "title": "The value of `metalayer annotate rm`",
+  "type": "object",
+  "required": ["removed"],
+  "properties": {
+    "removed": {"$ref": "../metalayer-v1.schema.json#/$defs/annotation"}
+  }
+}

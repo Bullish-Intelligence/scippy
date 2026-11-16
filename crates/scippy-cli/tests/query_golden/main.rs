@@ -10,9 +10,11 @@
 
 mod harness;
 
+mod annotate;
 mod check;
 mod compat;
 mod edges;
+mod entity;
 mod explain;
 mod files;
 mod relations;

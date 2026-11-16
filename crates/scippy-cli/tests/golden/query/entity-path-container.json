@@ -1,0 +1,74 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "entity",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/entity-path-container.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "id": "00000000-0000-7000-8000-0000000000e3",
+    "family": "code",
+    "kind": "method",
+    "parent_id": null,
+    "created_at": "2026-01-01T00:00:00Z",
+    "outcome": {
+      "state": "matched",
+      "tier": null,
+      "candidates": [],
+      "since_digest": null
+    },
+    "locator": {
+      "key": "pkg/base/Base#make().",
+      "symbol": "scippy python demo 0.1.0 pkg/base/Base#make().",
+      "path": "pkg/base.py",
+      "kind": "Method",
+      "name": "make",
+      "container": [
+        "Base"
+      ],
+      "sig_digest": "sige3",
+      "body_digest": null,
+      "body_tokens": 12,
+      "input_digest": "digest-1",
+      "seq": 0
+    },
+    "locators": [
+      {
+        "key": "pkg/base/Base#make().",
+        "symbol": "scippy python demo 0.1.0 pkg/base/Base#make().",
+        "path": "pkg/base.py",
+        "kind": "Method",
+        "name": "make",
+        "container": [
+          "Base"
+        ],
+        "sig_digest": "sige3",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1",
+        "seq": 0
+      }
+    ],
+    "vetoes": [],
+    "annotations": [
+      {
+        "id": "00000000-0000-7000-8000-0000000000a2",
+        "entity_id": "00000000-0000-7000-8000-0000000000e3",
+        "created_at": "2026-01-01T10:00:00Z",
+        "author": null,
+        "tag": null,
+        "body": "Check the cache first.\nThen build.",
+        "snapshot": {
+          "path": "pkg/base.py",
+          "name": "make"
+        }
+      }
+    ]
+  }
+}

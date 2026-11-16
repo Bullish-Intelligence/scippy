@@ -1,0 +1,262 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate list",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-nofacts.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "items": [
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a7",
+          "entity_id": "00000000-0000-7000-8000-0000000000f2",
+          "created_at": "2026-01-01T15:00:00Z",
+          "author": "ann",
+          "tag": null,
+          "body": "Rewrite the setup steps.",
+          "snapshot": {
+            "path": "notes/index.md",
+            "name": "Setup"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000f2",
+          "family": "note",
+          "kind": "heading",
+          "state": "matched",
+          "tier": null,
+          "locator": {
+            "key": "0xf1/Intro/Setup#0",
+            "symbol": "scippy python demo 0.1.0 0xf1/Intro/Setup#0",
+            "path": "notes/index.md",
+            "kind": "Heading",
+            "name": "Setup",
+            "container": [
+              "Intro"
+            ],
+            "sig_digest": "sigf2",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a6",
+          "entity_id": "00000000-0000-7000-8000-000000000e11",
+          "created_at": "2026-01-01T14:00:00Z",
+          "author": null,
+          "tag": "keep",
+          "body": "Mine, not the old one.",
+          "snapshot": {
+            "path": "pkg/b.py",
+            "name": "pick"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-000000000e11",
+          "family": "code",
+          "kind": "function",
+          "state": "matched",
+          "tier": null,
+          "locator": {
+            "key": "pkg/b/pick().",
+            "symbol": "scippy python demo 0.1.0 pkg/b/pick().",
+            "path": "pkg/b.py",
+            "kind": "Function",
+            "name": "pick",
+            "container": [],
+            "sig_digest": "sige11",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-2",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a1",
+          "entity_id": "00000000-0000-7000-8000-0000000000e2",
+          "created_at": "2026-01-01T09:00:00Z",
+          "author": "ann",
+          "tag": "design",
+          "body": "Root class of the package.",
+          "snapshot": {
+            "path": "pkg/base.py",
+            "name": "Base"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e2",
+          "family": "code",
+          "kind": "class",
+          "state": "matched",
+          "tier": null,
+          "locator": {
+            "key": "pkg/base/Base#",
+            "symbol": "scippy python demo 0.1.0 pkg/base/Base#",
+            "path": "pkg/base.py",
+            "kind": "Class",
+            "name": "Base",
+            "container": [],
+            "sig_digest": "sige2",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a2",
+          "entity_id": "00000000-0000-7000-8000-0000000000e3",
+          "created_at": "2026-01-01T10:00:00Z",
+          "author": null,
+          "tag": null,
+          "body": "Check the cache first.\nThen build.",
+          "snapshot": {
+            "path": "pkg/base.py",
+            "name": "make"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e3",
+          "family": "code",
+          "kind": "method",
+          "state": "matched",
+          "tier": null,
+          "locator": {
+            "key": "pkg/base/Base#make().",
+            "symbol": "scippy python demo 0.1.0 pkg/base/Base#make().",
+            "path": "pkg/base.py",
+            "kind": "Method",
+            "name": "make",
+            "container": [
+              "Base"
+            ],
+            "sig_digest": "sige3",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a5",
+          "entity_id": "00000000-0000-7000-8000-0000000000e6",
+          "created_at": "2026-01-01T13:00:00Z",
+          "author": "bob",
+          "tag": null,
+          "body": "Deleted upstream.",
+          "snapshot": {
+            "path": "pkg/gone.py",
+            "name": "gone"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e6",
+          "family": "code",
+          "kind": "function",
+          "state": "orphaned",
+          "tier": null,
+          "locator": {
+            "key": "pkg/gone/gone().",
+            "symbol": "scippy python demo 0.1.0 pkg/gone/gone().",
+            "path": "pkg/gone.py",
+            "kind": "Function",
+            "name": "gone",
+            "container": [],
+            "sig_digest": "sige6",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a4",
+          "entity_id": "00000000-0000-7000-8000-0000000000e5",
+          "created_at": "2026-01-01T12:00:00Z",
+          "author": null,
+          "tag": null,
+          "body": "Which pick is it?",
+          "snapshot": {
+            "path": "pkg/old.py",
+            "name": "pick"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e5",
+          "family": "code",
+          "kind": "function",
+          "state": "ambiguous",
+          "tier": null,
+          "locator": {
+            "key": "pkg/old/pick().",
+            "symbol": "scippy python demo 0.1.0 pkg/old/pick().",
+            "path": "pkg/old.py",
+            "kind": "Function",
+            "name": "pick",
+            "container": [],
+            "sig_digest": "sige5",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-1",
+            "seq": 0
+          }
+        }
+      },
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a3",
+          "entity_id": "00000000-0000-7000-8000-0000000000e4",
+          "created_at": "2026-01-01T11:00:00Z",
+          "author": "ann",
+          "tag": "todo",
+          "body": "Move this to the core.",
+          "snapshot": {
+            "path": "pkg/base.py",
+            "name": "helper"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e4",
+          "family": "code",
+          "kind": "function",
+          "state": "moved",
+          "tier": "T3",
+          "locator": {
+            "key": "pkg/util/helper().",
+            "symbol": "scippy python demo 0.1.0 pkg/util/helper().",
+            "path": "pkg/util.py",
+            "kind": "Function",
+            "name": "helper",
+            "container": [],
+            "sig_digest": "sige4",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-2",
+            "seq": 0
+          }
+        }
+      }
+    ],
+    "total": 7,
+    "truncated": false
+  }
+}

@@ -1,0 +1,7 @@
+00000000-0000-7000-8000-0000000000a7  2026-01-01T15:00:00Z  matched  notes/index.md#Intro/Setup  -  Rewrite the setup steps.
+00000000-0000-7000-8000-0000000000a6  2026-01-01T14:00:00Z  matched  pkg/b.py::pick  keep  Mine, not the old one.
+00000000-0000-7000-8000-0000000000a1  2026-01-01T09:00:00Z  matched  pkg/base.py::Base  design  Root class of the package.
+00000000-0000-7000-8000-0000000000a2  2026-01-01T10:00:00Z  matched  pkg/base.py::Base.make  -  Check the cache first. ...
+00000000-0000-7000-8000-0000000000a5  2026-01-01T13:00:00Z  orphaned  pkg/gone.py::gone  -  Deleted upstream.
+00000000-0000-7000-8000-0000000000a4  2026-01-01T12:00:00Z  ambiguous  pkg/old.py::pick  -  Which pick is it?
+00000000-0000-7000-8000-0000000000a3  2026-01-01T11:00:00Z  moved  pkg/util.py::helper  todo  Move this to the core.

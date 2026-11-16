@@ -3,7 +3,7 @@
 //! The facts store drops its tables when its version changes. This store never drops a table.
 //! The design is in `METALAYER_IDENTITY.md`, sections 3 and 4. This file holds the tables, the
 //! open rules, the record types, and the low-level helpers. The rebinding engine and the
-//! annotation commands call the helpers.
+//! annotation API (`identity/ops.rs`) call the helpers.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -121,8 +121,13 @@ pub struct FixedIds {
 impl FixedIds {
     /// A source whose clock always reads `time`.
     pub fn new(time: &str) -> Self {
+        Self::starting_at(1, time)
+    }
+
+    /// A source whose ids count up from `start`. Use it when several runs share one store.
+    pub fn starting_at(start: u64, time: &str) -> Self {
         Self {
-            next: AtomicU64::new(1),
+            next: AtomicU64::new(start),
             time: time.into(),
         }
     }
@@ -418,6 +423,13 @@ pub struct Annotation {
     pub snapshot: String,
 }
 
+mod ops;
+
+pub use ops::{
+    AcceptAction, AcceptResult, AnnotationEntry, AnnotationFilter, EntityDetail, IdentityError,
+    IdentityProbe, LocatorMatch, StatusEntry,
+};
+
 // ---- The store ----
 
 /// Options of [`Identity::open`].
@@ -705,8 +717,48 @@ fn annotation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
     })
 }
 
-// Later lanes call these helpers. Until then, only the tests do.
-#[allow(dead_code)]
+/// The body of [`Identity::push_locator`], for a caller that holds a transaction.
+pub(crate) fn push_locator_in(tx: &Transaction<'_>, locator: &Locator) -> Result<(), ScippyError> {
+    // Two steps keep the primary key free of clashes while the seq numbers move.
+    tx.execute(
+        "UPDATE locator SET seq = -(seq + 1) WHERE entity_id = ?1",
+        [&locator.entity_id],
+    )
+    .map_err(storage)?;
+    tx.execute(
+        "UPDATE locator SET seq = -seq WHERE entity_id = ?1",
+        [&locator.entity_id],
+    )
+    .map_err(storage)?;
+    tx.execute(
+        "DELETE FROM locator WHERE entity_id = ?1 AND seq >= ?2",
+        params![locator.entity_id, LOCATOR_HISTORY as i64],
+    )
+    .map_err(storage)?;
+    tx.execute(
+        &format!(
+            "INSERT INTO locator ({LOCATOR_COLUMNS})
+             VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        ),
+        params![
+            locator.entity_id,
+            locator.key,
+            locator.symbol,
+            locator.path,
+            locator.kind,
+            locator.name,
+            locator.container,
+            locator.sig_digest,
+            locator.body_digest,
+            locator.body_tokens,
+            locator.input_digest
+        ],
+    )
+    .map_err(storage)?;
+    Ok(())
+}
+
+// The annotation API calls most of these helpers. The rebinding code calls the rest.
 impl Identity {
     /// Read one `meta` value.
     pub(crate) fn meta(&self, key: &str) -> Result<Option<String>, ScippyError> {
@@ -716,6 +768,7 @@ impl Identity {
             .map_err(storage)
     }
 
+    #[allow(dead_code)]
     /// Write one `meta` value.
     pub(crate) fn set_meta(&mut self, key: &str, value: &str) -> Result<(), ScippyError> {
         self.db
@@ -728,21 +781,24 @@ impl Identity {
         Ok(())
     }
 
+    #[allow(dead_code)]
     /// The root set key that binds the store.
     pub(crate) fn root_key(&self) -> Result<Option<String>, ScippyError> {
         self.meta(META_ROOT_KEY)
     }
 
-    /// The facts `input_digest` of the last rebinding.
-    pub(crate) fn bound_input_digest(&self) -> Result<Option<String>, ScippyError> {
+    /// The facts `input_digest` of the last rebinding. `None` before the first rebinding.
+    pub fn bound_input_digest(&self) -> Result<Option<String>, ScippyError> {
         self.meta(META_BOUND_INPUT_DIGEST)
     }
 
+    #[allow(dead_code)]
     /// Record the facts `input_digest` of the last rebinding.
     pub(crate) fn set_bound_input_digest(&mut self, digest: &str) -> Result<(), ScippyError> {
         self.set_meta(META_BOUND_INPUT_DIGEST, digest)
     }
 
+    #[allow(dead_code)]
     /// Add an entity. An existing id is an error: an id is minted once.
     pub(crate) fn insert_entity(&mut self, entity: &Entity) -> Result<(), ScippyError> {
         self.db
@@ -775,44 +831,10 @@ impl Identity {
 
     /// Make `locator` the current locator of its entity (seq 0). Older locators move up by
     /// one. The store keeps the newest [`LOCATOR_HISTORY`]. The `seq` of the argument is ignored.
+    #[allow(dead_code)]
     pub(crate) fn push_locator(&mut self, locator: &Locator) -> Result<(), ScippyError> {
         let tx = self.db.transaction().map_err(storage)?;
-        // Two steps keep the primary key free of clashes while the seq numbers move.
-        tx.execute(
-            "UPDATE locator SET seq = -(seq + 1) WHERE entity_id = ?1",
-            [&locator.entity_id],
-        )
-        .map_err(storage)?;
-        tx.execute(
-            "UPDATE locator SET seq = -seq WHERE entity_id = ?1",
-            [&locator.entity_id],
-        )
-        .map_err(storage)?;
-        tx.execute(
-            "DELETE FROM locator WHERE entity_id = ?1 AND seq >= ?2",
-            params![locator.entity_id, LOCATOR_HISTORY as i64],
-        )
-        .map_err(storage)?;
-        tx.execute(
-            &format!(
-                "INSERT INTO locator ({LOCATOR_COLUMNS})
-                 VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
-            ),
-            params![
-                locator.entity_id,
-                locator.key,
-                locator.symbol,
-                locator.path,
-                locator.kind,
-                locator.name,
-                locator.container,
-                locator.sig_digest,
-                locator.body_digest,
-                locator.body_tokens,
-                locator.input_digest
-            ],
-        )
-        .map_err(storage)?;
+        push_locator_in(&tx, locator)?;
         tx.commit().map_err(storage)
     }
 
@@ -842,6 +864,7 @@ impl Identity {
             .map_err(storage)
     }
 
+    #[allow(dead_code)]
     /// Set the outcome of an entity. An existing row is replaced. `Matched` has no row:
     /// use [`Identity::clear_outcome`].
     pub(crate) fn set_outcome(&mut self, row: &OutcomeRow) -> Result<(), ScippyError> {
@@ -931,6 +954,7 @@ impl Identity {
         }))
     }
 
+    #[allow(dead_code)]
     /// Forbid a binding of an entity to a key. Repeating a veto does nothing.
     pub(crate) fn add_veto(&mut self, entity_id: &str, key: &str) -> Result<(), ScippyError> {
         self.db

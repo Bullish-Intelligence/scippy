@@ -6,7 +6,10 @@ use std::process::ExitCode;
 
 use clap::Args;
 use scippy_core::ScippyError;
-use scippy_metalayer::{Metalayer, Probe, SCHEMA_VERSION, View};
+use scippy_metalayer::{
+    FixedIds, IDENTITY_VERSION, IdSource, Identity, IdentityError, IdentityOptions, IdentityProbe,
+    Metalayer, Probe, SCHEMA_VERSION, SystemIds, View, default_identity_path,
+};
 use serde_json::{Value, json};
 
 /// The version of the JSON contract. A breaking change bumps it.
@@ -24,6 +27,41 @@ pub struct Common {
     /// Keep the first N items of a list. The value reports `total` and `truncated`.
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
+}
+
+/// The options of the commands that read or write the identity store (`entity`, `annotate`).
+/// They need no facts store: `--db` only names the place of the default identity path.
+#[derive(Args, Clone, Debug)]
+pub struct IdentityArgs {
+    /// The metalayer database. The identity store is `<db dir>/<db stem>.identity.db`.
+    #[arg(long, value_name = "PATH", required_unless_present = "identity")]
+    pub db: Option<PathBuf>,
+    /// The identity store. It overrides the default path.
+    #[arg(long, value_name = "PATH")]
+    pub identity: Option<PathBuf>,
+    /// Print one JSON envelope to the standard output stream.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl IdentityArgs {
+    /// The path of the identity store: `--identity`, else the default next to `--db`.
+    pub fn store_path(&self) -> PathBuf {
+        match (&self.identity, &self.db) {
+            (Some(path), _) => path.clone(),
+            (None, Some(db)) => default_identity_path(db),
+            (None, None) => PathBuf::from("metalayer.identity.db"),
+        }
+    }
+}
+
+/// How a command uses the identity store.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// Open the store read-only. A store with an older version is refused.
+    Read,
+    /// Open the store for writing. An older version migrates forward.
+    Write,
 }
 
 /// The result of one command, before the envelope wraps it.
@@ -71,6 +109,12 @@ impl CliError {
     #[allow(dead_code)]
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new("not-found", message)
+    }
+}
+
+impl From<IdentityError> for CliError {
+    fn from(error: IdentityError) -> Self {
+        Self::new(error.kind(), error.to_string())
     }
 }
 
@@ -215,4 +259,117 @@ fn error_envelope(command: &str, error: &CliError) -> Value {
         json!({"kind": error.kind, "message": error.message}),
     );
     Value::Object(envelope)
+}
+
+/// The environment variable that selects fixed ids and a fixed clock. It is for tests only.
+///
+/// The value is `TIME` or `TIME,START`: `TIME` is the clock (`2026-01-01T00:00:00Z`), and
+/// `START` is the first id number (default 1). Ids are `00000000-0000-7000-8000-<START in hex>`
+/// and count up. Without the variable, the commands use UUIDv7 ids and the system clock.
+pub const FIXED_IDS_VAR: &str = "SCIPPY_TEST_FIXED_IDS";
+
+fn id_source() -> Box<dyn IdSource> {
+    let Some(value) = std::env::var_os(FIXED_IDS_VAR) else {
+        return Box::new(SystemIds);
+    };
+    let value = value.to_string_lossy();
+    let (time, start) = match value.split_once(',') {
+        Some((time, start)) => (time, start.trim().parse().unwrap_or(1)),
+        None => (value.as_ref(), 1),
+    };
+    Box::new(FixedIds::starting_at(start, time))
+}
+
+/// Open the identity store and print the result of `run`.
+///
+/// The envelope has the `identity` block (`path`, `version`, `bound_input_digest`) and no
+/// revision fields, because the command never reads the facts store. An error envelope is the
+/// same as for the facts commands. The exit code is 0, or 1 for an error.
+pub fn execute_identity(
+    command: &'static str,
+    args: &IdentityArgs,
+    access: Access,
+    run: impl FnOnce(&mut Identity, &dyn IdSource) -> Result<Output, CliError>,
+) -> ExitCode {
+    match read_identity(command, args, access, run) {
+        Ok((envelope, output)) => {
+            if args.json {
+                println!("{envelope}");
+            } else {
+                print!("{}", output.human);
+            }
+            ExitCode::from(output.exit)
+        }
+        Err(error) => {
+            if args.json {
+                println!("{}", error_envelope(command, &error));
+            } else {
+                eprintln!("scippy: {}", error.message);
+            }
+            ExitCode::from(error.exit)
+        }
+    }
+}
+
+fn read_identity(
+    command: &'static str,
+    args: &IdentityArgs,
+    access: Access,
+    run: impl FnOnce(&mut Identity, &dyn IdSource) -> Result<Output, CliError>,
+) -> Result<(Value, Output), CliError> {
+    let path = args.store_path();
+    match Identity::probe(&path)? {
+        IdentityProbe::Missing => {
+            return Err(CliError::new(
+                "no-identity-store",
+                format!(
+                    "no identity store at {}; a publish creates it",
+                    path.display()
+                ),
+            ));
+        }
+        IdentityProbe::Version(version) if version == IDENTITY_VERSION => {}
+        IdentityProbe::Version(version)
+            if version < IDENTITY_VERSION && access == Access::Write => {}
+        IdentityProbe::Version(version) => {
+            let advice = if version > IDENTITY_VERSION {
+                "use a newer scippy"
+            } else {
+                "run a command that writes the store to migrate it"
+            };
+            return Err(CliError::new(
+                "identity-schema-mismatch",
+                format!(
+                    "the identity store has format version {version}, but this build reads version {IDENTITY_VERSION}; {advice}"
+                ),
+            ));
+        }
+        _ => {
+            return Err(CliError::new(
+                "identity-schema-mismatch",
+                format!("{} is not a Scippy identity store", path.display()),
+            ));
+        }
+    }
+    let mut store = match access {
+        Access::Read => Identity::open_read_only(&path)?,
+        Access::Write => Identity::open(&path, &IdentityOptions::default())?,
+    };
+    let ids = id_source();
+    let output = run(&mut store, ids.as_ref())?;
+    let mut envelope = envelope_head(command, true);
+    envelope.extend(
+        json!({
+            "identity": {
+                "path": path.to_string_lossy(),
+                "version": store.version(),
+                "bound_input_digest": store.bound_input_digest()?,
+            },
+            "value": output.value,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    );
+    Ok((Value::Object(envelope), output))
 }

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/annotate-add.value.json",
+  "title": "The value of `metalayer annotate add`",
+  "type": "object",
+  "required": ["annotation", "entity"],
+  "properties": {
+    "annotation": {"$ref": "../metalayer-v1.schema.json#/$defs/annotation"},
+    "entity": {"$ref": "../metalayer-v1.schema.json#/$defs/entity_summary"}
+  }
+}

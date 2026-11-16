@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/annotate-status.value.json",
+  "title": "The value of `metalayer annotate status`",
+  "allOf": [{"$ref": "../metalayer-v1.schema.json#/$defs/list"}],
+  "properties": {
+    "items": {
+      "items": {
+        "type": "object",
+        "required": ["entity", "candidates", "since_digest", "annotations"],
+        "properties": {
+          "entity": {"$ref": "../metalayer-v1.schema.json#/$defs/entity_summary"},
+          "candidates": {"type": "array", "items": {"type": "string"}},
+          "since_digest": {"type": "string"},
+          "annotations": {"type": "integer", "minimum": 0, "description": "The number of annotations on the entity."}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/annotate-list.value.json",
+  "title": "The value of `metalayer annotate list`",
+  "allOf": [{"$ref": "../metalayer-v1.schema.json#/$defs/list"}],
+  "properties": {
+    "items": {
+      "items": {
+        "type": "object",
+        "required": ["annotation", "entity"],
+        "properties": {
+          "annotation": {"$ref": "../metalayer-v1.schema.json#/$defs/annotation"},
+          "entity": {"$ref": "../metalayer-v1.schema.json#/$defs/entity_summary"}
+        }
+      }
+    }
+  }
+}

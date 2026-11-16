@@ -415,3 +415,437 @@ pub fn golden_text(case: &str, args: &[&str]) {
     ));
     check_file(&path, &normalise_text(fixture, &out.stdout));
 }
+
+// ---- The identity store ----
+//
+// `entity` and `annotate` need no facts store. Their cases use a seeded identity store in a
+// scratch file. `identity_store(name)` makes a fresh one for each case, because the writers
+// change it. The commands run with `SCIPPY_TEST_FIXED_IDS`, so ids and times do not vary.
+
+/// The clock and the first id number of the commands. The ids of the seed differ from these.
+const FIXED_IDS: &str = "2026-01-02T00:00:00Z,1";
+
+/// The id of a seeded entity or annotation: `00000000-0000-7000-8000-<n in hex>`.
+pub fn seed_id(n: u64) -> String {
+    format!("00000000-0000-7000-8000-{n:012x}")
+}
+
+/// The path of the identity store of one case. The file does not exist yet.
+pub fn identity_path(name: &str) -> PathBuf {
+    let dir = fixture().base.join("scratch");
+    fs::create_dir_all(&dir).unwrap();
+    dir.join(format!("{name}.identity.db"))
+}
+
+/// Create a store with this content. The seed goes through SQL, because the records of the
+/// crate are `#[non_exhaustive]`. The store holds:
+///
+/// - `0xe1` module, `0xe2` class `Base` (annotation `0xa1`), `0xe3` method `Base.make`
+///   (annotation `0xa2`): matched.
+/// - `0xe4` function `helper`: moved by T3 from `pkg/base.py` to `pkg/util.py` (annotation
+///   `0xa3`). `0xe9` function `loader`: moved by T2, no annotation.
+/// - `0xe5` function `pick`: ambiguous between `0xe10` and `0xe11` (annotation `0xa4`). `0xe10`
+///   has no annotation. `0xe11` has one (`0xa6`).
+/// - `0xe6` function `gone`: orphaned, one veto (annotation `0xa5`).
+/// - `0xe7` function `dup` and `0xe8` variable `dup`: matched, same path and name.
+/// - `0xf1` note `notes/index.md`, `0xf2` heading `Intro/Setup` (annotation `0xa7`), `0xf3`
+///   block `^b1`.
+pub fn identity_store(name: &str) -> PathBuf {
+    let path = identity_path(name);
+    let _ = fs::remove_file(&path);
+    drop(
+        scippy_metalayer::Identity::open(&path, &scippy_metalayer::IdentityOptions::default())
+            .unwrap(),
+    );
+    let db = rusqlite::Connection::open(&path).unwrap();
+    let t = "2026-01-01T00:00:00Z";
+    let id = seed_id;
+    let entity = |n: u64, family: &str, kind: &str| {
+        db.execute(
+            "INSERT INTO entity (id, family, kind, parent_id, created_at) VALUES (?1, ?2, ?3, NULL, ?4)",
+            rusqlite::params![id(n), family, kind, t],
+        )
+        .unwrap();
+    };
+    // (entity, seq, key, symbol, path, kind, name, container)
+    let locator = |n: u64,
+                   seq: i64,
+                   key: &str,
+                   path: &str,
+                   kind: &str,
+                   name: &str,
+                   container: &str,
+                   digest: &str| {
+        let symbol = format!("scippy python demo 0.1.0 {key}");
+        db.execute(
+            "INSERT INTO locator (entity_id, seq, key, symbol, path, kind, name, container,
+               sig_digest, body_digest, body_tokens, input_digest)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, ?11)",
+            rusqlite::params![
+                id(n),
+                seq,
+                key,
+                symbol,
+                path,
+                kind,
+                name,
+                container,
+                format!("sig{n:x}"),
+                12,
+                digest
+            ],
+        )
+        .unwrap();
+    };
+    let outcome = |n: u64, state: &str, tier: Option<&str>, candidates: Option<&str>| {
+        db.execute(
+            "INSERT INTO outcome (entity_id, outcome, tier, candidates, since_digest)
+             VALUES (?1, ?2, ?3, ?4, 'digest-2')",
+            rusqlite::params![id(n), state, tier, candidates],
+        )
+        .unwrap();
+    };
+    let annotation = |n: u64,
+                      entity: u64,
+                      at: &str,
+                      author: Option<&str>,
+                      tag: Option<&str>,
+                      body: &str,
+                      snapshot: &str| {
+        db.execute(
+            "INSERT INTO annotation (id, entity_id, created_at, author, tag, body, snapshot)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id(n), id(entity), at, author, tag, body, snapshot],
+        )
+        .unwrap();
+    };
+
+    db.execute_batch(
+        "INSERT INTO meta (key, value) VALUES ('root_key', 'root-1'), ('bound_input_digest', 'digest-2');",
+    )
+    .unwrap();
+    entity(0xe1, "code", "module");
+    locator(
+        0xe1,
+        0,
+        "pkg/base/__init__:",
+        "pkg/base.py",
+        "Module",
+        "base",
+        "",
+        "digest-1",
+    );
+    entity(0xe2, "code", "class");
+    locator(
+        0xe2,
+        0,
+        "pkg/base/Base#",
+        "pkg/base.py",
+        "Class",
+        "Base",
+        "",
+        "digest-1",
+    );
+    entity(0xe3, "code", "method");
+    locator(
+        0xe3,
+        0,
+        "pkg/base/Base#make().",
+        "pkg/base.py",
+        "Method",
+        "make",
+        "Base",
+        "digest-1",
+    );
+    entity(0xe4, "code", "function");
+    locator(
+        0xe4,
+        0,
+        "pkg/util/helper().",
+        "pkg/util.py",
+        "Function",
+        "helper",
+        "",
+        "digest-2",
+    );
+    locator(
+        0xe4,
+        1,
+        "pkg/base/helper().",
+        "pkg/base.py",
+        "Function",
+        "helper",
+        "",
+        "digest-1",
+    );
+    outcome(0xe4, "moved", Some("T3"), None);
+    entity(0xe9, "code", "function");
+    locator(
+        0xe9,
+        0,
+        "pkg/new/loader().",
+        "pkg/new.py",
+        "Function",
+        "loader",
+        "",
+        "digest-2",
+    );
+    locator(
+        0xe9,
+        1,
+        "pkg/old/loader().",
+        "pkg/new.py",
+        "Function",
+        "loader",
+        "",
+        "digest-1",
+    );
+    outcome(0xe9, "moved", Some("T2"), None);
+    entity(0xe5, "code", "function");
+    locator(
+        0xe5,
+        0,
+        "pkg/old/pick().",
+        "pkg/old.py",
+        "Function",
+        "pick",
+        "",
+        "digest-1",
+    );
+    entity(0xe10, "code", "function");
+    locator(
+        0xe10,
+        0,
+        "pkg/a/pick().",
+        "pkg/a.py",
+        "Function",
+        "pick",
+        "",
+        "digest-2",
+    );
+    entity(0xe11, "code", "function");
+    locator(
+        0xe11,
+        0,
+        "pkg/b/pick().",
+        "pkg/b.py",
+        "Function",
+        "pick",
+        "",
+        "digest-2",
+    );
+    outcome(
+        0xe5,
+        "ambiguous",
+        None,
+        Some("[\"pkg/a/pick().\",\"pkg/b/pick().\"]"),
+    );
+    entity(0xe6, "code", "function");
+    locator(
+        0xe6,
+        0,
+        "pkg/gone/gone().",
+        "pkg/gone.py",
+        "Function",
+        "gone",
+        "",
+        "digest-1",
+    );
+    outcome(0xe6, "orphaned", None, None);
+    db.execute(
+        "INSERT INTO veto (entity_id, key) VALUES (?1, 'pkg/other/gone().')",
+        [id(0xe6)],
+    )
+    .unwrap();
+    entity(0xe7, "code", "function");
+    locator(
+        0xe7,
+        0,
+        "pkg/dup/dup().",
+        "pkg/dup.py",
+        "Function",
+        "dup",
+        "",
+        "digest-1",
+    );
+    entity(0xe8, "code", "variable");
+    locator(
+        0xe8,
+        0,
+        "pkg/dup/dup.",
+        "pkg/dup.py",
+        "Variable",
+        "dup",
+        "",
+        "digest-1",
+    );
+    entity(0xf1, "note", "note");
+    locator(
+        0xf1,
+        0,
+        "id:0000-note-index",
+        "notes/index.md",
+        "Note",
+        "index.md",
+        "",
+        "digest-1",
+    );
+    entity(0xf2, "note", "heading");
+    locator(
+        0xf2,
+        0,
+        "0xf1/Intro/Setup#0",
+        "notes/index.md",
+        "Heading",
+        "Setup",
+        "Intro",
+        "digest-1",
+    );
+    entity(0xf3, "note", "block");
+    locator(
+        0xf3,
+        0,
+        "0xf1/^b1",
+        "notes/index.md",
+        "Block",
+        "^b1",
+        "",
+        "digest-1",
+    );
+
+    let snap = |path: &str, name: &str| format!("{{\"path\":\"{path}\",\"name\":\"{name}\"}}");
+    annotation(
+        0xa1,
+        0xe2,
+        "2026-01-01T09:00:00Z",
+        Some("ann"),
+        Some("design"),
+        "Root class of the package.",
+        &snap("pkg/base.py", "Base"),
+    );
+    annotation(
+        0xa2,
+        0xe3,
+        "2026-01-01T10:00:00Z",
+        None,
+        None,
+        "Check the cache first.\nThen build.",
+        &snap("pkg/base.py", "make"),
+    );
+    annotation(
+        0xa3,
+        0xe4,
+        "2026-01-01T11:00:00Z",
+        Some("ann"),
+        Some("todo"),
+        "Move this to the core.",
+        &snap("pkg/base.py", "helper"),
+    );
+    annotation(
+        0xa4,
+        0xe5,
+        "2026-01-01T12:00:00Z",
+        None,
+        None,
+        "Which pick is it?",
+        &snap("pkg/old.py", "pick"),
+    );
+    annotation(
+        0xa5,
+        0xe6,
+        "2026-01-01T13:00:00Z",
+        Some("bob"),
+        None,
+        "Deleted upstream.",
+        &snap("pkg/gone.py", "gone"),
+    );
+    annotation(
+        0xa6,
+        0xe11,
+        "2026-01-01T14:00:00Z",
+        None,
+        Some("keep"),
+        "Mine, not the old one.",
+        &snap("pkg/b.py", "pick"),
+    );
+    annotation(
+        0xa7,
+        0xf2,
+        "2026-01-01T15:00:00Z",
+        Some("ann"),
+        None,
+        "Rewrite the setup steps.",
+        &snap("notes/index.md", "Setup"),
+    );
+    drop(db);
+    path
+}
+
+/// The text of the key of a seeded candidate, for `--candidate`.
+pub const CANDIDATE_A: &str = "pkg/a/pick().";
+pub const CANDIDATE_B: &str = "pkg/b/pick().";
+
+/// Run `scippy metalayer <args>` with fixed ids. The caller passes `--identity` or `--db`.
+pub fn run_fixed(args: &[&str]) -> Run {
+    fixture();
+    let out = Command::new(env!("CARGO_BIN_EXE_scippy"))
+        .arg("metalayer")
+        .args(args)
+        .env("SCIPPY_TEST_FIXED_IDS", FIXED_IDS)
+        .output()
+        .unwrap();
+    Run {
+        status: out.status.code().unwrap(),
+        stdout: String::from_utf8(out.stdout).unwrap(),
+        stderr: String::from_utf8(out.stderr).unwrap(),
+    }
+}
+
+/// Run a command of the identity store on `store`, with `--json`. Check the exit code, the
+/// envelope, the schema, and the golden file `tests/golden/query/<command>-<case>.json`.
+pub fn golden_identity(case: &str, store: &Path, args: &[&str], exit: i32) {
+    let mut all: Vec<&str> = args.to_vec();
+    all.extend(["--identity", store.to_str().unwrap()]);
+    golden_identity_raw(case, &all, exit);
+}
+
+/// Like [`golden_identity`], but the caller passes `--identity` or `--db` itself.
+pub fn golden_identity_raw(case: &str, args: &[&str], exit: i32) {
+    let fixture = fixture();
+    let mut all: Vec<&str> = args.to_vec();
+    all.push("--json");
+    let out = run_fixed(&all);
+    assert_eq!(
+        out.status, exit,
+        "stdout: {}\nstderr: {}",
+        out.stdout, out.stderr
+    );
+    let mut envelope: Value = serde_json::from_str(&out.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", out.stdout));
+    normalise(fixture, &mut envelope);
+    if let Err(errors) = validate(&envelope) {
+        panic!("the envelope breaks the schema: {errors}\n{envelope:#}");
+    }
+    let path = manifest(&format!(
+        "tests/golden/query/{}-{case}.json",
+        command_of(args)
+    ));
+    let mut text = serde_json::to_string_pretty(&envelope).unwrap();
+    text.push('\n');
+    check_file(&path, &text);
+}
+
+/// Check the human output of a command of the identity store against
+/// `tests/golden/query/<command>-<case>.txt`.
+pub fn golden_identity_text(case: &str, store: &Path, args: &[&str]) {
+    let fixture = fixture();
+    let mut all: Vec<&str> = args.to_vec();
+    all.extend(["--identity", store.to_str().unwrap()]);
+    let out = run_fixed(&all);
+    assert_eq!(out.status, 0, "stderr: {}", out.stderr);
+    let path = manifest(&format!(
+        "tests/golden/query/{}-{case}.txt",
+        command_of(args)
+    ));
+    check_file(&path, &normalise_text(fixture, &out.stdout));
+}

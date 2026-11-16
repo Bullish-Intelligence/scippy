@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate add",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-add.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "annotation": {
+      "id": "00000000-0000-7000-8000-000000000001",
+      "entity_id": "00000000-0000-7000-8000-0000000000e3",
+      "created_at": "2026-01-02T00:00:00Z",
+      "author": "ann",
+      "tag": "perf",
+      "body": "Cache the result.",
+      "snapshot": {
+        "key": "pkg/base/Base#make().",
+        "symbol": "scippy python demo 0.1.0 pkg/base/Base#make().",
+        "path": "pkg/base.py",
+        "kind": "Method",
+        "name": "make",
+        "container": [
+          "Base"
+        ],
+        "sig_digest": "sige3",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1"
+      }
+    },
+    "entity": {
+      "id": "00000000-0000-7000-8000-0000000000e3",
+      "family": "code",
+      "kind": "method",
+      "state": "matched",
+      "tier": null,
+      "locator": {
+        "key": "pkg/base/Base#make().",
+        "symbol": "scippy python demo 0.1.0 pkg/base/Base#make().",
+        "path": "pkg/base.py",
+        "kind": "Method",
+        "name": "make",
+        "container": [
+          "Base"
+        ],
+        "sig_digest": "sige3",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1",
+        "seq": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "entity",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/entity-block.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "id": "00000000-0000-7000-8000-0000000000f3",
+    "family": "note",
+    "kind": "block",
+    "parent_id": null,
+    "created_at": "2026-01-01T00:00:00Z",
+    "outcome": {
+      "state": "matched",
+      "tier": null,
+      "candidates": [],
+      "since_digest": null
+    },
+    "locator": {
+      "key": "0xf1/^b1",
+      "symbol": "scippy python demo 0.1.0 0xf1/^b1",
+      "path": "notes/index.md",
+      "kind": "Block",
+      "name": "^b1",
+      "container": [],
+      "sig_digest": "sigf3",
+      "body_digest": null,
+      "body_tokens": 12,
+      "input_digest": "digest-1",
+      "seq": 0
+    },
+    "locators": [
+      {
+        "key": "0xf1/^b1",
+        "symbol": "scippy python demo 0.1.0 0xf1/^b1",
+        "path": "notes/index.md",
+        "kind": "Block",
+        "name": "^b1",
+        "container": [],
+        "sig_digest": "sigf3",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1",
+        "seq": 0
+      }
+    ],
+    "vetoes": [],
+    "annotations": []
+  }
+}

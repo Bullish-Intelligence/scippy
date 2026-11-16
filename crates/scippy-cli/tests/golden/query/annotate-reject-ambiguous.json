@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate reject",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-reject-ambiguous.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "entity": {
+      "id": "00000000-0000-7000-8000-0000000000e5",
+      "family": "code",
+      "kind": "function",
+      "state": "orphaned",
+      "tier": null,
+      "locator": {
+        "key": "pkg/old/pick().",
+        "symbol": "scippy python demo 0.1.0 pkg/old/pick().",
+        "path": "pkg/old.py",
+        "kind": "Function",
+        "name": "pick",
+        "container": [],
+        "sig_digest": "sige5",
+        "body_digest": null,
+        "body_tokens": 12,
+        "input_digest": "digest-1",
+        "seq": 0
+      }
+    },
+    "vetoed": [
+      "pkg/a/pick().",
+      "pkg/b/pick()."
+    ]
+  }
+}

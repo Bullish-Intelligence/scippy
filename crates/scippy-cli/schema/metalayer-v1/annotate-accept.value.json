@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/annotate-accept.value.json",
+  "title": "The value of `metalayer annotate accept`",
+  "description": "One entity gives `entity`, `action`, `candidate`, and `removed_entity`. `--all --tier T` gives `tier`, `accepted`, and `total`.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["entity", "action", "candidate", "removed_entity"],
+      "properties": {
+        "entity": {"$ref": "../metalayer-v1.schema.json#/$defs/entity_summary"},
+        "action": {"type": "string", "examples": ["cleared", "bound"]},
+        "candidate": {"type": ["string", "null"], "description": "The key of the bound candidate."},
+        "removed_entity": {"type": ["string", "null"], "description": "The id minted for the candidate. The store deleted it."}
+      }
+    },
+    {
+      "type": "object",
+      "required": ["tier", "accepted", "total"],
+      "properties": {
+        "tier": {"type": "string"},
+        "accepted": {"type": "array", "items": {"type": "string"}},
+        "total": {"type": "integer", "minimum": 0}
+      }
+    }
+  ]
+}

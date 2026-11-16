@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "entity",
+  "ok": false,
+  "error": {
+    "kind": "identity-schema-mismatch",
+    "message": "the identity store has format version 99, but this build reads version 1; use a newer scippy"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "annotate list",
+  "ok": true,
+  "identity": {
+    "path": "<tmp>/scratch/annotate-list-entity.identity.db",
+    "version": 1,
+    "bound_input_digest": "digest-2"
+  },
+  "value": {
+    "items": [
+      {
+        "annotation": {
+          "id": "00000000-0000-7000-8000-0000000000a3",
+          "entity_id": "00000000-0000-7000-8000-0000000000e4",
+          "created_at": "2026-01-01T11:00:00Z",
+          "author": "ann",
+          "tag": "todo",
+          "body": "Move this to the core.",
+          "snapshot": {
+            "path": "pkg/base.py",
+            "name": "helper"
+          }
+        },
+        "entity": {
+          "id": "00000000-0000-7000-8000-0000000000e4",
+          "family": "code",
+          "kind": "function",
+          "state": "moved",
+          "tier": "T3",
+          "locator": {
+            "key": "pkg/util/helper().",
+            "symbol": "scippy python demo 0.1.0 pkg/util/helper().",
+            "path": "pkg/util.py",
+            "kind": "Function",
+            "name": "helper",
+            "container": [],
+            "sig_digest": "sige4",
+            "body_digest": null,
+            "body_tokens": 12,
+            "input_digest": "digest-2",
+            "seq": 0
+          }
+        }
+      }
+    ],
+    "total": 1,
+    "truncated": false
+  }
+}
