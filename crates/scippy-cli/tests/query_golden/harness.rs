@@ -145,7 +145,7 @@ fn shared_fixture(tmp: &Path) -> PathBuf {
             .output()
             .unwrap();
         assert!(
-            indexed.status.success(),
+            crate::common::finished(&indexed),
             "{}",
             String::from_utf8_lossy(&indexed.stderr)
         );
@@ -402,6 +402,57 @@ pub fn golden(case: &str, args: &[&str]) {
 /// Check a case on the fixture database, with an exit code that is not 0.
 pub fn golden_exit(case: &str, args: &[&str], exit: i32) {
     golden_db(case, &fixture().db, args, exit);
+}
+
+/// Run `scippy index <root> --json <args>` and check the exit code, the envelope, and the golden
+/// file `tests/golden/query/index-<case>.json`. The SCIP file goes to the scratch directory.
+pub fn golden_index(case: &str, root: &Path, args: &[&str], exit: i32) {
+    let fixture = fixture();
+    let out = run_index(
+        root,
+        &format!("index-{case}"),
+        &[&["--json"], args].concat(),
+    );
+    assert_eq!(
+        out.status, exit,
+        "stdout: {}\nstderr: {}",
+        out.stdout, out.stderr
+    );
+    let mut envelope: Value = serde_json::from_str(&out.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", out.stdout));
+    normalise(fixture, &mut envelope);
+    if let Err(errors) = validate(&envelope) {
+        panic!("the envelope breaks the schema: {errors}\n{envelope:#}");
+    }
+    let path = manifest(&format!("tests/golden/query/index-{case}.json"));
+    let mut text = serde_json::to_string_pretty(&envelope).unwrap();
+    text.push('\n');
+    check_file(&path, &text);
+}
+
+/// Run `scippy index <root> --output <scratch>/<name>.scip <args>`.
+pub fn run_index(root: &Path, name: &str, args: &[&str]) -> Run {
+    let output = scratch_db(name).with_extension("scip");
+    let out = crate::common::scippy()
+        .arg("index")
+        .arg(root)
+        .arg("--output")
+        .arg(&output)
+        .args(args)
+        .output()
+        .unwrap();
+    Run {
+        status: out.status.code().unwrap(),
+        stdout: String::from_utf8(out.stdout).unwrap(),
+        stderr: String::from_utf8(out.stderr).unwrap(),
+    }
+}
+
+/// The directory for a project that a test writes. It is in the scratch directory.
+pub fn scratch_dir(name: &str) -> PathBuf {
+    let dir = fixture().base.join(name);
+    fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 /// Check the human output of a case against `tests/golden/query/<command>-<case>.txt`.

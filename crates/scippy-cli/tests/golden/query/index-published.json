@@ -1,0 +1,96 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "index",
+  "ok": true,
+  "input_complete": false,
+  "analysis_exact": true,
+  "value": {
+    "output": {
+      "scip": "<tmp>/scratch/index-published.scip"
+    },
+    "files": {
+      "discovered": 13,
+      "indexed": 11,
+      "skipped": 1,
+      "shadowed": 0,
+      "discovery_skipped": 0
+    },
+    "declarations": 27,
+    "occurrences": 45,
+    "references": {
+      "resolved": 18,
+      "external": 0,
+      "unresolved": 5,
+      "ambiguous": 2,
+      "bounded": 0,
+      "bounded_by_kind": {
+        "work": 0,
+        "queue_length": 0,
+        "arena_cells": 0,
+        "failed": 0
+      },
+      "unresolved_reasons": {
+        "no-declaration": 1,
+        "no-path": 4
+      },
+      "unjoined_end_kinds": {
+        "-": 5
+      },
+      "multi_target": {
+        "raw": 4,
+        "shadow_filtered": 0,
+        "pack_refused": 0,
+        "nearest_binding": 0,
+        "alias_collapsed": 2,
+        "builtin_shadow": 0,
+        "same_symbol": 0,
+        "ambiguous": 2,
+        "unresolved": 0,
+        "bounded": 0
+      }
+    },
+    "graph_cache": {
+      "enabled": false,
+      "hits": 0,
+      "misses": 0,
+      "failures": 0
+    },
+    "lost_files": [
+      {
+        "path": "notes/latin1.md",
+        "status": "skipped",
+        "reason": "invalid-utf8",
+        "pack": "loci",
+        "real_path": null,
+        "sha256": null
+      }
+    ],
+    "stale_files": [],
+    "diagnostics": [
+      {
+        "severity": "warning",
+        "stage": "discover",
+        "code": "invalid-utf8",
+        "file": "notes/latin1.md",
+        "range": null,
+        "message": "skipped: the file is not UTF-8"
+      }
+    ],
+    "metalayer": {
+      "database": "<tmp>/scratch/index-published.sqlite",
+      "revision": 1,
+      "identity": {
+        "skipped": false,
+        "bound": 0,
+        "minted": 27,
+        "ambiguous": 0,
+        "orphaned": 0,
+        "collected": 0
+      }
+    }
+  }
+}

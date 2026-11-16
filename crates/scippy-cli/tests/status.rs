@@ -178,7 +178,7 @@ fn a_syntax_error_publishes_and_strict_rejects_it_and_keeps_every_file() {
     write(&root, "bad.py", "def broken(:\n");
     // A strict run rejects the lost input. The database and the SCIP file stay as they were.
     let strict = index(true);
-    assert!(!strict.status.success());
+    assert_eq!(strict.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&strict.stderr);
     assert!(
         stderr.contains("syntax-error") && stderr.contains("incomplete"),
@@ -188,10 +188,12 @@ fn a_syntax_error_publishes_and_strict_rejects_it_and_keeps_every_file() {
     assert_eq!(fs::read(&database).unwrap(), kept_db);
     assert_eq!(revision(&database), (1, true, true));
 
-    // A run without `--strict` publishes the lost input and exits with success.
+    // A run without `--strict` publishes the lost input and exits with the code 3
+    // (finished, incomplete).
     let lax = index(false);
-    assert!(
-        lax.status.success(),
+    assert_eq!(
+        lax.status.code(),
+        Some(3),
         "{}",
         String::from_utf8_lossy(&lax.stderr)
     );
@@ -216,7 +218,7 @@ fn a_strict_run_with_lost_input_opens_no_database_and_writes_no_file() {
     let output = scratch.path().join("index.scip");
     let paths: [(&str, &Path); 2] = [("-o", &output), ("--metalayer", &database)];
     let strict = scippy(&[root.to_str().unwrap(), "--strict"], &paths);
-    assert!(!strict.status.success());
+    assert_eq!(strict.status.code(), Some(1));
     assert!(!database.exists());
     assert!(!output.exists());
 }
@@ -235,7 +237,7 @@ fn a_strict_run_without_metalayer_rejects_lost_input_and_keeps_the_output() {
     // A syntax error is lost input. The strict run fails and leaves the file as it was.
     write(&root, "bad.py", "def broken(:\n");
     let strict = scippy(&[root_arg, "--strict"], &paths);
-    assert!(!strict.status.success());
+    assert_eq!(strict.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&strict.stderr);
     assert!(
         stderr.contains("syntax-error") && stderr.contains("incomplete"),
@@ -243,16 +245,32 @@ fn a_strict_run_without_metalayer_rejects_lost_input_and_keeps_the_output() {
     );
     assert_eq!(fs::read(&output).unwrap(), kept);
 
-    // Without `--strict`, the same run exits with success and writes the file.
+    // Without `--strict`, the same run exits with the code 3 (finished, incomplete) and writes
+    // the file.
     fs::remove_file(&output).unwrap();
     let lax = scippy(&[root_arg], &paths);
-    assert!(
-        lax.status.success(),
+    assert_eq!(
+        lax.status.code(),
+        Some(3),
         "{}",
         String::from_utf8_lossy(&lax.stderr)
     );
     assert!(String::from_utf8_lossy(&lax.stderr).contains("syntax-error"));
     assert!(output.exists());
+}
+
+#[test]
+fn a_complete_run_exits_with_0_and_a_lost_input_run_with_3() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path().join("project");
+    write(&root, "good.py", "def f():\n    return 1\n\nf()\n");
+    let output = scratch.path().join("index.scip");
+    let paths: [(&str, &Path); 1] = [("-o", &output)];
+    let root_arg = root.to_str().unwrap();
+    assert_eq!(scippy(&[root_arg], &paths).status.code(), Some(0));
+    write(&root, "bad.py", "def broken(:\n");
+    assert_eq!(scippy(&[root_arg], &paths).status.code(), Some(3));
+    assert_eq!(scippy(&[root_arg, "--json"], &paths).status.code(), Some(3));
 }
 
 fn copy_tree(from: &Path, to: &Path) {

@@ -14,6 +14,8 @@ mod files;
 mod relations;
 mod show;
 
+pub(crate) use common::{CliError, error_envelope, run_envelope};
+
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};

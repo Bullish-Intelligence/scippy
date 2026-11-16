@@ -132,7 +132,7 @@ fn edited_copy(name: &str) -> std::path::PathBuf {
         .output()
         .unwrap();
     assert!(
-        indexed.status.success(),
+        crate::common::finished(&indexed),
         "{}",
         String::from_utf8_lossy(&indexed.stderr)
     );

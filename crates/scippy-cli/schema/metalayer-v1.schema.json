@@ -18,7 +18,7 @@
     "command": {
       "type": "string",
       "examples": [
-        "show", "files", "relations", "edges", "explain", "check", "entity",
+        "index", "show", "files", "relations", "edges", "explain", "check", "entity",
         "annotate add", "annotate list", "annotate rm", "annotate status", "annotate accept",
         "annotate reject"
       ]
@@ -51,7 +51,9 @@
                 "no-entity",
                 "ambiguous-locator",
                 "candidate-annotated",
-                "identity-schema-mismatch"
+                "identity-schema-mismatch",
+                "incomplete",
+                "root-set-mismatch"
               ]
             },
             "message": {"type": "string"}
@@ -60,7 +62,7 @@
       }
     },
     "success_envelope": {
-      "description": "An envelope with an `identity` block comes from a command of the identity store (`entity`, `annotate`). It has no revision. Any other envelope comes from the facts store.",
+      "description": "There are two success envelope types. An envelope with an `identity` block comes from a command of the identity store (`entity`, `annotate`). It has no revision. Any other envelope is a facts envelope. The facts envelope of `index` has the flags and no revision fields.",
       "if": {"required": ["identity"]},
       "then": {"$ref": "#/$defs/identity_envelope"},
       "else": {"$ref": "#/$defs/facts_envelope"}
@@ -116,15 +118,8 @@
     },
     "facts_envelope": {
       "type": "object",
-      "required": [
-        "revision",
-        "root_set",
-        "input_complete",
-        "analysis_exact",
-        "position_encoding",
-        "schema_version",
-        "value"
-      ],
+      "description": "The flags and the value are always present. Every command except `index` also reads a stored revision, so it carries the revision fields. `index` carries the revision of its publication in `value.metalayer`.",
+      "required": ["input_complete", "analysis_exact", "value"],
       "properties": {
         "revision": {
           "type": "object",
@@ -154,6 +149,11 @@
         "value": {}
       },
       "allOf": [
+        {
+          "if": {"required": ["command"], "properties": {"command": {"const": "index"}}},
+          "then": {"properties": {"value": {"$ref": "metalayer-v1/index.value.json"}}},
+          "else": {"required": ["revision", "root_set", "position_encoding", "schema_version"]}
+        },
         {
           "if": {"required": ["command"], "properties": {"command": {"const": "show"}}},
           "then": {"properties": {"value": {"$ref": "metalayer-v1/show.value.json"}}}

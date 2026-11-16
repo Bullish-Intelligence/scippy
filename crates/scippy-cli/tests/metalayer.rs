@@ -83,8 +83,9 @@ fn cli_publishes_each_run_and_a_parse_failure_gives_a_failed_file() {
     write(&root, "module.py", "def broken(:\n");
     // A syntax error loses one file. The run publishes it with the status `failed`.
     let failed = run();
-    assert!(
-        failed.status.success(),
+    assert_eq!(
+        failed.status.code(),
+        Some(3),
         "{}",
         String::from_utf8_lossy(&failed.stderr)
     );

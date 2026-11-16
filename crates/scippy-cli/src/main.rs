@@ -6,15 +6,17 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use scippy_core::{
-    IndexRequest, InputLimits, LanguagePack, ScippyError, index_project, index_project_for_publish,
-    write_scip,
+    IndexRequest, InputLimits, LanguagePack, ScippyError, index_project_for_publish, write_scip,
 };
 use scippy_loci::LociPack;
 use scippy_metalayer::{Metalayer, PublishOptions, default_identity_path};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
+use index_output::{Publication, RunOutput, SnapshotFacts};
+
 mod cache_choice;
+mod index_output;
 mod metalayer;
 
 #[derive(Parser)]
@@ -27,6 +29,9 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Index a project and write a SCIP file.
+    ///
+    /// Exit codes: 0 when the run is complete; 3 when it finished with lost input or an inexact
+    /// analysis; 1 when it failed, also for `--strict` with lost input; 2 for a usage error.
     Index(Box<IndexArgs>),
     /// List the built-in language packs.
     Languages,
@@ -88,6 +93,11 @@ struct IndexArgs {
     /// file and opens no database. Both stay as they were.
     #[arg(long)]
     strict: bool,
+    /// Print one JSON envelope to the standard output stream, in place of the text summary. A
+    /// failed run prints an error envelope. The diagnostics also go to the standard error
+    /// stream.
+    #[arg(long)]
+    json: bool,
     /// Replace the root set of the metalayer database when it holds another project root.
     /// Without this flag, the run fails and keeps the database.
     #[arg(long, requires = "metalayer")]
@@ -255,6 +265,7 @@ fn main() -> ExitCode {
                 graph_cache_max_bytes,
                 metalayer,
                 strict,
+                json,
                 replace_root_set,
                 identity: _,
                 no_identity: _,
@@ -297,7 +308,8 @@ fn main() -> ExitCode {
                 request.memory_budget = bytes;
             }
             // The CLI applies `--strict` itself, so that it can print the diagnostics first.
-            let indexed = if metalayer.is_some() || strict {
+            // Every run needs the snapshot flags for its exit code.
+            let indexed = {
                 // The SCIP file follows the check and the publication. A failed run keeps the
                 // old file.
                 index_project_for_publish(&request, &registry()).and_then(|(report, snapshot)| {
@@ -308,107 +320,65 @@ fn main() -> ExitCode {
                         }
                         return Err(ScippyError::Incomplete);
                     }
-                    let mut rebind = None;
-                    let revision = match metalayer {
-                        Some(path) => {
-                            let options = PublishOptions {
-                                strict,
-                                replace_root_set,
-                            };
-                            let mut layer = Metalayer::open(path)?;
-                            let published = match &identity {
-                                Some(store) => {
-                                    layer.publish_with_identity(&snapshot, &options, store)?
-                                }
-                                None => layer.publish(&snapshot, &options)?,
-                            };
-                            rebind = published.rebind;
-                            Some(published.revision)
-                        }
-                        None => None,
+                    let mut publication = None;
+                    if let Some(path) = metalayer {
+                        let options = PublishOptions {
+                            strict,
+                            replace_root_set,
+                        };
+                        let mut layer = Metalayer::open(&path)?;
+                        let published = match &identity {
+                            Some(store) => {
+                                layer.publish_with_identity(&snapshot, &options, store)?
+                            }
+                            None => layer.publish(&snapshot, &options)?,
+                        };
+                        publication = Some(Publication {
+                            database: path,
+                            revision: published.revision,
+                            rebind: published.rebind,
+                        });
+                    }
+                    write_scip(&request.output, &snapshot.scip).map_err(
+                        |e| match &publication {
+                            Some(p) => ScippyError::Storage(format!(
+                                "revision {} is committed, but the SCIP file failed: {e}",
+                                p.revision
+                            )),
+                            None => e,
+                        },
+                    )?;
+                    let facts = SnapshotFacts {
+                        input_complete: snapshot.input_complete,
+                        analysis_exact: snapshot.analysis_exact,
+                        lost_files: snapshot.lost_files,
                     };
-                    write_scip(&request.output, &snapshot.scip).map_err(|e| match revision {
-                        Some(revision) => ScippyError::Storage(format!(
-                            "revision {revision} is committed, but the SCIP file failed: {e}"
-                        )),
-                        None => e,
-                    })?;
-                    Ok((report, revision.map(|r| (r, rebind))))
+                    Ok((report, facts, publication))
                 })
-            } else {
-                index_project(&request, &registry()).map(|report| (report, None))
             };
             match indexed {
-                Ok((report, revision)) => {
+                Ok((report, facts, publication)) => {
                     for diagnostic in &report.diagnostics {
                         eprintln!("{diagnostic}");
                     }
-                    println!(
-                        "files discovered: {}\nfiles indexed: {}\nfiles skipped: {}\nfiles shadowed: {}\ndeclarations: {}\noccurrences: {}\nreferences resolved: {}\nreferences external: {}\nreferences unresolved: {}\nreferences ambiguous: {}\nreferences bounded: {}",
-                        report.files_discovered,
-                        report.files_indexed,
-                        report.files_skipped,
-                        report.files_shadowed,
-                        report.declarations,
-                        report.occurrences,
-                        report.references_resolved,
-                        report.references_external,
-                        report.references_unresolved,
-                        report.references_ambiguous,
-                        report.references_bounded,
-                    );
-                    let m = &report.multi_target;
-                    println!(
-                        "multi-target: raw {} -> shadow-filtered {}, pack-refused {}, nearest-binding {}, alias-collapsed {}, builtin-shadow {}, same-symbol {}, ambiguous {}, unresolved {}, bounded {}",
-                        m.raw,
-                        m.shadow_filtered,
-                        m.pack_refused,
-                        m.nearest_binding,
-                        m.alias_collapsed,
-                        m.builtin_shadow,
-                        m.same_symbol,
-                        m.ambiguous,
-                        m.unresolved,
-                        m.bounded
-                    );
-                    let b = &report.bounded_by_kind;
-                    println!(
-                        "bounded by kind: work {}, queue-length {}, arena-cells {}, failed {}",
-                        b.work, b.queue_length, b.arena_cells, b.failed
-                    );
-                    for (reason, n) in &report.unresolved_reasons {
-                        println!("unresolved {reason}: {n}");
+                    let run = RunOutput {
+                        report,
+                        output: request.output,
+                        publication,
+                    };
+                    if json {
+                        println!("{}", run.envelope(&facts));
+                    } else {
+                        print!("{}", run.text());
                     }
-                    for (kind, n) in &report.unjoined_end_kinds {
-                        println!("unjoined end {kind}: {n}");
-                    }
-                    if request.graph_cache.is_some() {
-                        println!(
-                            "file graphs: {} cached, {} built",
-                            report.graph_cache_hits, report.graph_cache_misses
-                        );
-                    }
-                    if let Some((revision, rebind)) = revision {
-                        println!("metalayer revision: {revision}");
-                        if let Some(r) = rebind {
-                            if r.skipped {
-                                println!("identity: unchanged");
-                            } else {
-                                println!(
-                                    "identity: bound {}, minted {}, ambiguous {}, orphaned {}, collected {}",
-                                    r.bound_total(),
-                                    r.minted,
-                                    r.ambiguous,
-                                    r.orphaned,
-                                    r.collected
-                                );
-                            }
-                        }
-                    }
-                    ExitCode::SUCCESS
+                    facts.exit_code()
                 }
                 Err(error) => {
-                    eprintln!("scippy: {error}");
+                    if json {
+                        println!("{}", index_output::error_envelope(error));
+                    } else {
+                        eprintln!("scippy: {error}");
+                    }
                     ExitCode::FAILURE
                 }
             }

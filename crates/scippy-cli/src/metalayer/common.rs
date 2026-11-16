@@ -122,6 +122,8 @@ impl From<ScippyError> for CliError {
     fn from(error: ScippyError) -> Self {
         let kind = match error {
             ScippyError::Io { .. } => "io",
+            ScippyError::Incomplete => "incomplete",
+            ScippyError::RootSetMismatch { .. } => "root-set-mismatch",
             _ => "storage",
         };
         Self::new(kind, error.to_string())
@@ -239,6 +241,21 @@ fn read(
     Ok((Value::Object(envelope), output))
 }
 
+/// The success envelope of `scippy index --json`. It is the facts envelope without the fields
+/// of a stored revision: the head, `input_complete`, `analysis_exact`, and `value`.
+pub fn run_envelope(
+    command: &str,
+    input_complete: bool,
+    analysis_exact: bool,
+    value: Value,
+) -> Value {
+    let mut envelope = envelope_head(command, true);
+    envelope.insert("input_complete".into(), json!(input_complete));
+    envelope.insert("analysis_exact".into(), json!(analysis_exact));
+    envelope.insert("value".into(), value);
+    Value::Object(envelope)
+}
+
 /// The fields that both envelopes hold.
 fn envelope_head(command: &str, ok: bool) -> serde_json::Map<String, Value> {
     json!({
@@ -252,7 +269,7 @@ fn envelope_head(command: &str, ok: bool) -> serde_json::Map<String, Value> {
     .unwrap_or_default()
 }
 
-fn error_envelope(command: &str, error: &CliError) -> Value {
+pub fn error_envelope(command: &str, error: &CliError) -> Value {
     let mut envelope = envelope_head(command, false);
     envelope.insert(
         "error".into(),

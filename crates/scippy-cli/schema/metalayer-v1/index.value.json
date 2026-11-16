@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scippy.invalid/schema/metalayer-v1/index.value.json",
+  "title": "The value of `scippy index --json`",
+  "type": "object",
+  "required": [
+    "output", "files", "declarations", "occurrences", "references", "graph_cache",
+    "lost_files", "stale_files", "diagnostics", "metalayer"
+  ],
+  "properties": {
+    "output": {
+      "type": "object",
+      "required": ["scip"],
+      "properties": {"scip": {"type": "string", "description": "The SCIP file that the run wrote."}}
+    },
+    "files": {
+      "type": "object",
+      "required": ["discovered", "indexed", "skipped", "shadowed", "discovery_skipped"],
+      "properties": {
+        "discovered": {"type": "integer", "minimum": 0},
+        "indexed": {"type": "integer", "minimum": 0},
+        "skipped": {"type": "integer", "minimum": 0},
+        "shadowed": {"type": "integer", "minimum": 0},
+        "discovery_skipped": {"type": "integer", "minimum": 0}
+      }
+    },
+    "declarations": {"type": "integer", "minimum": 0},
+    "occurrences": {"type": "integer", "minimum": 0},
+    "references": {
+      "type": "object",
+      "required": [
+        "resolved", "external", "unresolved", "ambiguous", "bounded", "bounded_by_kind",
+        "unresolved_reasons", "unjoined_end_kinds", "multi_target"
+      ],
+      "properties": {
+        "resolved": {"type": "integer", "minimum": 0},
+        "external": {"type": "integer", "minimum": 0, "description": "A part of `resolved`."},
+        "unresolved": {"type": "integer", "minimum": 0},
+        "ambiguous": {"type": "integer", "minimum": 0},
+        "bounded": {"type": "integer", "minimum": 0},
+        "bounded_by_kind": {
+          "type": "object",
+          "required": ["work", "queue_length", "arena_cells", "failed"],
+          "properties": {
+            "work": {"type": "integer", "minimum": 0},
+            "queue_length": {"type": "integer", "minimum": 0},
+            "arena_cells": {"type": "integer", "minimum": 0},
+            "failed": {"type": "integer", "minimum": 0}
+          }
+        },
+        "unresolved_reasons": {
+          "type": "object",
+          "description": "Counts by stable reason code. The values are integers."
+        },
+        "unjoined_end_kinds": {
+          "type": "object",
+          "description": "Counts by `syntax_type`. The values are integers."
+        },
+        "multi_target": {
+          "type": "object",
+          "required": [
+            "raw", "shadow_filtered", "pack_refused", "nearest_binding", "alias_collapsed",
+            "builtin_shadow", "same_symbol", "ambiguous", "unresolved", "bounded"
+          ],
+          "properties": {
+            "raw": {"type": "integer", "minimum": 0},
+            "shadow_filtered": {"type": "integer", "minimum": 0},
+            "pack_refused": {"type": "integer", "minimum": 0},
+            "nearest_binding": {"type": "integer", "minimum": 0},
+            "alias_collapsed": {"type": "integer", "minimum": 0},
+            "builtin_shadow": {"type": "integer", "minimum": 0},
+            "same_symbol": {"type": "integer", "minimum": 0},
+            "ambiguous": {"type": "integer", "minimum": 0},
+            "unresolved": {"type": "integer", "minimum": 0},
+            "bounded": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "graph_cache": {
+      "type": "object",
+      "required": ["enabled", "hits", "misses", "failures"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "hits": {"type": "integer", "minimum": 0},
+        "misses": {"type": "integer", "minimum": 0},
+        "failures": {"type": "integer", "minimum": 0}
+      }
+    },
+    "lost_files": {
+      "description": "Every accepted file that the run did not index. A `shadowed` file is not lost input: it does not make `input_complete` false.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "status", "reason"],
+        "properties": {
+          "path": {"type": "string"},
+          "status": {"type": "string", "examples": ["skipped", "failed", "shadowed"]},
+          "reason": {"type": "string", "description": "The code of the diagnostic that decided the status."},
+          "pack": {"type": ["string", "null"]},
+          "real_path": {"type": ["string", "null"]},
+          "sha256": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "stale_files": {"type": "array", "items": {"type": "string"}},
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "stage", "code", "message"],
+        "properties": {
+          "severity": {"type": "string", "examples": ["error", "warning", "info"]},
+          "stage": {
+            "type": "string",
+            "examples": ["discover", "parse", "extract", "bind", "reconcile", "identity", "emit"]
+          },
+          "code": {"type": "string"},
+          "file": {"type": ["string", "null"]},
+          "range": {"$ref": "../metalayer-v1.schema.json#/$defs/span"},
+          "message": {"type": "string"}
+        }
+      }
+    },
+    "metalayer": {
+      "description": "Null when the run did not publish (no `--metalayer`).",
+      "type": ["object", "null"],
+      "required": ["database", "revision", "identity"],
+      "properties": {
+        "database": {"type": "string"},
+        "revision": {"type": "integer", "description": "The id of the revision that the run committed."},
+        "identity": {
+          "description": "Null when the run used no identity store.",
+          "type": ["object", "null"],
+          "required": ["skipped", "bound", "minted", "ambiguous", "orphaned", "collected"],
+          "properties": {
+            "skipped": {"type": "boolean", "description": "The store was already bound to this input. Nothing ran."},
+            "bound": {"type": "integer", "minimum": 0},
+            "minted": {"type": "integer", "minimum": 0},
+            "ambiguous": {"type": "integer", "minimum": 0},
+            "orphaned": {"type": "integer", "minimum": 0},
+            "collected": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}

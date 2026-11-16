@@ -430,6 +430,7 @@ fn index_pack(
             out
         },
     );
+    report.graph_cache_enabled = request.graph_cache.is_some();
     let mut docs: Vec<(usize, Doc)> = Vec::new();
     let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
     for result in results {

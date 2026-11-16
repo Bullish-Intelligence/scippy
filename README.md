@@ -166,8 +166,8 @@ It is independent of `input_complete`. A search that stops gives one of two resu
 
 The field `bounded_references` counts both kinds. `Metalayer::publish` accepts a snapshot with
 `input_complete` or `analysis_exact` false. It computes both flags from the rows and returns an
-error when the snapshot disagrees. The exit code is 0 when a run publishes lost input. The
-revision records the flags, and the CLI prints the diagnostics.
+error when the snapshot disagrees. The exit code of `index` is 3 when a run publishes lost input (see "The result of `scippy index`").
+The revision records the flags, and the CLI prints the diagnostics.
 
 `--strict` makes the run fail when `input_complete` is false, with or without `--metalayer`. An
 error diagnostic already makes `input_complete` false. A failed run writes no SCIP file and opens
@@ -183,6 +183,28 @@ does not capture a filesystem snapshot, but it reads each file once. The manifes
 (`pyproject.toml`, `package.json`, `tsconfig.json`), the Loci configuration, and the binary
 check of the Loci listing are separate reads. They are not project sources in the snapshot.
 Keep both databases outside the project and its roots.
+
+### The result of `scippy index`
+
+`scippy index --json` prints one envelope to stdout, in place of the text summary. It has
+`format_version`, `tool`, `command` (`index`), `ok`, `input_complete`, `analysis_exact`, and
+`value`. It has no `revision` block. A run with `--metalayer` reports its revision in
+`value.metalayer`. The value holds `output`, `files`, `declarations`, `occurrences`,
+`references`, `graph_cache`, `lost_files` (path, status, reason), `stale_files`, `diagnostics`,
+and `metalayer`. A failed run prints an error envelope (`incomplete` for `--strict`). The
+diagnostics also go to stderr. The text summary comes from the `Display` of `IndexReport`.
+
+Exit codes of `index`, with or without `--json`:
+
+| Code | Meaning |
+|---|---|
+| 0 | The run is complete: `input_complete` and `analysis_exact` are true. |
+| 1 | The run failed. This includes `--strict` with lost input. |
+| 2 | Usage error (clap). |
+| 3 | The run finished, and it wrote its output, but it lost input or its analysis is inexact. |
+
+Code 3 never occurs with `--strict` and lost input: that run fails with code 1 and writes
+nothing. A script that accepts an incomplete run tests for the codes 0 and 3.
 
 ## Metalayer queries
 

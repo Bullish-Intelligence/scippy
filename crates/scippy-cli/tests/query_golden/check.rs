@@ -45,7 +45,7 @@ pub fn indexed_copy(name: &str) -> Copy {
         .output()
         .unwrap();
     assert!(
-        indexed.status.success(),
+        crate::common::finished(&indexed),
         "{}",
         String::from_utf8_lossy(&indexed.stderr)
     );

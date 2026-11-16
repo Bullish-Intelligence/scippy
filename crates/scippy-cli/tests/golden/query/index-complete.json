@@ -1,0 +1,62 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "index",
+  "ok": true,
+  "input_complete": true,
+  "analysis_exact": true,
+  "value": {
+    "output": {
+      "scip": "<tmp>/scratch/index-complete.scip"
+    },
+    "files": {
+      "discovered": 1,
+      "indexed": 1,
+      "skipped": 0,
+      "shadowed": 0,
+      "discovery_skipped": 0
+    },
+    "declarations": 2,
+    "occurrences": 3,
+    "references": {
+      "resolved": 1,
+      "external": 0,
+      "unresolved": 0,
+      "ambiguous": 0,
+      "bounded": 0,
+      "bounded_by_kind": {
+        "work": 0,
+        "queue_length": 0,
+        "arena_cells": 0,
+        "failed": 0
+      },
+      "unresolved_reasons": {},
+      "unjoined_end_kinds": {},
+      "multi_target": {
+        "raw": 0,
+        "shadow_filtered": 0,
+        "pack_refused": 0,
+        "nearest_binding": 0,
+        "alias_collapsed": 0,
+        "builtin_shadow": 0,
+        "same_symbol": 0,
+        "ambiguous": 0,
+        "unresolved": 0,
+        "bounded": 0
+      }
+    },
+    "graph_cache": {
+      "enabled": false,
+      "hits": 0,
+      "misses": 0,
+      "failures": 0
+    },
+    "lost_files": [],
+    "stale_files": [],
+    "diagnostics": [],
+    "metalayer": null
+  }
+}

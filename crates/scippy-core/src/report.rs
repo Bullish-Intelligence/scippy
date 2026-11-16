@@ -117,6 +117,8 @@ pub struct BoundedCounts {
 /// A location holds one or more reference nodes of the engine.
 #[derive(Clone, Debug, Default)]
 pub struct IndexReport {
+    /// The run had a graph cache (`IndexRequest::graph_cache`).
+    pub graph_cache_enabled: bool,
     /// File graphs loaded from the cache.
     pub graph_cache_hits: usize,
     /// File graphs built while the cache was enabled.
@@ -160,4 +162,88 @@ pub struct IndexReport {
     /// The indexed files whose content on disk differs, at the end of the run, from the content
     /// that the run read once and indexed. The facts of such a file stay. Sorted by path.
     pub stale_files: Vec<String>,
+}
+
+impl fmt::Display for IndexReport {
+    /// The text summary of the run: counts, the multi-target line, and the cache line. It ends
+    /// with no new line. It holds no diagnostics: print each [`Diagnostic`] on its own.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "files discovered: {}", self.files_discovered)?;
+        writeln!(f, "files indexed: {}", self.files_indexed)?;
+        writeln!(f, "files skipped: {}", self.files_skipped)?;
+        writeln!(f, "files shadowed: {}", self.files_shadowed)?;
+        writeln!(f, "declarations: {}", self.declarations)?;
+        writeln!(f, "occurrences: {}", self.occurrences)?;
+        writeln!(f, "references resolved: {}", self.references_resolved)?;
+        writeln!(f, "references external: {}", self.references_external)?;
+        writeln!(f, "references unresolved: {}", self.references_unresolved)?;
+        writeln!(f, "references ambiguous: {}", self.references_ambiguous)?;
+        write!(f, "references bounded: {}", self.references_bounded)?;
+        let m = &self.multi_target;
+        write!(
+            f,
+            "\nmulti-target: raw {} -> shadow-filtered {}, pack-refused {}, nearest-binding {}, alias-collapsed {}, builtin-shadow {}, same-symbol {}, ambiguous {}, unresolved {}, bounded {}",
+            m.raw,
+            m.shadow_filtered,
+            m.pack_refused,
+            m.nearest_binding,
+            m.alias_collapsed,
+            m.builtin_shadow,
+            m.same_symbol,
+            m.ambiguous,
+            m.unresolved,
+            m.bounded
+        )?;
+        let b = &self.bounded_by_kind;
+        write!(
+            f,
+            "\nbounded by kind: work {}, queue-length {}, arena-cells {}, failed {}",
+            b.work, b.queue_length, b.arena_cells, b.failed
+        )?;
+        for (reason, n) in &self.unresolved_reasons {
+            write!(f, "\nunresolved {reason}: {n}")?;
+        }
+        for (kind, n) in &self.unjoined_end_kinds {
+            write!(f, "\nunjoined end {kind}: {n}")?;
+        }
+        if self.graph_cache_enabled {
+            write!(
+                f,
+                "\nfile graphs: {} cached, {} built",
+                self.graph_cache_hits, self.graph_cache_misses
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_prints_the_summary_lines() {
+        let mut report = IndexReport {
+            files_discovered: 3,
+            references_bounded: 2,
+            ..IndexReport::default()
+        };
+        report.unresolved_reasons.insert("no-definition", 4);
+        let text = report.to_string();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "files discovered: 3");
+        assert_eq!(lines[10], "references bounded: 2");
+        assert!(lines[11].starts_with("multi-target: raw 0 -> shadow-filtered 0"));
+        assert!(lines[12].starts_with("bounded by kind: work 0"));
+        assert_eq!(lines[13], "unresolved no-definition: 4");
+        assert!(!text.contains("file graphs"));
+        assert!(!text.ends_with('\n'));
+        report.graph_cache_enabled = true;
+        report.graph_cache_hits = 1;
+        assert!(
+            report
+                .to_string()
+                .ends_with("file graphs: 1 cached, 0 built")
+        );
+    }
 }

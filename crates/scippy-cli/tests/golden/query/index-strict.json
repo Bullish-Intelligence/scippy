@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "tool": {
+    "name": "scippy",
+    "version": "<tool_version>"
+  },
+  "command": "index",
+  "ok": false,
+  "error": {
+    "kind": "incomplete",
+    "message": "the analysis is incomplete: it lost input"
+  }
+}

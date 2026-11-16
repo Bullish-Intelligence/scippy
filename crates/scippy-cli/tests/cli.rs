@@ -206,7 +206,8 @@ fn the_input_limit_flags_skip_files_and_say_so() {
         "--max-total-bytes",
         "12",
     ]);
-    assert!(output.status.success());
+    // The error diagnostic loses input: the run finishes with the code 3.
+    assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("error[input-limit-reached] c.py"),

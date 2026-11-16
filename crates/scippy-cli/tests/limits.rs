@@ -94,15 +94,16 @@ fn the_limit_flags_are_accepted() {
         "--max-arena-cells",
         "40000000",
     ]);
-    assert!(loose.status.success(), "{loose:?}");
+    assert_eq!(loose.status.code(), Some(0), "{loose:?}");
     let text = String::from_utf8(loose.stdout).unwrap();
     assert!(text.contains("references bounded: 0"), "{text}");
     assert!(text.contains("bounded by kind: work 0,"), "{text}");
     let tight = run(&["--max-work", "1"]);
-    assert!(tight.status.success(), "{tight:?}");
+    // A bound makes the analysis inexact: the run finishes with the code 3.
+    assert_eq!(tight.status.code(), Some(3), "{tight:?}");
     let text = String::from_utf8(tight.stdout).unwrap();
     assert!(!text.contains("references bounded: 0"), "{text}");
     assert!(!text.contains("bounded by kind: work 0,"), "{text}");
     let zero = run(&["--max-work", "0"]);
-    assert!(!zero.status.success());
+    assert_eq!(zero.status.code(), Some(2));
 }

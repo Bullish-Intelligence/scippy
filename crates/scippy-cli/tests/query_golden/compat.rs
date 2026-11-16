@@ -29,8 +29,11 @@ fn unknown_fields_and_values_still_validate() {
     for path in golden_dir() {
         let mut envelope = read_golden(&path);
         extend(&mut envelope);
-        // A new command is valid too.
-        envelope["command"] = json!("a-future-command");
+        // A new command is valid too. An `index` envelope keeps its command: it is the one
+        // facts envelope without a revision.
+        if envelope["command"] != "index" {
+            envelope["command"] = json!("a-future-command");
+        }
         if let Err(errors) = validate(&envelope) {
             panic!("{}: {errors}", path.display());
         }

@@ -19,6 +19,7 @@ mod edges;
 mod entity;
 mod explain;
 mod files;
+mod index;
 mod relations;
 mod show;
 mod skill;

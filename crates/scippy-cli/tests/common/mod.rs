@@ -16,3 +16,14 @@ pub fn scippy() -> Command {
         .env("HOME", scratch.join("home"));
     command
 }
+
+/// The exit code of `scippy index` for a run that finished with lost input or an inexact analysis.
+#[allow(dead_code)]
+pub const EXIT_INCOMPLETE: i32 = 3;
+
+/// True when `scippy index` finished: exit 0 (complete) or exit 3 (incomplete). A test that
+/// indexes a fixture with lost input as setup uses this. A test of the exit code asserts it.
+#[allow(dead_code)]
+pub fn finished(output: &std::process::Output) -> bool {
+    matches!(output.status.code(), Some(0 | 3))
+}

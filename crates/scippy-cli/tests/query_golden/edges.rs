@@ -93,7 +93,7 @@ fn links_with_a_resolved_anchor_name_it() {
         .output()
         .unwrap();
     assert!(
-        indexed.status.success(),
+        crate::common::finished(&indexed),
         "{}",
         String::from_utf8_lossy(&indexed.stderr)
     );
