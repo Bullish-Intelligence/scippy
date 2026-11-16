@@ -5,7 +5,8 @@ The design documents are in the notes project, through the `.loci` link.
 
 ## Status
 
-The Python pack (Gate 3) and the TypeScript pack (Gate 4) index real projects.
+The Python pack (Gate 3) indexes real projects. The TypeScript pack (Gate 4) is a calibration
+guard (ADR-011): it runs in the tests, and it is not supported.
 `scippy index PROJECT_ROOT --output index.scip` parses each Python and TypeScript file, resolves
 names across files with the Stack Graphs engine, and writes definition, import, and reference
 occurrences. A reference that the engine cannot resolve to one declaration gets no target.
@@ -24,6 +25,44 @@ occurrences: one over the target part, for the note, and one over the anchor par
 Each root is a repository of its own. The core resolves the code of each root with a binding
 engine of its own, and frees the engine after the root. A root sees the code of another root
 only through its manifest. The roots run in parallel (see "Parallel roots").
+
+## Support matrix (v0.1)
+
+This table says only what the tests cover.
+
+| Item | Status |
+|---|---|
+| Python | Supported. The oracle counts 99.4% (mypy) and 99.96% (rich) of shared positions as correct (`scripts/oracle/RESULTS.md`). |
+| Loci Markdown | Supported. The pack follows `loci-core`. The saved comparison on a real vault has 0 disagreements. It was not rerun after commit `04caacd`. |
+| TypeScript | Experimental guard only (ADR-011). The tests keep it from regressing. The project makes no promise about its output. |
+| Metalayer and identity store | Experimental. No stability promise for entity IDs or the schema. |
+| Output | SCIP. `scip lint`, `scip snapshot`, and `scip test` check it in `opt:slow`. |
+| Graph cache | On by default. It is disposable. |
+| Platform | Linux x86_64, built and tested in the devenv. No other platform is built or tested. |
+| Rust toolchain | The devenv provides rustc 1.99.0. `Cargo.toml` declares `rust-version = 1.85` and edition 2024. Only the devenv toolchain is tested. |
+| `scip` CLI | v0.10.0. The tests use it. |
+| Stack Graphs fork | `Bullish-Intelligence/stack-graphs` at rev `cda555a96e5e26e2bc20922af32092e155b362d2`. Four crates use one pin. |
+
+Exit codes of `scippy index`: 0 complete, 3 finished but incomplete, 1 failure, 2 usage
+(see "The result of `scippy index`").
+
+### Known limits
+
+The architecture notes list the open items (`SCIPPY_ARCHITECTURE.md`, section 11, in the notes
+project, through the `.loci` link):
+
+- Fork item 32: a lambda parameter shares the parameter symbol of its enclosing function
+  (section 11.5, open items).
+- A whole-string annotation such as `"Optional[Foo]"` is not followed. `Optional["Foo"]` is
+  (fork item 31, section 11.1).
+- `a.b.c` chains need a type for the receiver. Pack rules follow written annotations only (ADR-009).
+- The owner class differs from `scip-python` at 3,041 positions on mypy. The rebind convention
+  differs at 5,028 positions.
+- Base relationships to external (builtin) classes are not emitted.
+- Identity evaluation limits: the truth is a proxy, only Python was measured at scale, few moves
+  exist, and annotation survival is not measured (`identity-eval-2026-11-16/REPORT.md`, section 10).
+- The metalayer makes no promise for entity IDs or the schema. A version change rebuilds the database.
+- Slow tests run only on request, in `opt:slow`.
 
 ## Metalayer (experimental)
 
