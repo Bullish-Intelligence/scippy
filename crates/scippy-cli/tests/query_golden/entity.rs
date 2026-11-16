@@ -5,8 +5,8 @@ use std::fs;
 use serde_json::Value;
 
 use crate::harness::{
-    fixture_db, golden_identity, golden_identity_raw, golden_identity_text, identity_path,
-    identity_store, run_fixed, seed_id,
+    golden_identity, golden_identity_raw, golden_identity_text, identity_path, identity_store,
+    run_fixed, seed_id,
 };
 
 fn golden(case: &str, locator: &str, exit: i32) {
@@ -93,13 +93,9 @@ fn a_newer_store_is_a_schema_mismatch() {
 
 #[test]
 fn a_foreign_file_is_a_schema_mismatch() {
-    // The facts store is a SQLite file of another application.
-    let db = fixture_db().to_str().unwrap();
-    golden_identity_raw(
-        "schema-mismatch-foreign",
-        &["entity", "x", "--identity", db],
-        1,
-    );
+    let file = identity_path("entity-foreign");
+    fs::write(&file, "text, not SQLite\n").unwrap();
+    golden_identity("schema-mismatch-foreign", &file, &["entity", "x"], 1);
 }
 
 #[test]

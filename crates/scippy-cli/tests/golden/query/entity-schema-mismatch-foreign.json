@@ -8,6 +8,6 @@
   "ok": false,
   "error": {
     "kind": "identity-schema-mismatch",
-    "message": "<tmp>/layer.sqlite is not a Scippy identity store"
+    "message": "<tmp>/scratch/entity-foreign.identity.db is not a Scippy identity store"
   }
 }
