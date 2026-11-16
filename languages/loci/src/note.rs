@@ -22,6 +22,8 @@ pub struct Note {
     /// The note is a captured web page: a property of `clip_url_properties` holds a web address.
     pub page: bool,
     pub len: usize,
+    /// The `loci.id` of the front matter, when the note has a valid one.
+    pub loci_id: Option<String>,
 }
 
 pub fn analyze_note(raw: &[u8], settings: &Settings) -> Note {
@@ -61,6 +63,7 @@ pub fn analyze_note(raw: &[u8], settings: &Settings) -> Note {
     note.tags.extend(body.tags);
     note.aliases = front.aliases;
     note.page = front.has_url;
+    note.loci_id = front.loci_id;
     note
 }
 

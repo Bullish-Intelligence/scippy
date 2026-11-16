@@ -350,6 +350,8 @@ pub struct FrontFacts {
     pub degraded: bool,
     /// A `clip_url_properties` property is an http or https address: the note is a captured web page.
     pub has_url: bool,
+    /// The `loci.id` of a valid owned region, as written.
+    pub loci_id: Option<String>,
 }
 
 const MAX_NODE_DEPTH: usize = 64;
@@ -414,6 +416,18 @@ fn alias_items(node: &Node) -> Option<Vec<(String, usize, usize)>> {
 fn is_uuid(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     regex(&RE, r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$").is_match(text)
+}
+
+/// The `id` of a valid owned `loci` region.
+fn loci_id(node: &Node) -> Option<String> {
+    let Node::Map { pairs, .. } = node else {
+        return None;
+    };
+    pairs
+        .iter()
+        .find(|(key, _)| key.as_str() == Some("id"))
+        .and_then(|(_, value)| value.as_str())
+        .map(str::to_owned)
 }
 
 /// The numeric value of a scalar, when it has the type int, float, or bool.
@@ -583,10 +597,14 @@ pub fn analyze_front(raw: &[u8], envelope: &Envelope, clip_url: &[String]) -> Fr
         if key == "loci" {
             loci_nodes += 1;
             loci_ok = loci_valid(value);
+            if loci_ok {
+                facts.loci_id = loci_id(value);
+            }
         }
     }
     if loci_nodes > 1 || (loci_nodes == 1 && !loci_ok) {
         facts.degraded = true;
+        facts.loci_id = None;
     }
     facts
 }

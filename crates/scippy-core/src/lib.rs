@@ -31,7 +31,7 @@ mod source;
 
 pub use snapshot::{
     AnalysisDiagnostic, AnalysisDocument, AnalysisEdge, AnalysisFile, AnalysisOccurrence,
-    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, DeclRecord, INCOMPLETE_CODES,
+    AnalysisReference, AnalysisSnapshot, AnalysisSymbol, DeclRecord, INCOMPLETE_CODES, NoteRecord,
     ReferenceOutcome, file_status,
 };
 

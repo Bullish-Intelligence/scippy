@@ -520,7 +520,7 @@ fn same_content_claimed_by_two_old_entities_is_ambiguous() {
     assert!(after.outcome(&new.id).is_none());
 }
 
-// ---- Markdown (METALAYER_IDENTITY.md section 7). The `id-markdown` lane builds the engine. ----
+// ---- Markdown (METALAYER_IDENTITY.md section 7). ----
 
 fn md_pair(tree: &str) -> (Snap, Snap) {
     let lab = Lab::new();
@@ -530,7 +530,6 @@ fn md_pair(tree: &str) -> (Snap, Snap) {
 }
 
 #[test]
-#[ignore = "needs id-markdown"]
 fn markdown_duplicate_heading_inserted_above_never_binds_silently_wrong() {
     let (before, after) = md_pair("md_dup_heading");
     let old: Vec<&Ent> = before
@@ -557,7 +556,6 @@ fn markdown_duplicate_heading_inserted_above_never_binds_silently_wrong() {
 }
 
 #[test]
-#[ignore = "needs id-markdown"]
 fn markdown_rename_with_loci_id_is_matched() {
     let (before, after) = md_pair("md_rename_with_id");
     for ent in before.at_path("with_id.md") {
@@ -567,7 +565,6 @@ fn markdown_rename_with_loci_id_is_matched() {
 }
 
 #[test]
-#[ignore = "needs id-markdown"]
 fn markdown_rename_without_loci_id_is_moved_by_m2() {
     let (before, after) = md_pair("md_rename_without_id");
     let note = before

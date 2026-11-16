@@ -79,6 +79,37 @@ pub struct DeclRecord {
     pub body_digest: Option<String>,
     /// The number of named tree-sitter nodes in the body, comments excluded.
     pub body_tokens: Option<u32>,
+    /// The facts of a Markdown note, heading, or block. It is `None` for any other symbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<NoteRecord>,
+}
+
+/// The facts of a Markdown entity that find it again after an edit, a move, or a rename.
+///
+/// The Loci pack gives one record to each note, heading, and block that has an entity.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteRecord {
+    /// `note`, `heading`, or `block`.
+    pub kind: String,
+    /// The `loci.id` of the front matter, for a note that has a valid one.
+    pub loci_id: Option<String>,
+    /// The level of a heading, from 1 to 6.
+    pub level: Option<u8>,
+    /// The texts of the enclosing headings of a heading, from the outermost to the innermost.
+    pub ancestors: Vec<String>,
+    /// The text of a heading, without its marks and without a `~N` suffix.
+    pub text: Option<String>,
+    /// The place of a heading among the headings with the same text and the same ancestors,
+    /// counted from 0.
+    pub ordinal: Option<u32>,
+    /// The digest of the section of a heading, as 32 lowercase hex digits. The section runs from
+    /// the line after the heading to the next heading of the same or a higher level. The digest
+    /// reads the text with white space normalized. It does not read the text of the heading.
+    pub section_digest: Option<String>,
+    /// The number of words in the section.
+    pub section_tokens: Option<u32>,
+    /// The id of a block, without its caret.
+    pub block_id: Option<String>,
 }
 
 fn symbol_info(s: &SymbolInfo) -> AnalysisSymbol {

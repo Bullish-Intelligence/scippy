@@ -94,11 +94,13 @@ impl NativeAnalysis for Moving {
                 path: source.path.clone(),
                 stub: false,
                 module: true,
+                note: None,
                 declarations: vec![NativeDeclaration {
                     span: (0, 4),
                     name: "head".into(),
                     kind: DeclKind::Section,
                     of_module: false,
+                    note: None,
                 }],
                 references: Vec::new(),
             });

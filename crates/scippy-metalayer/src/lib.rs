@@ -35,7 +35,8 @@ pub use query::{FileState, compare_file};
 pub use read::View;
 pub use rebind::{
     Item as RebindItem, MIN_BODY_TOKENS, MIN_BODY_TOKENS_ENV, ORPHAN_GC_PUBLISHES, RebindInput,
-    RebindReport, child_key, entity_kind, min_body_tokens, rebind, rebind_with, symbol_key,
+    RebindReport, block_suffix, child_key, entity_kind, heading_suffix, min_body_tokens, note_key,
+    rebind, rebind_with, symbol_key,
 };
 pub use records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
@@ -126,6 +127,8 @@ impl Metalayer {
 mod identity_ops_tests;
 #[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod rebind_note_tests;
 #[cfg(test)]
 mod rebind_tests;
 #[cfg(test)]

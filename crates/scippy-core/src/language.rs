@@ -542,6 +542,8 @@ pub struct NativeDeclaration {
     /// The declaration is a second name of the module of its document, such as an alias.
     /// The symbol records a reference to the module.
     pub of_module: bool,
+    /// The facts that the identity store needs, for a heading or a block id.
+    pub note: Option<crate::snapshot::NoteRecord>,
 }
 
 /// The target of a native reference.
@@ -579,6 +581,8 @@ pub struct NativeDocument {
     pub stub: bool,
     /// The document has a module. The module has the empty span `(0, 0)`.
     pub module: bool,
+    /// The facts that the identity store needs, for the note itself.
+    pub note: Option<crate::snapshot::NoteRecord>,
     pub declarations: Vec<NativeDeclaration>,
     pub references: Vec<NativeReference>,
 }

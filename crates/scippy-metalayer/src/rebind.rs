@@ -4,9 +4,10 @@
 //! transaction of the identity store. It never reads or writes the facts store.
 //!
 //! The engine is generic over the family of the entities. A family supplies its items (the
-//! declarations of the new run), and its tier list. This file holds the code family: tiers T1,
-//! T1h, T2f, T2, T3, T4, T5, then the parameters. The Markdown family adds its own items and
-//! tiers on top of [`Pool`].
+//! declarations of the new run), and its tier list. The code family has tiers T1, T1h, T2f, T2,
+//! T3, T4, T5, then the parameters. The note family (section 7 of the design) binds the notes
+//! first: T1, T1h, T2 for a note whose key changed with its path, and M2. Then it binds the
+//! headings and blocks of the notes: the duplicate group rule, T1, T1h, M3, M4, and M5.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
@@ -46,6 +47,14 @@ const META_RECENT_DIGESTS: &str = "recent_digests";
 /// The `meta` key of the digest of the items of the last rebinding. Publish skips the
 /// rebinding only when the input digest and this digest both match.
 pub(crate) const META_BOUND_ITEMS_DIGEST: &str = "bound_items_digest";
+
+/// The `meta` key of the items digest of a family.
+pub(crate) fn items_meta_key(family: Family) -> &'static str {
+    match family {
+        Family::Code => META_BOUND_ITEMS_DIGEST,
+        Family::Note => "bound_items_digest_note",
+    }
+}
 
 /// The separator of the parts of a compound key in memory.
 const SEP: char = '\u{1f}';
@@ -167,8 +176,15 @@ impl RebindInput {
         }
         for doc in &snapshot.documents {
             files.insert(doc.path.clone(), doc.sha256.clone());
+            // The note family reads the documents of the Loci pack.
+            if doc.pack.as_deref() == Some(LOCI_PACK) {
+                continue;
+            }
             for sym in &doc.symbols {
                 let Some(decl) = &sym.decl else { continue };
+                if decl.note.is_some() {
+                    continue;
+                }
                 let Some(key) = symbol_key(&sym.symbol) else {
                     continue;
                 };
@@ -217,7 +233,132 @@ impl RebindInput {
     }
 }
 
+/// The id of the Loci language pack.
+const LOCI_PACK: &str = "loci";
+
+/// The identity key of a note: `id:<loci.id>`, else `path:<path>`.
+pub fn note_key(loci_id: Option<&str>, path: &str) -> String {
+    match loci_id {
+        Some(id) => format!("id:{id}"),
+        None => format!("path:{path}"),
+    }
+}
+
+/// The part of the key of a heading below the key of its note: the texts of the ancestors, the
+/// text, and the ordinal among equal siblings.
+pub fn heading_suffix(ancestors: &[String], text: &str, ordinal: u32) -> String {
+    format!("{}/{text}#{ordinal}", ancestors.join("/"))
+}
+
+/// The part of the key of a block below the key of its note.
+pub fn block_suffix(block_id: &str) -> String {
+    format!("^{block_id}")
+}
+
 impl RebindInput {
+    /// The input of the note family from a snapshot: the notes, and their headings and blocks.
+    ///
+    /// A `loci.id` that two notes carry is ignored: both notes get a path key.
+    pub fn notes_from_snapshot(snapshot: &AnalysisSnapshot, input_digest: &str) -> Self {
+        let record = |sym: &scippy_core::AnalysisSymbol| {
+            sym.decl.as_ref().and_then(|d| d.note.as_ref()).cloned()
+        };
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for doc in &snapshot.documents {
+            for sym in &doc.symbols {
+                if let Some(note) = record(sym) {
+                    if let (Some(id), "note") = (note.loci_id, note.kind.as_str()) {
+                        *counts.entry(id).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let mut items = Vec::new();
+        let mut files = BTreeMap::new();
+        for doc in &snapshot.documents {
+            let notes: Vec<_> = doc
+                .symbols
+                .iter()
+                .filter_map(|s| record(s).map(|n| (s, n)))
+                .collect();
+            let Some((sym, note)) = notes.iter().find(|(_, n)| n.kind == "note") else {
+                continue;
+            };
+            files.insert(doc.path.clone(), doc.sha256.clone());
+            let loci_id = note
+                .loci_id
+                .as_deref()
+                .filter(|id| counts.get(*id) == Some(&1));
+            let key = note_key(loci_id, &doc.path);
+            items.push(Item {
+                key: key.clone(),
+                kind: EntityKind::Note,
+                symbol: Some(sym.symbol.clone()),
+                path: doc.path.clone(),
+                name: doc.path.rsplit('/').next().unwrap_or(&doc.path).to_owned(),
+                container: String::new(),
+                sig_digest: None,
+                body_digest: doc.sha256.clone(),
+                body_tokens: None,
+                parent_key: None,
+                child_name: None,
+            });
+            let mut seen: HashSet<String> = HashSet::new();
+            for (sym, note) in &notes {
+                let (kind, suffix, name, container) = match note.kind.as_str() {
+                    "heading" => {
+                        let (Some(text), Some(ordinal)) = (&note.text, note.ordinal) else {
+                            continue;
+                        };
+                        (
+                            EntityKind::Heading,
+                            heading_suffix(&note.ancestors, text, ordinal),
+                            text.clone(),
+                            join_container(&note.ancestors),
+                        )
+                    }
+                    "block" => {
+                        let Some(id) = &note.block_id else { continue };
+                        (
+                            EntityKind::Block,
+                            block_suffix(id),
+                            block_suffix(id),
+                            String::new(),
+                        )
+                    }
+                    _ => continue,
+                };
+                // The first of two equal block ids wins, as it does in a link.
+                if !seen.insert(format!("{}{SEP}{suffix}", kind.as_str())) {
+                    continue;
+                }
+                items.push(Item {
+                    key: String::new(),
+                    kind,
+                    symbol: Some(sym.symbol.clone()),
+                    path: doc.path.clone(),
+                    name,
+                    container,
+                    sig_digest: None,
+                    body_digest: note.section_digest.clone(),
+                    body_tokens: note.section_tokens.map(i64::from),
+                    parent_key: Some(key.clone()),
+                    child_name: Some(suffix),
+                });
+            }
+        }
+        items.sort_by(|a, b| {
+            (&a.path, &a.key, &a.child_name).cmp(&(&b.path, &b.key, &b.child_name))
+        });
+        Self {
+            input_digest: input_digest.into(),
+            family: Family::Note,
+            items,
+            files,
+            old_files: None,
+        }
+    }
+
     /// A digest of everything in the items that a rebinding reads or writes: the symbol, the
     /// path, the name, the container, and the digests. A change of the package version changes
     /// the symbol strings and so this digest, while the input digest of the facts can stay.
@@ -267,6 +408,18 @@ impl RebindReport {
     pub fn bound_total(&self) -> usize {
         self.bound.values().sum()
     }
+
+    /// Add the counts of the report of another family.
+    pub fn merge(&mut self, other: RebindReport) {
+        self.skipped &= other.skipped;
+        for (tier, n) in other.bound {
+            *self.bound.entry(tier).or_default() += n;
+        }
+        self.minted += other.minted;
+        self.ambiguous += other.ambiguous;
+        self.orphaned += other.orphaned;
+        self.collected += other.collected;
+    }
 }
 
 // ---- The pool ----
@@ -308,6 +461,14 @@ struct Spec<'f> {
 /// The state of one rebinding: the old entities, the new items, and the pairs so far.
 pub(crate) struct Pool<'a> {
     input: &'a RebindInput,
+    /// The items of the input. The note family fills the keys of the children, and sets
+    /// `parent_key` to the entity id of the parent.
+    items: Vec<Item>,
+    /// The tiers read the children, not the parents.
+    children: bool,
+    /// An old entity or an item that a group rule settled. Later tiers skip it.
+    old_frozen: Vec<bool>,
+    new_frozen: Vec<bool>,
     olds: Vec<Old>,
     /// For each old entity, the item that it bound to, and the tier.
     old_bound: Vec<Option<(usize, Tier)>>,
@@ -321,7 +482,7 @@ pub(crate) struct Pool<'a> {
 
 impl<'a> Pool<'a> {
     fn item(&self, n: usize) -> &Item {
-        &self.input.items[n]
+        &self.items[n]
     }
 
     fn vetoed(&self, old: &Old, item: &Item) -> bool {
@@ -365,8 +526,9 @@ impl<'a> Pool<'a> {
     /// and, for each old entity that has candidates but no pair, its candidates.
     fn find(&self, spec: &Spec<'_>) -> Found {
         let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
-        for (n, item) in self.input.items.iter().enumerate() {
-            if item.is_child() || self.new_bound[n].is_some() {
+        for (n, item) in self.items.iter().enumerate() {
+            if item.is_child() != self.children || self.new_bound[n].is_some() || self.new_frozen[n]
+            {
                 continue;
             }
             if let Some(key) = (spec.new_key)(item) {
@@ -376,7 +538,8 @@ impl<'a> Pool<'a> {
         // The candidates of each unbound old entity.
         let mut candidates: Vec<(usize, Vec<usize>)> = Vec::new();
         for (o, old) in self.olds.iter().enumerate() {
-            if old.is_child() || self.old_bound[o].is_some() {
+            if old.is_child() != self.children || self.old_bound[o].is_some() || self.old_frozen[o]
+            {
                 continue;
             }
             let mut found: Vec<usize> = Vec::new();
@@ -569,6 +732,215 @@ impl<'a> Pool<'a> {
             accept: &|o, i| o.cur.name != i.name,
             narrow: false,
         });
+    }
+
+    /// The tiers of the notes: T1, T1h, T2 for a note whose key changed with its path (a
+    /// `loci.id` came or went), and M2 (the file moved and has the same hash).
+    fn run_note_tiers(&mut self) {
+        self.run(&Spec {
+            tier: Tier::T1,
+            old_keys: &|o| vec![o.cur.key.clone()],
+            new_key: &|i| Some(i.key.clone()),
+            accept: &|_, _| true,
+            narrow: false,
+        });
+        self.run(&Spec {
+            tier: Tier::T1H,
+            old_keys: &|o| o.older_keys.clone(),
+            new_key: &|i| Some(i.key.clone()),
+            accept: &|_, _| true,
+            narrow: false,
+        });
+        // A note with a `loci.id` has the same identity at another path. Another `loci.id` at the
+        // same path is another note, so one side must have a path key.
+        self.run(&Spec {
+            tier: Tier::T2,
+            old_keys: &|o| vec![o.cur.path.clone()],
+            new_key: &|i| Some(i.path.clone()),
+            accept: &|o, i| o.cur.key.starts_with("path:") || i.key.starts_with("path:"),
+            narrow: false,
+        });
+        self.run(&Spec {
+            tier: Tier::M2,
+            old_keys: &|o| o.cur.body_digest.iter().cloned().collect(),
+            new_key: &|i| i.body_digest.clone(),
+            accept: &|o, i| o.cur.path != i.path,
+            narrow: false,
+        });
+    }
+
+    /// The tiers of the headings and blocks. The keys of the children hold the entity id of the
+    /// note, so the notes must be bound first.
+    fn run_child_tiers(&mut self) {
+        let min = self.min_tokens;
+        let tokens = move |t: Option<i64>| t.is_some_and(|t| t >= min);
+        self.bind_heading_groups();
+        self.run(&Spec {
+            tier: Tier::T1,
+            old_keys: &|o| vec![o.cur.key.clone()],
+            new_key: &|i| Some(i.key.clone()),
+            accept: &|_, _| true,
+            narrow: false,
+        });
+        self.run(&Spec {
+            tier: Tier::T1H,
+            old_keys: &|o| o.older_keys.clone(),
+            new_key: &|i| Some(i.key.clone()),
+            accept: &|_, _| true,
+            narrow: false,
+        });
+        // M3: the same block id, unique in the vault, in another note.
+        self.run(&Spec {
+            tier: Tier::M3,
+            old_keys: &|o| match o.kind {
+                EntityKind::Block => vec![o.cur.name.clone()],
+                _ => Vec::new(),
+            },
+            new_key: &|i| (i.kind == EntityKind::Block).then(|| i.name.clone()),
+            accept: &|o, i| o.parent_id.as_deref() != i.parent_key.as_deref(),
+            narrow: false,
+        });
+        // M4: the same note and text, unique, under another parent.
+        let by_text = |note: &str, text: &str| format!("{note}{SEP}{text}");
+        self.run(&Spec {
+            tier: Tier::M4,
+            old_keys: &|o| match (o.kind, &o.parent_id) {
+                (EntityKind::Heading, Some(note)) => vec![by_text(note, &o.cur.name)],
+                _ => Vec::new(),
+            },
+            new_key: &|i| match (i.kind, &i.parent_key) {
+                (EntityKind::Heading, Some(note)) => Some(by_text(note, &i.name)),
+                _ => None,
+            },
+            accept: &|o, i| o.cur.container != i.container,
+            narrow: false,
+        });
+        // M5: the same note and parent, the same section digest, unique, other text.
+        let by_section =
+            |note: &str, parent: &str, digest: &str| format!("{note}{SEP}{parent}{SEP}{digest}");
+        self.run(&Spec {
+            tier: Tier::M5,
+            old_keys: &|o| match (o.kind, &o.parent_id, &o.cur.body_digest) {
+                (EntityKind::Heading, Some(note), Some(digest)) if tokens(o.cur.body_tokens) => {
+                    vec![by_section(note, &o.cur.container, digest)]
+                }
+                _ => Vec::new(),
+            },
+            new_key: &|i| match (i.kind, &i.parent_key, &i.body_digest) {
+                (EntityKind::Heading, Some(note), Some(digest)) if tokens(i.body_tokens) => {
+                    Some(by_section(note, &i.container, digest))
+                }
+                _ => None,
+            },
+            accept: &|o, i| o.cur.name != i.name,
+            narrow: false,
+        });
+    }
+
+    /// The duplicate group rule (design 7). A group is the headings with equal text under one
+    /// parent. The rule applies to a group that has more than one member on either side.
+    ///
+    /// Bind the members by a section digest that is unique on both sides. When the size of the
+    /// group is equal, bind the rest by ordinal. When the size changed, leave the rest: an old
+    /// member that remains is `ambiguous`, and a new member that remains gets a new id. The tiers
+    /// below skip every member of the group, so no other tier binds one by chance.
+    fn bind_heading_groups(&mut self) {
+        type Group = (String, String, String);
+        let ordinal = |key: &str| {
+            key.rsplit_once('#')
+                .and_then(|(_, n)| n.parse::<u32>().ok())
+                .unwrap_or(0)
+        };
+        let mut old_groups: BTreeMap<Group, Vec<usize>> = BTreeMap::new();
+        for (o, old) in self.olds.iter().enumerate() {
+            if old.kind != EntityKind::Heading || self.old_bound[o].is_some() {
+                continue;
+            }
+            if let Some(note) = &old.parent_id {
+                let group = (
+                    note.clone(),
+                    old.cur.container.clone(),
+                    old.cur.name.clone(),
+                );
+                old_groups.entry(group).or_default().push(o);
+            }
+        }
+        let mut new_groups: BTreeMap<Group, Vec<usize>> = BTreeMap::new();
+        for (n, item) in self.items.iter().enumerate() {
+            if item.kind != EntityKind::Heading || !item.is_child() || self.new_bound[n].is_some() {
+                continue;
+            }
+            if let Some(note) = &item.parent_key {
+                let group = (note.clone(), item.container.clone(), item.name.clone());
+                new_groups.entry(group).or_default().push(n);
+            }
+        }
+        for (group, mut olds) in old_groups {
+            let Some(mut news) = new_groups.remove(&group) else {
+                continue;
+            };
+            if olds.len() == 1 && news.len() == 1 {
+                continue;
+            }
+            olds.sort_by_key(|&o| ordinal(&self.olds[o].cur.key));
+            news.sort_by_key(|&n| ordinal(self.item(n).child_name.as_deref().unwrap_or("")));
+            let same_size = olds.len() == news.len();
+            let (all_olds, all_news) = (olds.clone(), news.clone());
+            let mut pairs: Vec<(usize, usize)> = Vec::new();
+
+            // A digest that exactly one old member and exactly one new member have.
+            let mut by_digest: BTreeMap<&str, (Vec<usize>, Vec<usize>)> = BTreeMap::new();
+            for &o in &olds {
+                if let Some(d) = self.olds[o].cur.body_digest.as_deref() {
+                    by_digest.entry(d).or_default().0.push(o);
+                }
+            }
+            for &n in &news {
+                if let Some(d) = self.item(n).body_digest.as_deref() {
+                    by_digest.entry(d).or_default().1.push(n);
+                }
+            }
+            for (_, (os, ns)) in by_digest {
+                if let ([o], [n]) = (os.as_slice(), ns.as_slice()) {
+                    if !self.vetoed(&self.olds[*o], self.item(*n)) {
+                        pairs.push((*o, *n));
+                    }
+                }
+            }
+            olds.retain(|o| !pairs.iter().any(|p| p.0 == *o));
+            news.retain(|n| !pairs.iter().any(|p| p.1 == *n));
+            if same_size {
+                // The rest bind by ordinal: the first with the first, and so on.
+                for (&o, &n) in olds.iter().zip(&news) {
+                    if !self.vetoed(&self.olds[o], self.item(n)) {
+                        pairs.push((o, n));
+                    }
+                }
+            }
+            for &(o, n) in &pairs {
+                let tier = if self.olds[o].cur.key == self.item(n).key {
+                    Tier::T1
+                } else {
+                    Tier::M5
+                };
+                self.bind(o, n, tier);
+            }
+            // The members that remain have candidates but no bind.
+            let left: BTreeSet<usize> = all_news
+                .iter()
+                .copied()
+                .filter(|&n| self.new_bound[n].is_none())
+                .collect();
+            for &o in &all_olds {
+                if self.old_bound[o].is_none() && !left.is_empty() {
+                    self.hints[o] = Some((Tier::M5, left.clone()));
+                }
+                self.old_frozen[o] = true;
+            }
+            for &n in &all_news {
+                self.new_frozen[n] = true;
+            }
+        }
     }
 
     /// Pair each vanished file with one new file (tier T2f). The map goes from the old path to
@@ -1088,6 +1460,10 @@ fn rebind_in(
     let olds = load_olds(tx, input.family)?;
     let mut pool = Pool {
         input,
+        items: input.items.clone(),
+        children: false,
+        old_frozen: vec![false; olds.len()],
+        new_frozen: vec![false; input.items.len()],
         old_bound: vec![None; olds.len()],
         new_bound: vec![None; input.items.len()],
         hints: vec![None; olds.len()],
@@ -1095,7 +1471,10 @@ fn rebind_in(
         vetoes: load_vetoes(tx)?,
         min_tokens,
     };
-    pool.run_code_tiers();
+    match input.family {
+        Family::Code => pool.run_code_tiers(),
+        Family::Note => pool.run_note_tiers(),
+    }
     let mut report = RebindReport::default();
 
     // The entity id of each item. A bound item takes the id of its entity.
@@ -1125,6 +1504,18 @@ fn rebind_in(
         }
     }
 
+    if input.family == Family::Note {
+        bind_note_children(
+            tx,
+            ids,
+            &mut pool,
+            &mut entity_of,
+            &by_key,
+            digest,
+            &mut report,
+        )?;
+    }
+
     // The children bind when the parent has an entity and the name is equal.
     let mut child_old: HashMap<&str, usize> = HashMap::new();
     for (o, old) in pool.olds.iter().enumerate() {
@@ -1134,6 +1525,9 @@ fn rebind_in(
     }
     let mut child_bound: HashSet<usize> = HashSet::new();
     for item in &input.items {
+        if input.family != Family::Code {
+            break;
+        }
         let (Some(parent_key), Some(name)) = (&item.parent_key, &item.child_name) else {
             continue;
         };
@@ -1171,12 +1565,12 @@ fn rebind_in(
         }
         let candidates: Vec<String> = pool.hints[o]
             .as_ref()
-            .filter(|_| !old.is_child())
+            .filter(|_| input.family == Family::Note || !old.is_child())
             .map(|(_, found)| {
                 found
                     .iter()
                     .filter(|&&n| pool.new_bound[n].is_none())
-                    .map(|&n| input.items[n].key.clone())
+                    .map(|&n| pool.items[n].key.clone())
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect()
@@ -1226,10 +1620,78 @@ fn rebind_in(
     }
     set_meta(tx, META_RECENT_DIGESTS, &recent.join("\n"))?;
     set_meta(tx, "bound_input_digest", digest)?;
-    set_meta(tx, META_BOUND_ITEMS_DIGEST, &input.items_digest())?;
+    set_meta(tx, items_meta_key(input.family), &input.items_digest())?;
     orphan_children(tx, input.family, digest)?;
     report.collected = collect_orphans(tx, input.family, &recent)?;
     Ok(report)
+}
+
+/// Bind the headings and blocks of the notes, and mint an id for each one that no entity claims.
+/// The keys of these children hold the entity id of their note, so the notes are bound first.
+fn bind_note_children(
+    tx: &Transaction<'_>,
+    ids: &dyn IdSource,
+    pool: &mut Pool<'_>,
+    entity_of: &mut [Option<String>],
+    by_key: &HashMap<&str, usize>,
+    digest: &str,
+    report: &mut RebindReport,
+) -> Result<(), ScippyError> {
+    for n in 0..pool.items.len() {
+        let item = &pool.items[n];
+        let (Some(note_key), Some(suffix)) = (&item.parent_key, &item.child_name) else {
+            continue;
+        };
+        let Some(note) = by_key
+            .get(note_key.as_str())
+            .and_then(|&p| entity_of[p].clone())
+        else {
+            continue;
+        };
+        let key = child_key(&note, suffix);
+        let item = &mut pool.items[n];
+        item.key = key;
+        item.parent_key = Some(note);
+    }
+    pool.children = true;
+    pool.run_child_tiers();
+    for (o, bound) in pool.old_bound.clone().into_iter().enumerate() {
+        let Some((n, tier)) = bound else { continue };
+        let old = &pool.olds[o];
+        if !old.is_child() {
+            continue;
+        }
+        let item = &pool.items[n];
+        apply_bind(tx, old, item, &item.key, tier, digest)?;
+        // A block that moved to another note has a new parent.
+        if old.parent_id != item.parent_key {
+            tx.execute(
+                "UPDATE entity SET parent_id = ?2 WHERE id = ?1",
+                params![old.id, item.parent_key],
+            )
+            .map_err(storage)?;
+        }
+        entity_of[n] = Some(old.id.clone());
+        *report.bound.entry(tier.as_str()).or_default() += 1;
+    }
+    for n in 0..pool.items.len() {
+        let item = &pool.items[n];
+        if !item.is_child() || item.key.is_empty() || pool.new_bound[n].is_some() {
+            continue;
+        }
+        let parent = item.parent_key.clone();
+        mint(
+            tx,
+            ids,
+            Family::Note,
+            item,
+            parent.as_deref(),
+            &item.key,
+            digest,
+        )?;
+        report.minted += 1;
+    }
+    Ok(())
 }
 
 fn set_meta(tx: &Transaction<'_>, key: &str, value: &str) -> Result<(), ScippyError> {

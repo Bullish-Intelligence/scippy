@@ -73,6 +73,7 @@
 
 mod config;
 mod front;
+mod ident;
 mod note;
 mod policy;
 mod resolve;
@@ -401,6 +402,11 @@ fn build_output(
     output: &mut NativeOutput,
 ) {
     let readable: HashSet<&str> = input.sources.iter().map(|s| s.path.as_str()).collect();
+    let texts: HashMap<&str, &str> = input
+        .sources
+        .iter()
+        .map(|s| (s.path.as_str(), &*s.text))
+        .collect();
     let mut tag_keys: HashSet<String> = HashSet::new();
     let mut stubs: BTreeMap<String, ProjectRelativePath> = BTreeMap::new();
     for (path, note) in notes {
@@ -411,6 +417,7 @@ fn build_output(
             continue;
         };
         let mut declarations = Vec::new();
+        let records = ident::anchor_records(note, texts.get(path.as_str()).copied().unwrap_or(""));
         let mut headings = HashMap::new();
         let mut blocks = HashMap::new();
         let mut aliases = HashMap::new();
@@ -442,6 +449,7 @@ fn build_output(
                 name,
                 kind,
                 of_module: false,
+                note: records.get(&anchor.span).cloned(),
             });
         }
         for (alias, start, end) in &note.aliases {
@@ -453,6 +461,7 @@ fn build_output(
                 name: unique(&mut aliases, &format!("alias:{alias}")),
                 kind: DeclKind::Alias,
                 of_module: true,
+                note: None,
             });
         }
         let mut references = Vec::new();
@@ -600,6 +609,7 @@ fn build_output(
             path: rel,
             stub: false,
             module: true,
+            note: Some(ident::note_record(note)),
             declarations,
             references,
         });
@@ -609,6 +619,7 @@ fn build_output(
             path,
             stub: true,
             module: true,
+            note: None,
             declarations: Vec::new(),
             references: Vec::new(),
         });

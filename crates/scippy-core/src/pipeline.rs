@@ -1141,6 +1141,23 @@ fn index_native_pack(
             declared: Vec::new(),
         };
         doc.declared = assign_identities(&*model, &mut builder, &doc)?;
+        // The pack gives the facts of notes, headings, and blocks. They join by the span.
+        let notes: HashMap<(u32, u32), &crate::snapshot::NoteRecord> = native_doc
+            .declarations
+            .iter()
+            .filter_map(|d| d.note.as_ref().map(|n| (d.span, n)))
+            .collect();
+        for d in &mut doc.declared {
+            let record = if d.fact.kind == DeclKind::Module {
+                native_doc.note.as_ref()
+            } else {
+                let anchor = &d.fact.anchor;
+                notes.get(&(anchor.start_byte, anchor.end_byte)).copied()
+            };
+            if let (Some(record), Some(decl)) = (record, d.decl.as_mut()) {
+                decl.note = Some(record.clone());
+            }
+        }
         report.declarations += doc.declared.len();
         for d in &doc.declared {
             index.insert_scoped(

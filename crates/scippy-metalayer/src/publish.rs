@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::identity::{Family, IdSource, Identity, IdentityOptions};
 use crate::rebind::{
-    META_BOUND_ITEMS_DIGEST, RebindInput, RebindReport, orphan_children_of_orphans, rebind,
+    RebindInput, RebindReport, items_meta_key, orphan_children_of_orphans, rebind,
 };
 use crate::schema::{SCHEMA_VERSION, storage};
 
@@ -621,19 +621,29 @@ pub(crate) fn publish(
                 .filter(|(old, _)| bound.as_deref() == Some(old))
                 .map(|(_, files)| files);
             let input = RebindInput::from_snapshot(s, &digest, old_files);
+            let notes = RebindInput::notes_from_snapshot(s, &digest);
             // The input digest does not cover the package version, which is in each symbol.
             // The items digest does, so a version-only bump rebinds.
             let same = bound.as_deref() == Some(digest.as_str())
-                && store.meta(META_BOUND_ITEMS_DIGEST)?.as_deref()
-                    == Some(input.items_digest().as_str());
+                && [&input, &notes].iter().all(|input| {
+                    store
+                        .meta(items_meta_key(input.family))
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        == Some(input.items_digest().as_str())
+                });
             if same {
                 orphan_children_of_orphans(&mut store, Family::Code, &digest)?;
+                orphan_children_of_orphans(&mut store, Family::Note, &digest)?;
                 Some(RebindReport {
                     skipped: true,
                     ..RebindReport::default()
                 })
             } else {
-                Some(rebind(&mut store, &input, ids)?)
+                let mut report = rebind(&mut store, &input, ids)?;
+                report.merge(rebind(&mut store, &notes, ids)?);
+                Some(report)
             }
         }
         None => None,
