@@ -57,3 +57,14 @@ debug = false
 [profile.dev]
 # Keep file and line numbers in backtraces. Drop variable debug info.
 debug = "line-tables-only"
+
+# The `gate` profile builds the tests. `cargo build`, `cargo check`, and clippy keep `dev`.
+# The gate profile has its own target subdir, so dev builds stay unoptimized.
+[profile.gate]
+# Start from the dev settings.
+inherits = "dev"
+
+# The core decodes the 13.8 MB builtins blob in each process. Unoptimized code needs 0.9 s for it.
+# The other workspace crates stay at opt-level 0, so a rebuild stays fast.
+[profile.gate.package.scippy-core]
+opt-level = 2

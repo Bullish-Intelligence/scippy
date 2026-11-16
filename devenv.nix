@@ -44,6 +44,8 @@ in
   # A test that asserts on time, speed, or resource use never joins the default set.
   # Testee runs `git clean -ffdx -e .devenv` in its slot, which deletes `target/`.
   # Each Cargo task sets `CARGO_TARGET_DIR` under `.devenv/`, so the build stays warm.
+  # The test tasks use the Cargo profile `gate` (see Cargo.toml): scippy-core at opt-level 2.
+  # `gate` builds into `gate/` next to `debug/`, so the lint and check builds stay warm too.
   tasks =
     let
       # Files that no check or test task reads.
@@ -112,7 +114,7 @@ in
         exec = ''
           ${cargoEnv}
           ${scipEnv}
-          cargo test --workspace --lib
+          cargo test --profile gate --workspace --lib
         '';
         input.testee.ignores = unread;
         input.testee.timeout_s = timeoutCompile;
@@ -124,8 +126,8 @@ in
         exec = ''
           ${cargoEnv}
           ${scipEnv}
-          cargo nextest run --workspace --profile ci
-          cargo test --workspace --doc
+          cargo nextest run --cargo-profile gate --workspace --profile ci
+          cargo test --profile gate --workspace --doc
         '';
         input.testee.ignores = unread;
         input.testee.timeout_s = timeoutFull;
