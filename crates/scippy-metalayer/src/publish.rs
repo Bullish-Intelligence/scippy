@@ -11,8 +11,10 @@ use scippy_core::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::identity::{IdSource, Identity, IdentityOptions};
-use crate::rebind::{RebindInput, RebindReport, rebind};
+use crate::identity::{Family, IdSource, Identity, IdentityOptions};
+use crate::rebind::{
+    META_BOUND_ITEMS_DIGEST, RebindInput, RebindReport, orphan_children_of_orphans, rebind,
+};
 use crate::schema::{SCHEMA_VERSION, storage};
 
 /// The version of the digest format. Change it when the digest input changes.
@@ -230,7 +232,9 @@ pub(crate) fn publish(
                 let rows = st
                     .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
                     .map_err(storage)?;
-                let files = rows.collect::<Result<BTreeMap<_, _>, _>>().map_err(storage)?;
+                let files = rows
+                    .collect::<Result<BTreeMap<_, _>, _>>()
+                    .map_err(storage)?;
                 Some((digest, files))
             }
             None => None,
@@ -612,16 +616,23 @@ pub(crate) fn publish(
                 replace_root_set: o.replace_root_set,
             };
             let mut store = Identity::open(path, &options)?;
-            if store.bound_input_digest()?.as_deref() == Some(digest.as_str()) {
+            let bound = store.bound_input_digest()?;
+            let old_files = previous
+                .filter(|(old, _)| bound.as_deref() == Some(old))
+                .map(|(_, files)| files);
+            let input = RebindInput::from_snapshot(s, &digest, old_files);
+            // The input digest does not cover the package version, which is in each symbol.
+            // The items digest does, so a version-only bump rebinds.
+            let same = bound.as_deref() == Some(digest.as_str())
+                && store.meta(META_BOUND_ITEMS_DIGEST)?.as_deref()
+                    == Some(input.items_digest().as_str());
+            if same {
+                orphan_children_of_orphans(&mut store, Family::Code, &digest)?;
                 Some(RebindReport {
                     skipped: true,
                     ..RebindReport::default()
                 })
             } else {
-                let old_files = previous
-                    .filter(|(old, _)| store.bound_input_digest().ok().flatten().as_deref() == Some(old))
-                    .map(|(_, files)| files);
-                let input = RebindInput::from_snapshot(s, &digest, old_files);
                 Some(rebind(&mut store, &input, ids)?)
             }
         }

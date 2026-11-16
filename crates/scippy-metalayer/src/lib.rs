@@ -29,14 +29,14 @@ pub use identity::{
     split_container,
 };
 pub use publish::{PublishOptions, Published};
-pub use rebind::{
-    Item as RebindItem, MIN_BODY_TOKENS, ORPHAN_GC_PUBLISHES, RebindInput, RebindReport, child_key,
-    entity_kind, rebind, rebind_with, symbol_key,
-};
 pub use query::{Counts, Probe, SymbolRecord};
 pub use query::{EdgeQuery, RelationQuery2, RelationRecord};
 pub use query::{FileState, compare_file};
 pub use read::View;
+pub use rebind::{
+    Item as RebindItem, MIN_BODY_TOKENS, MIN_BODY_TOKENS_ENV, ORPHAN_GC_PUBLISHES, RebindInput,
+    RebindReport, child_key, entity_kind, min_body_tokens, rebind, rebind_with, symbol_key,
+};
 pub use records::{
     DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
     OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery, ReferenceRecord,

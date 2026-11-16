@@ -9,13 +9,14 @@
 //! tiers on top of [`Pool`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt::Write;
 
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use scippy_core::{AnalysisSnapshot, ScippyError};
 
 use crate::identity::{
-    EntityKind, Family, IdSource, Identity, LOCATOR_HISTORY, Locator, Outcome, OutcomeRow, Tier,
-    join_container,
+    EntityKind, Family, IdSource, Identity, Locator, Outcome, OutcomeRow, Tier, join_container,
+    push_locator_in,
 };
 use crate::schema::storage;
 
@@ -23,11 +24,28 @@ use crate::schema::storage;
 /// size is too short to tell two declarations apart. `id-eval` calibrates the value.
 pub const MIN_BODY_TOKENS: i64 = 10;
 
+/// The environment variable that overrides [`MIN_BODY_TOKENS`] for one run. Evaluation sweeps
+/// use it. It is not a stable interface: a later version may remove it.
+pub const MIN_BODY_TOKENS_ENV: &str = "SCIPPY_IDENTITY_MIN_BODY_TOKENS";
+
+/// The minimum body size of this run: the variable [`MIN_BODY_TOKENS_ENV`] when it holds a
+/// whole number, else [`MIN_BODY_TOKENS`].
+pub fn min_body_tokens() -> i64 {
+    std::env::var(MIN_BODY_TOKENS_ENV)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(MIN_BODY_TOKENS)
+}
+
 /// An unannotated orphan goes after this many rebindings.
 pub const ORPHAN_GC_PUBLISHES: usize = 100;
 
 /// The `meta` key of the digests of the most recent rebindings, one per line.
 const META_RECENT_DIGESTS: &str = "recent_digests";
+
+/// The `meta` key of the digest of the items of the last rebinding. Publish skips the
+/// rebinding only when the input digest and this digest both match.
+pub(crate) const META_BOUND_ITEMS_DIGEST: &str = "bound_items_digest";
 
 /// The separator of the parts of a compound key in memory.
 const SEP: char = '\u{1f}';
@@ -65,11 +83,7 @@ pub fn symbol_key(symbol: &str) -> Option<String> {
         }
         at += 1;
     }
-    Some(format!(
-        "{}.{}",
-        &symbol[..version.0],
-        &symbol[version.1..]
-    ))
+    Some(format!("{}.{}", &symbol[..version.0], &symbol[version.1..]))
 }
 
 /// The identity key of a child: the entity id of the parent and the name of the child.
@@ -203,6 +217,33 @@ impl RebindInput {
     }
 }
 
+impl RebindInput {
+    /// A digest of everything in the items that a rebinding reads or writes: the symbol, the
+    /// path, the name, the container, and the digests. A change of the package version changes
+    /// the symbol strings and so this digest, while the input digest of the facts can stay.
+    pub fn items_digest(&self) -> String {
+        let mut text = String::new();
+        let mut field = |value: &str| {
+            let _ = writeln!(text, "{}:{value}", value.len());
+        };
+        field(self.family.as_str());
+        for item in &self.items {
+            field(&item.key);
+            field(item.kind.as_str());
+            field(item.symbol.as_deref().unwrap_or(""));
+            field(&item.path);
+            field(&item.name);
+            field(&item.container);
+            field(item.sig_digest.as_deref().unwrap_or(""));
+            field(item.body_digest.as_deref().unwrap_or(""));
+            field(&item.body_tokens.map_or_else(String::new, |t| t.to_string()));
+            field(item.parent_key.as_deref().unwrap_or(""));
+            field(item.child_name.as_deref().unwrap_or(""));
+        }
+        crate::publish::sha256_hex(text.as_bytes())
+    }
+}
+
 /// What one rebinding did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -246,6 +287,10 @@ impl Old {
         self.parent_id.is_some()
     }
 }
+
+/// The result of one tier: the one-to-one pairs, and the candidates of each old entity that
+/// has candidates but no pair.
+type Found = (Vec<(usize, usize)>, Vec<(usize, Vec<usize>)>);
 
 /// How a tier pairs old entities with items.
 struct Spec<'f> {
@@ -318,7 +363,7 @@ impl<'a> Pool<'a> {
 
     /// Find the pairs of one tier without applying them. The result holds the one-to-one pairs
     /// and, for each old entity that has candidates but no pair, its candidates.
-    fn find(&self, spec: &Spec<'_>) -> (Vec<(usize, usize)>, Vec<(usize, Vec<usize>)>) {
+    fn find(&self, spec: &Spec<'_>) -> Found {
         let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
         for (n, item) in self.input.items.iter().enumerate() {
             if item.is_child() || self.new_bound[n].is_some() {
@@ -443,7 +488,11 @@ impl<'a> Pool<'a> {
         if !pairs.is_empty() {
             // A module has one name for each file, and the name follows the file.
             let place = |path: &str, container: &str, name: &str, kind: &str| {
-                let name = if kind == EntityKind::Module.as_str() { "" } else { name };
+                let name = if kind == EntityKind::Module.as_str() {
+                    ""
+                } else {
+                    name
+                };
                 format!("{path}{SEP}{container}{SEP}{name}{SEP}{kind}")
             };
             self.run(&Spec {
@@ -576,7 +625,9 @@ impl<'a> Pool<'a> {
                 }
             }
             for (hash, from) in &old_by_hash {
-                if let (&[from], Some(&[to])) = (from.as_slice(), new_by_hash.get(hash).map(|v| v.as_slice())) {
+                if let (&[from], Some(&[to])) =
+                    (from.as_slice(), new_by_hash.get(hash).map(|v| v.as_slice()))
+                {
                     pairs.insert(from.to_owned(), to.to_owned());
                 }
             }
@@ -771,7 +822,9 @@ fn load_olds(tx: &Transaction<'_>, family: Family) -> Result<Vec<Old>, ScippyErr
             continue;
         };
         let Some(kind) = EntityKind::parse(&kind) else {
-            return Err(ScippyError::Storage(format!("unknown entity kind {kind:?}")));
+            return Err(ScippyError::Storage(format!(
+                "unknown entity kind {kind:?}"
+            )));
         };
         olds.push(Old {
             older_keys: older.remove(&id).unwrap_or_default(),
@@ -842,28 +895,6 @@ fn insert_locator(tx: &Transaction<'_>, l: &Locator) -> Result<(), ScippyError> 
     })
     .map_err(storage)?;
     Ok(())
-}
-
-/// Make `l` the current locator: older locators move up by one, and the store keeps the newest
-/// [`LOCATOR_HISTORY`].
-fn push_locator(tx: &Transaction<'_>, l: &Locator) -> Result<(), ScippyError> {
-    // Two steps keep the primary key free of clashes while the seq numbers move.
-    tx.execute(
-        "UPDATE locator SET seq = -(seq + 1) WHERE entity_id = ?1",
-        [&l.entity_id],
-    )
-    .map_err(storage)?;
-    tx.execute(
-        "UPDATE locator SET seq = -seq WHERE entity_id = ?1",
-        [&l.entity_id],
-    )
-    .map_err(storage)?;
-    tx.execute(
-        "DELETE FROM locator WHERE entity_id = ?1 AND seq >= ?2",
-        params![l.entity_id, LOCATOR_HISTORY as i64],
-    )
-    .map_err(storage)?;
-    insert_locator(tx, l)
 }
 
 /// Replace locator 0. The history stays.
@@ -980,14 +1011,16 @@ fn apply_bind(
 ) -> Result<(), ScippyError> {
     let new = locator_of(&old.id, item, key, digest);
     let exact = matches!(tier, Tier::T1 | Tier::T1H | Tier::Param);
-    let in_place =
-        exact && old.cur.path == new.path && old.cur.container == new.container && old.cur.name == new.name;
+    let in_place = exact
+        && old.cur.path == new.path
+        && old.cur.container == new.container
+        && old.cur.name == new.name;
     if in_place {
         if differs(&old.cur, &new) {
             update_locator(tx, &new)?;
         }
     } else {
-        push_locator(tx, &new)?;
+        push_locator_in(tx, &new)?;
     }
     if exact {
         // A `moved` entity stays flagged until accept or reject. Any other state clears.
@@ -1026,7 +1059,7 @@ pub fn rebind(
     input: &RebindInput,
     ids: &dyn IdSource,
 ) -> Result<RebindReport, ScippyError> {
-    rebind_with(identity, input, ids, MIN_BODY_TOKENS)
+    rebind_with(identity, input, ids, min_body_tokens())
 }
 
 /// [`rebind`] with a chosen minimum body size. The tests and the calibration use it.
@@ -1185,12 +1218,16 @@ fn rebind_in(
         .map_err(storage)?
         .map(|text| text.lines().map(str::to_owned).collect())
         .unwrap_or_default();
-    recent.push(digest.to_owned());
+    if recent.last().map(String::as_str) != Some(digest) {
+        recent.push(digest.to_owned());
+    }
     if recent.len() > ORPHAN_GC_PUBLISHES {
         recent.drain(..recent.len() - ORPHAN_GC_PUBLISHES);
     }
     set_meta(tx, META_RECENT_DIGESTS, &recent.join("\n"))?;
     set_meta(tx, "bound_input_digest", digest)?;
+    set_meta(tx, META_BOUND_ITEMS_DIGEST, &input.items_digest())?;
+    orphan_children(tx, input.family, digest)?;
     report.collected = collect_orphans(tx, input.family, &recent)?;
     Ok(report)
 }
@@ -1246,4 +1283,40 @@ fn collect_orphans(
         }
     }
     Ok(dead.len())
+}
+
+/// Orphan each child whose parent is orphaned. A parent that `reject` orphaned leaves its
+/// parameters `matched` in the store, and no rebinding runs when the input stays the same.
+fn orphan_children(
+    tx: &Transaction<'_>,
+    family: Family,
+    digest: &str,
+) -> Result<usize, ScippyError> {
+    tx.execute(
+        "INSERT INTO outcome (entity_id, outcome, tier, candidates, since_digest)
+         SELECT c.id, 'orphaned', NULL, NULL, ?1 FROM entity c
+         JOIN outcome p ON p.entity_id = c.parent_id AND p.outcome = 'orphaned'
+         WHERE c.family = ?2
+           AND NOT EXISTS (SELECT 1 FROM outcome o WHERE o.entity_id = c.id AND o.outcome = 'orphaned')
+         ON CONFLICT(entity_id) DO UPDATE SET outcome = 'orphaned', tier = NULL,
+           candidates = NULL, since_digest = excluded.since_digest",
+        params![digest, family.as_str()],
+    )
+    .map_err(storage)
+}
+
+/// Orphan the children of the orphaned entities of a family, without a rebinding. Publish calls
+/// it when the store is already bound to the input, so a `reject` takes effect on parameters.
+pub fn orphan_children_of_orphans(
+    identity: &mut Identity,
+    family: Family,
+    input_digest: &str,
+) -> Result<usize, ScippyError> {
+    let tx = identity
+        .db
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage)?;
+    let n = orphan_children(&tx, family, input_digest)?;
+    tx.commit().map_err(storage)?;
+    Ok(n)
 }

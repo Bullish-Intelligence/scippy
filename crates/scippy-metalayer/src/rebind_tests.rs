@@ -113,6 +113,8 @@ struct World {
     ids: FixedIds,
     ver: String,
     tag: String,
+    /// The version is part of the options of the run. A test turns it off.
+    ver_in_options: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -136,6 +138,7 @@ impl World {
             ids: FixedIds::default(),
             ver: "1.0".into(),
             tag: String::new(),
+            ver_in_options: true,
         }
     }
 
@@ -211,7 +214,11 @@ impl World {
             tool_version: "test".into(),
             project_root: "/project".into(),
             shards: Vec::new(),
-            options: format!("{}/{}", self.ver, self.tag),
+            options: if self.ver_in_options {
+                format!("{}/{}", self.ver, self.tag)
+            } else {
+                self.tag.clone()
+            },
         }
     }
 
@@ -287,9 +294,18 @@ impl World {
         let db = self.db();
         let mut out = Vec::new();
         for (table, sql) in [
-            ("entity", "SELECT id, family, kind, ifnull(parent_id,''), created_at FROM entity ORDER BY id"),
-            ("locator", "SELECT entity_id, seq, key, ifnull(symbol,''), path, name, container, ifnull(sig_digest,''), ifnull(body_digest,''), input_digest FROM locator ORDER BY entity_id, seq"),
-            ("outcome", "SELECT entity_id, outcome, ifnull(tier,''), ifnull(candidates,''), since_digest FROM outcome ORDER BY entity_id"),
+            (
+                "entity",
+                "SELECT id, family, kind, ifnull(parent_id,''), created_at FROM entity ORDER BY id",
+            ),
+            (
+                "locator",
+                "SELECT entity_id, seq, key, ifnull(symbol,''), path, name, container, ifnull(sig_digest,''), ifnull(body_digest,''), input_digest FROM locator ORDER BY entity_id, seq",
+            ),
+            (
+                "outcome",
+                "SELECT entity_id, outcome, ifnull(tier,''), ifnull(candidates,''), since_digest FROM outcome ORDER BY entity_id",
+            ),
         ] {
             let mut st = db.prepare(sql).unwrap();
             let n = st.column_count();
@@ -310,9 +326,14 @@ impl World {
         let id = self.row(desc).id;
         let text: Option<String> = self
             .db()
-            .query_row("SELECT candidates FROM outcome WHERE entity_id = ?1", [id], |r| r.get(0))
+            .query_row(
+                "SELECT candidates FROM outcome WHERE entity_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
             .unwrap();
-        text.map(|t| serde_json::from_str(&t).unwrap()).unwrap_or_default()
+        text.map(|t| serde_json::from_str(&t).unwrap())
+            .unwrap_or_default()
     }
 
     fn store(&self) -> Identity {
@@ -382,7 +403,9 @@ fn a_version_bump_binds_every_declaration_by_t1() {
     assert_eq!(w.count("locator"), 4);
     let symbol: String = w
         .db()
-        .query_row("SELECT symbol FROM locator WHERE name = 'f'", [], |r| r.get(0))
+        .query_row("SELECT symbol FROM locator WHERE name = 'f'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert!(symbol.contains(" 2.0 "));
 }
@@ -390,7 +413,10 @@ fn a_version_bump_binds_every_declaration_by_t1() {
 #[test]
 fn publishing_the_same_input_twice_changes_nothing() {
     let mut w = World::new();
-    let files = vec![file("a.py", vec![func("a/f().", "f"), variable("a/x.", "x")])];
+    let files = vec![file(
+        "a.py",
+        vec![func("a/f().", "f"), variable("a/x.", "x")],
+    )];
     w.publish(&files);
     let before = w.dump();
     let again = w.publish(&files);
@@ -419,7 +445,11 @@ fn an_inserted_declaration_mints_and_the_old_ones_keep_their_ids() {
     let before = w.row("a/f().").id;
     let report = w.publish(&[file(
         "a.py",
-        vec![func("a/h().", "h"), func("a/g().", "g"), func("a/f().", "f")],
+        vec![
+            func("a/h().", "h"),
+            func("a/g().", "g"),
+            func("a/f().", "f"),
+        ],
     )]);
     assert_eq!(report.minted, 1);
     assert_eq!(w.row("a/f().").id, before);
@@ -431,7 +461,10 @@ fn an_inserted_declaration_mints_and_the_old_ones_keep_their_ids() {
 fn t1h_resurrects_the_ids_after_a_branch_switch() {
     let mut w = World::new();
     let a = vec![file("a.py", vec![func("a/f().", "f"), func("a/g().", "g")])];
-    let b = vec![file("a.py", vec![func("a/h().", "h").sig("other").body("other")])];
+    let b = vec![file(
+        "a.py",
+        vec![func("a/h().", "h").sig("other").body("other")],
+    )];
     w.publish(&a);
     let (f, g) = (w.row("a/f().").id, w.row("a/g().").id);
     w.publish(&b);
@@ -458,7 +491,10 @@ fn t1h_binds_a_key_that_an_older_locator_held() {
     let id = w.row("a/f().").id;
     w.publish(&[
         file("a.py", vec![func("a/pad().", "pad")]),
-        file("b.py", vec![func("b/f().", "f"), func("b/other().", "other")]),
+        file(
+            "b.py",
+            vec![func("b/f().", "f"), func("b/other().", "other")],
+        ),
     ]);
     assert_eq!(w.state("b/f()."), "moved:T3");
     w.publish(&[
@@ -477,7 +513,10 @@ fn t2_binds_the_same_path_name_and_kind_with_another_container() {
     let mut w = World::new();
     w.publish(&[file("a.py", vec![func("a/f().", "f")])]);
     let id = w.row("a/f().").id;
-    let report = w.publish(&[file("a.py", vec![func("a/C#f().", "f").within(&["C"]).sig("s2").body("b2")])]);
+    let report = w.publish(&[file(
+        "a.py",
+        vec![func("a/C#f().", "f").within(&["C"]).sig("s2").body("b2")],
+    )]);
     assert_eq!(report.bound.get("T2"), Some(&1));
     let row = w.row("a/C#f().");
     assert_eq!(row.id, id);
@@ -490,7 +529,10 @@ fn t2_with_two_claimants_leaves_both_ambiguous_and_mints() {
     let mut w = World::new();
     w.publish(&[file(
         "a.py",
-        vec![func("a/C#f().", "f").within(&["C"]), func("a/D#f().", "f").within(&["D"])],
+        vec![
+            func("a/C#f().", "f").within(&["C"]),
+            func("a/D#f().", "f").within(&["D"]),
+        ],
     )]);
     let report = w.publish(&[file("a.py", vec![func("a/E#f().", "f").within(&["E"])])]);
     assert_eq!(report.ambiguous, 2);
@@ -512,7 +554,10 @@ fn t2_narrows_by_the_signature_digest() {
         ],
     )]);
     let one = w.row("a/C#f().").id;
-    w.publish(&[file("a.py", vec![func("a/E#f().", "f").within(&["E"]).sig("one")])]);
+    w.publish(&[file(
+        "a.py",
+        vec![func("a/E#f().", "f").within(&["E"]).sig("one")],
+    )]);
     assert_eq!(w.row("a/E#f().").id, one);
     assert_eq!(state_of(&w.row("a/E#f().")), "moved:T2");
     assert_eq!(w.state("a/D#f()."), "orphaned");
@@ -553,7 +598,10 @@ fn t3_binds_a_declaration_that_moves_to_another_file() {
     let id = w.row("a/f().").id;
     let report = w.publish(&[
         file("a.py", vec![func("a/g().", "g")]),
-        file("b.py", vec![func("b/f().", "f").body("edited"), func("b/h().", "h")]),
+        file(
+            "b.py",
+            vec![func("b/f().", "f").body("edited"), func("b/h().", "h")],
+        ),
     ]);
     assert_eq!(report.bound.get("T3"), Some(&1));
     let row = w.row("b/f().");
@@ -587,13 +635,19 @@ fn t3_with_equal_content_in_two_files_is_ambiguous() {
 fn t4_binds_a_renamed_declaration_in_another_file_by_its_body() {
     let mut w = World::new();
     w.publish(&[
-        file("a.py", vec![func("a/f().", "f").body("big"), func("a/p().", "p")]),
+        file(
+            "a.py",
+            vec![func("a/f().", "f").body("big"), func("a/p().", "p")],
+        ),
         file("b.py", vec![func("b/q().", "q")]),
     ]);
     let id = w.row("a/f().").id;
     let report = w.publish(&[
         file("a.py", vec![func("a/p().", "p")]),
-        file("b.py", vec![func("b/q().", "q"), func("b/g().", "g").body("big")]),
+        file(
+            "b.py",
+            vec![func("b/q().", "q"), func("b/g().", "g").body("big")],
+        ),
     ]);
     assert_eq!(report.bound.get("T4"), Some(&1));
     assert_eq!(w.row("b/g().").id, id);
@@ -604,7 +658,14 @@ fn t4_binds_a_renamed_declaration_in_another_file_by_its_body() {
 fn t4_needs_the_minimum_body_size() {
     let mut w = World::new();
     w.publish(&[
-        file("a.py", vec![func("a/f().", "f").body("big").tokens(MIN_BODY_TOKENS as u32 - 1)]),
+        file(
+            "a.py",
+            vec![
+                func("a/f().", "f")
+                    .body("big")
+                    .tokens(MIN_BODY_TOKENS as u32 - 1),
+            ],
+        ),
         file("b.py", vec![func("b/q().", "q")]),
     ]);
     let id = w.row("a/f().").id;
@@ -612,7 +673,12 @@ fn t4_needs_the_minimum_body_size() {
         file("a.py", vec![]),
         file(
             "b.py",
-            vec![func("b/q().", "q"), func("b/g().", "g").body("big").tokens(MIN_BODY_TOKENS as u32 - 1)],
+            vec![
+                func("b/q().", "q"),
+                func("b/g().", "g")
+                    .body("big")
+                    .tokens(MIN_BODY_TOKENS as u32 - 1),
+            ],
         ),
     ]);
     assert_ne!(w.row("b/g().").id, id);
@@ -624,7 +690,10 @@ fn t5_binds_a_rename_inside_a_file() {
     let mut w = World::new();
     w.publish(&[file("a.py", vec![func("a/f().", "f").body("big")])]);
     let id = w.row("a/f().").id;
-    let report = w.publish(&[file("a.py", vec![func("a/g().", "g").body("big").sig("sig2")])]);
+    let report = w.publish(&[file(
+        "a.py",
+        vec![func("a/g().", "g").body("big").sig("sig2")],
+    )]);
     assert_eq!(report.bound.get("T5"), Some(&1));
     assert_eq!(w.row("a/g().").id, id);
     assert_eq!(state_of(&w.row("a/g().")), "moved:T5");
@@ -633,10 +702,21 @@ fn t5_binds_a_rename_inside_a_file() {
 #[test]
 fn a_variable_skips_t3_and_t4() {
     let mut w = World::new();
-    let var = |d: &str| Sym { sig: Some("s".into()), body: Some("b".into()), tokens: Some(50), ..variable(d, "x") };
-    w.publish(&[file("a.py", vec![var("a/x.")]), file("b.py", vec![func("b/k().", "k")])]);
+    let var = |d: &str| Sym {
+        sig: Some("s".into()),
+        body: Some("b".into()),
+        tokens: Some(50),
+        ..variable(d, "x")
+    };
+    w.publish(&[
+        file("a.py", vec![var("a/x.")]),
+        file("b.py", vec![func("b/k().", "k")]),
+    ]);
     let id = w.row("a/x.").id;
-    w.publish(&[file("a.py", vec![]), file("b.py", vec![func("b/k().", "k"), var("b/x.")])]);
+    w.publish(&[
+        file("a.py", vec![]),
+        file("b.py", vec![func("b/k().", "k"), var("b/x.")]),
+    ]);
     assert_ne!(w.row("b/x.").id, id);
     assert_eq!(w.state("a/x."), "orphaned");
 }
@@ -682,9 +762,15 @@ fn a_renamed_and_edited_file_pairs_by_the_probe() {
         )
         .source(source)
     };
-    w.publish(&[make("a.py", "a", "one"), file("c.py", vec![func("c/k().", "k")])]);
+    w.publish(&[
+        make("a.py", "a", "one"),
+        file("c.py", vec![func("c/k().", "k")]),
+    ]);
     let x = w.row("a/x.").id;
-    let report = w.publish(&[make("b.py", "b", "two"), file("c.py", vec![func("c/k().", "k")])]);
+    let report = w.publish(&[
+        make("b.py", "b", "two"),
+        file("c.py", vec![func("c/k().", "k")]),
+    ]);
     assert_eq!(report.bound.get("T2f"), Some(&3));
     assert_eq!(w.row("b/x.").id, x);
     assert_eq!(w.state("b/x."), "moved:T2f");
@@ -694,7 +780,14 @@ fn a_renamed_and_edited_file_pairs_by_the_probe() {
 fn one_hit_is_not_enough_for_the_probe() {
     let mut w = World::new();
     let make = |path: &str, stem: &str, source: &str| {
-        file(path, vec![func(&format!("{stem}/f()."), "f"), variable(&format!("{stem}/x."), "x")]).source(source)
+        file(
+            path,
+            vec![
+                func(&format!("{stem}/f()."), "f"),
+                variable(&format!("{stem}/x."), "x"),
+            ],
+        )
+        .source(source)
     };
     w.publish(&[make("a.py", "a", "one")]);
     let x = w.row("a/x.").id;
@@ -709,8 +802,14 @@ fn one_hit_is_not_enough_for_the_probe() {
 fn a_copied_file_mints_new_ids_and_the_original_keeps_its_own() {
     let mut w = World::new();
     let make = |path: &str, stem: &str| {
-        file(path, vec![func(&format!("{stem}/f()."), "f"), variable(&format!("{stem}/x."), "x")])
-            .source("same text")
+        file(
+            path,
+            vec![
+                func(&format!("{stem}/f()."), "f"),
+                variable(&format!("{stem}/x."), "x"),
+            ],
+        )
+        .source("same text")
     };
     w.publish(&[make("a.py", "a")]);
     let ids = ids_of(&w);
@@ -777,11 +876,17 @@ fn a_parameter_of_an_orphaned_parent_is_orphaned() {
     let mut w = World::new();
     let with = vec![file(
         "a.py",
-        vec![func("a/f().", "f"), param("a/f().", "a/f().(p)", "p").within(&["f"])],
+        vec![
+            func("a/f().", "f"),
+            param("a/f().", "a/f().(p)", "p").within(&["f"]),
+        ],
     )];
     w.publish(&with);
     let p = w.param("a/f().", "p").id;
-    w.publish(&[file("a.py", vec![func("a/other().", "other").sig("o").body("o")])]);
+    w.publish(&[file(
+        "a.py",
+        vec![func("a/other().", "other").sig("o").body("o")],
+    )]);
     let row = w.rows().into_iter().find(|r| r.id == p).unwrap();
     assert_eq!(state_of(&row), "orphaned");
     // The parent comes back, and so does the parameter.
@@ -815,7 +920,11 @@ fn a_t1_match_with_a_new_path_pushes_a_locator_and_the_history_keeps_16() {
     }
     let n: i64 = w
         .db()
-        .query_row("SELECT count(*) FROM locator WHERE entity_id = ?1", [&id], |r| r.get(0))
+        .query_row(
+            "SELECT count(*) FROM locator WHERE entity_id = ?1",
+            [&id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(n, 16);
     assert_eq!(w.rows().len(), 1);
@@ -824,7 +933,13 @@ fn a_t1_match_with_a_new_path_pushes_a_locator_and_the_history_keeps_16() {
 #[test]
 fn an_unannotated_orphan_goes_after_100_publishes_and_an_annotated_one_stays() {
     let mut w = World::new();
-    w.publish(&[file("a.py", vec![func("a/f().", "f"), func("a/g().", "g").sig("sg").body("bg")])]);
+    w.publish(&[file(
+        "a.py",
+        vec![
+            func("a/f().", "f"),
+            func("a/g().", "g").sig("sg").body("bg"),
+        ],
+    )]);
     let annotated = w.row("a/g().").id;
     {
         let mut store = w.store();
@@ -886,8 +1001,14 @@ fn the_identity_store_has_its_own_root_set_guard() {
     s.project_root = "/elsewhere".into();
     let path = w.identity_path();
     let refused = other.publish_with_identity_ids(&s, &PublishOptions::default(), &path, &w.ids);
-    assert!(matches!(refused, Err(scippy_core::ScippyError::RootSetMismatch { .. })));
-    let options = PublishOptions { replace_root_set: true, ..PublishOptions::default() };
+    assert!(matches!(
+        refused,
+        Err(scippy_core::ScippyError::RootSetMismatch { .. })
+    ));
+    let options = PublishOptions {
+        replace_root_set: true,
+        ..PublishOptions::default()
+    };
     let report = other
         .publish_with_identity_ids(&s, &options, &path, &w.ids)
         .unwrap()
@@ -920,4 +1041,72 @@ fn an_orphan_row_is_not_rewritten_by_the_next_run() {
     w.tag = "later".into();
     w.publish(&[file("a.py", vec![func("a/h().", "h").sig("x").body("x")])]);
     assert_eq!(since(&w), first);
+}
+
+#[test]
+fn a_rejected_parent_orphans_its_parameters() {
+    let mut w = World::new();
+    let make = |name: &str| {
+        vec![file(
+            "a.py",
+            vec![
+                func(&format!("a/{name}()."), name).body("big"),
+                param(&format!("a/{name}()."), &format!("a/{name}().(p)"), "p").within(&[name]),
+            ],
+        )]
+    };
+    w.publish(&make("f"));
+    let parent = w.row("a/f().").id;
+    let old_param = w.param("a/f().", "p").id;
+    w.publish(&make("g"));
+    assert_eq!(w.state("a/g()."), "moved:T5");
+    assert_eq!(state_of(&w.param("a/g().", "p")), "matched");
+    // Reject the move. The parameter has no state of its own, so the store still shows it matched.
+    w.store().reject(&parent).unwrap();
+    // The same input again: the rebinding is skipped, and the parameter is still orphaned.
+    let again = w.publish(&make("g"));
+    assert!(again.skipped);
+    let after = |w: &World| w.rows().into_iter().find(|r| r.id == old_param).unwrap();
+    assert_eq!(state_of(&after(&w)), "orphaned");
+    // A later input: the declaration g mints a new entity, with a new parameter.
+    w.tag = "later".into();
+    w.publish(&make("g"));
+    assert_eq!(state_of(&after(&w)), "orphaned");
+    assert_ne!(w.row("a/g().").id, parent);
+    assert_ne!(w.param("a/g().", "p").id, old_param);
+    assert_eq!(state_of(&w.param("a/g().", "p")), "matched");
+}
+
+#[test]
+fn a_version_only_bump_rebinds_and_updates_the_symbol_in_place() {
+    let mut w = World::new();
+    w.ver_in_options = false;
+    let files = vec![file("a.py", vec![func("a/f().", "f"), variable("a/x.", "x")]).source("same")];
+    w.publish(&files);
+    let ids = ids_of(&w);
+    w.ver = "2.0".into();
+    let report = w.publish(&files);
+    // The facts input digest did not change, and the rebinding still ran.
+    assert!(!report.skipped);
+    assert_eq!(report.bound.get("T1"), Some(&2));
+    assert_eq!(ids_of(&w), ids);
+    assert_eq!(w.count("locator"), 2);
+    assert_eq!(w.count("outcome"), 0);
+    let symbols: Vec<String> = {
+        let db = w.db();
+        let mut st = db.prepare("SELECT symbol FROM locator").unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert!(symbols.iter().all(|s| s.contains(" 2.0 ")), "{symbols:?}");
+    // The same input again is skipped.
+    assert!(w.publish(&files).skipped);
+}
+
+#[test]
+fn the_minimum_body_size_reads_the_environment() {
+    // The variable is read when a run starts. Only a whole number counts.
+    assert_eq!(min_body_tokens(), MIN_BODY_TOKENS);
 }
