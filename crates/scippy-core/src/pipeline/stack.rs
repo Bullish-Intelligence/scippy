@@ -12,7 +12,7 @@ use crate::bindings::{BindingEngine, CompiledRules, RawBinding};
 use crate::cache::CacheGate;
 use crate::error::ScippyError;
 use crate::extract::{Extractor, SourceAnchor};
-use crate::identity::SymbolId;
+use crate::identity::{IdentityBuilder, SymbolId};
 use crate::inherit::Inheritance;
 use crate::language::{Analysis, DeclKind, ExtraFile, LanguagePack, ProjectModel, Scope};
 use crate::project::{FoundFile, ProjectRelativePath};
@@ -125,93 +125,20 @@ pub(super) fn index_pack(
         },
     );
     run.report.graph_cache_enabled = request.graph_cache.is_some();
-    let mut docs: Vec<(usize, Doc)> = Vec::new();
-    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
-    for result in results {
-        let out = result?;
-        run.report.files_skipped += out.report.files_skipped;
-        run.report.files_shadowed += out.report.files_shadowed;
-        run.report.lost_files.extend(out.report.lost_files);
-        run.report.graph_cache_hits += out.report.graph_cache_hits;
-        run.report.graph_cache_misses += out.report.graph_cache_misses;
-        run.report.diagnostics.extend(out.report.diagnostics);
-        docs.extend(out.docs);
-        for binding in out.bindings {
-            by_document
-                .entry(binding.reference.path.clone())
-                .or_default()
-                .push(binding);
-        }
-    }
-    // The later stages see the documents in the order of the walk.
-    docs.sort_by_key(|(at, _)| *at);
-    let mut docs: Vec<Doc> = docs.into_iter().map(|(_, doc)| doc).collect();
-
+    let (mut docs, mut by_document) = merge_shard_outputs(results, run.report)?;
     // Stage F: assign identities.
     let package = model
         .package()
         .unwrap_or_else(|| analysis.default_package());
     let mut builder = identity_builder(request, package);
     let mut index = DeclarationIndex::default();
-    for doc in &mut docs {
-        doc.declared = assign_identities(&*model, &mut builder, doc)?;
-        run.report.declarations += doc.declared.len();
-        for d in &doc.declared {
-            let extra = d
-                .fact
-                .extra_anchors
-                .iter()
-                .map(|&(start, end)| SourceAnchor {
-                    path: d.fact.anchor.path.clone(),
-                    start_byte: start,
-                    end_byte: end,
-                });
-            for anchor in std::iter::once(d.fact.anchor.clone()).chain(extra) {
-                index.insert_scoped(
-                    anchor,
-                    d.symbol.clone(),
-                    d.scopes.clone(),
-                    d.declaration.clone(),
-                );
-            }
-        }
-    }
+    declare_documents(&mut docs, &*model, &mut builder, run.report, &mut index)?;
 
     // The declarations of external assets, such as the builtins.
     let externals = declare_external(&extractors[0], analysis, &*model, run.report, &mut index);
 
     // A binding name takes the target of its reference. It joins as a module-like binding.
-    for doc in &docs {
-        let Some(bindings) = by_document.get(&doc.path) else {
-            continue;
-        };
-        for &(name, target) in &doc.facts.aliases {
-            let symbols: BTreeSet<&SymbolId> = bindings
-                .iter()
-                .filter(|b| {
-                    b.bound.is_none() && (b.reference.start_byte, b.reference.end_byte) == target
-                })
-                .flat_map(|b| b.ends.iter())
-                .filter_map(|end| end.place.as_ref())
-                .filter_map(|place| index.get(place))
-                .filter(|symbol| !symbol.is_local())
-                .collect();
-            if let [symbol] = symbols.into_iter().collect::<Vec<_>>()[..] {
-                let anchor = SourceAnchor {
-                    path: doc.path.clone(),
-                    start_byte: name.0,
-                    end_byte: name.1,
-                };
-                let text = doc.source.get(name.0 as usize..name.1 as usize);
-                let binding = Scope {
-                    kind: DeclKind::Module,
-                    name: text.unwrap_or_default().to_string(),
-                };
-                let symbol = symbol.clone();
-                index.insert_scoped(anchor, symbol, Vec::new(), binding);
-            }
-        }
-    }
+    bind_aliases(&docs, &by_document, &mut index);
 
     // Stage E: reconcile.
     let mut out = Vec::with_capacity(docs.len());
@@ -271,6 +198,108 @@ pub(super) fn index_pack(
         stubs: Vec::new(),
         external_symbols: finisher.into_referenced(),
     })
+}
+
+/// The raw bindings of the references of each document.
+type Bindings = BTreeMap<ProjectRelativePath, Vec<RawBinding>>;
+
+/// Merge the outputs of the shards into the report. Return the documents in the order of the
+/// walk, and the raw bindings of each document.
+fn merge_shard_outputs(
+    results: Vec<Result<ShardOutput, ScippyError>>,
+    report: &mut IndexReport,
+) -> Result<(Vec<Doc>, Bindings), ScippyError> {
+    let mut docs: Vec<(usize, Doc)> = Vec::new();
+    let mut by_document: Bindings = BTreeMap::new();
+    for result in results {
+        let out = result?;
+        report.files_skipped += out.report.files_skipped;
+        report.files_shadowed += out.report.files_shadowed;
+        report.lost_files.extend(out.report.lost_files);
+        report.graph_cache_hits += out.report.graph_cache_hits;
+        report.graph_cache_misses += out.report.graph_cache_misses;
+        report.diagnostics.extend(out.report.diagnostics);
+        docs.extend(out.docs);
+        for binding in out.bindings {
+            by_document
+                .entry(binding.reference.path.clone())
+                .or_default()
+                .push(binding);
+        }
+    }
+    // The later stages see the documents in the order of the walk.
+    docs.sort_by_key(|(at, _)| *at);
+    let docs = docs.into_iter().map(|(_, doc)| doc).collect();
+    Ok((docs, by_document))
+}
+
+/// Stage F: give each declaration its symbol, and add it to the declaration index.
+fn declare_documents(
+    docs: &mut [Doc],
+    model: &dyn ProjectModel,
+    builder: &mut IdentityBuilder,
+    report: &mut IndexReport,
+    index: &mut DeclarationIndex,
+) -> Result<(), ScippyError> {
+    for doc in docs {
+        doc.declared = assign_identities(model, builder, doc)?;
+        report.declarations += doc.declared.len();
+        for d in &doc.declared {
+            let extra = d
+                .fact
+                .extra_anchors
+                .iter()
+                .map(|&(start, end)| SourceAnchor {
+                    path: d.fact.anchor.path.clone(),
+                    start_byte: start,
+                    end_byte: end,
+                });
+            for anchor in std::iter::once(d.fact.anchor.clone()).chain(extra) {
+                index.insert_scoped(
+                    anchor,
+                    d.symbol.clone(),
+                    d.scopes.clone(),
+                    d.declaration.clone(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A binding name takes the target of its reference. It joins as a module-like binding.
+fn bind_aliases(docs: &[Doc], by_document: &Bindings, index: &mut DeclarationIndex) {
+    for doc in docs {
+        let Some(bindings) = by_document.get(&doc.path) else {
+            continue;
+        };
+        for &(name, target) in &doc.facts.aliases {
+            let symbols: BTreeSet<&SymbolId> = bindings
+                .iter()
+                .filter(|b| {
+                    b.bound.is_none() && (b.reference.start_byte, b.reference.end_byte) == target
+                })
+                .flat_map(|b| b.ends.iter())
+                .filter_map(|end| end.place.as_ref())
+                .filter_map(|place| index.get(place))
+                .filter(|symbol| !symbol.is_local())
+                .collect();
+            if let [symbol] = symbols.into_iter().collect::<Vec<_>>()[..] {
+                let anchor = SourceAnchor {
+                    path: doc.path.clone(),
+                    start_byte: name.0,
+                    end_byte: name.1,
+                };
+                let text = doc.source.get(name.0 as usize..name.1 as usize);
+                let binding = Scope {
+                    kind: DeclKind::Module,
+                    name: text.unwrap_or_default().to_string(),
+                };
+                let symbol = symbol.clone();
+                index.insert_scoped(anchor, symbol, Vec::new(), binding);
+            }
+        }
+    }
 }
 
 /// What one shard gives back.

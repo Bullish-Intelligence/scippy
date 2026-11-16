@@ -10,12 +10,14 @@ use crate::error::ScippyError;
 use crate::extract::{DeclarationFact, Facts, SourceAnchor};
 use crate::identity::{IdentityBuilder, SymbolId};
 use crate::language::{
-    DeclKind, NativeAnalysis, NativeDocument, NativeInput, NativeSource, NativeTarget, ProjectFile,
-    ReferenceRole, Scope,
+    DeclKind, NativeAnalysis, NativeDocument, NativeInput, NativeLink, NativeSource, NativeTarget,
+    ProjectFile, ReferenceRole, Scope, VirtualSymbol,
 };
 use crate::project::ProjectRelativePath;
-use crate::reconcile::{BindingOutcome, DeclarationIndex, Targeting, UnresolvedReason, reconcile};
-use crate::report::{Diagnostic, Severity, Stage};
+use crate::reconcile::{
+    BindingOutcome, DeclarationIndex, Reconciled, Targeting, UnresolvedReason, reconcile,
+};
+use crate::report::{Diagnostic, IndexReport, Severity, Stage};
 use crate::snapshot::AnalysisEdge;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -58,20 +60,7 @@ pub(super) fn index_native_pack(
     });
     run.report.diagnostics.extend(output.diagnostics);
     if let Some(capture) = run.capture.as_deref_mut() {
-        for link in &output.links {
-            capture.edges.push(AnalysisEdge {
-                kind: if link.embed { "embed" } else { "link" }.to_owned(),
-                path: link.path.as_str().to_owned(),
-                source: None,
-                span: link.span,
-                reference_span: link.reference_span,
-                anchor_span: link.anchor_span,
-                link_kind: Some(link.kind.clone()),
-                label: link.label.clone(),
-                state: Some(link.state.to_owned()),
-                anchor_state: Some(link.anchor_state.to_owned()),
-            });
-        }
+        capture.edges.extend(output.links.iter().map(link_edge));
     }
     let model = native.project_model(root);
 
@@ -89,42 +78,7 @@ pub(super) fn index_native_pack(
         } else {
             texts.remove(&native_doc.path).unwrap_or_default()
         };
-        let anchor = |span: (u32, u32)| SourceAnchor {
-            path: native_doc.path.clone(),
-            start_byte: span.0,
-            end_byte: span.1,
-        };
-        let mut facts = Facts::default();
-        if native_doc.module {
-            facts.module = Some(DeclarationFact {
-                anchor: anchor((0, 0)),
-                name: String::new(),
-                kind: DeclKind::Module,
-                extent: (0, source.len() as u32),
-                extra_anchors: Vec::new(),
-                digests: None,
-            });
-        }
-        for d in &native_doc.declarations {
-            facts.declarations.push(DeclarationFact {
-                anchor: anchor(d.span),
-                name: d.name.clone(),
-                kind: d.kind,
-                extent: d.span,
-                extra_anchors: Vec::new(),
-                digests: None,
-            });
-            if d.of_module {
-                facts.module_aliases.push(d.span);
-            }
-        }
-        facts.reads = native_doc
-            .references
-            .iter()
-            .filter(|r| r.role == ReferenceRole::Read)
-            .map(|r| r.span)
-            .collect();
-        facts.reads.sort_unstable();
+        let facts = native_facts(native_doc, source.len());
         let mut doc = Doc {
             path: native_doc.path.clone(),
             source,
@@ -132,23 +86,7 @@ pub(super) fn index_native_pack(
             declared: Vec::new(),
         };
         doc.declared = assign_identities(&*model, &mut builder, &doc)?;
-        // The pack gives the facts of notes, headings, and blocks. They join by the span.
-        let notes: HashMap<(u32, u32), &crate::snapshot::NoteRecord> = native_doc
-            .declarations
-            .iter()
-            .filter_map(|d| d.note.as_ref().map(|n| (d.span, n)))
-            .collect();
-        for d in &mut doc.declared {
-            let record = if d.fact.kind == DeclKind::Module {
-                native_doc.note.as_ref()
-            } else {
-                let anchor = &d.fact.anchor;
-                notes.get(&(anchor.start_byte, anchor.end_byte)).copied()
-            };
-            if let (Some(record), Some(decl)) = (record, d.decl.as_mut()) {
-                decl.note = Some(record.clone());
-            }
-        }
+        join_notes(&mut doc, native_doc);
         run.report.declarations += doc.declared.len();
         for d in &doc.declared {
             index.insert_scoped(
@@ -162,9 +100,122 @@ pub(super) fn index_native_pack(
     }
 
     // The symbols that no document declares. A reference to one of them is external.
+    let (externals, virtual_anchors) =
+        declare_virtual(&output.virtual_symbols, &mut index, run.report)?;
+
+    // Stage D replaced: the targets of the pack are the ends of the bindings.
+    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
+    for (_, native_doc) in &docs {
+        by_document.insert(
+            native_doc.path.clone(),
+            native_bindings(native_doc, &virtual_anchors),
+        );
+    }
+
+    // Stage E: reconcile. Stage G: build the documents.
+    let mut finisher = Finisher::new(pack.scip_language().to_string(), true, &externals);
+    let mut out = Vec::new();
+    let mut stubs = Vec::new();
+    for (doc, native_doc) in docs {
+        let bindings = by_document.remove(&doc.path).unwrap_or_default();
+        let targeting = Targeting::new(&*model, Vec::new());
+        let mut reconciled = reconcile(
+            &index,
+            bindings,
+            &HashSet::new(),
+            &HashSet::new(),
+            &targeting,
+        );
+        mark_skipped_targets(&mut reconciled, native_doc);
+        finisher.account(run, &doc, &reconciled);
+        let built = finisher.build(doc, &reconciled, native_doc.stub);
+        if native_doc.stub {
+            stubs.push(built);
+        } else {
+            out.push(built);
+        }
+    }
+    Ok(PackIndex {
+        documents: out,
+        stubs,
+        external_symbols: finisher.into_referenced(),
+    })
+}
+
+/// The facts of a native document: its module, its declarations, and its reads.
+fn native_facts(native_doc: &NativeDocument, source_len: usize) -> Facts {
+    let anchor = |span: (u32, u32)| SourceAnchor {
+        path: native_doc.path.clone(),
+        start_byte: span.0,
+        end_byte: span.1,
+    };
+    let mut facts = Facts::default();
+    if native_doc.module {
+        facts.module = Some(DeclarationFact {
+            anchor: anchor((0, 0)),
+            name: String::new(),
+            kind: DeclKind::Module,
+            extent: (0, source_len as u32),
+            extra_anchors: Vec::new(),
+            digests: None,
+        });
+    }
+    for d in &native_doc.declarations {
+        facts.declarations.push(DeclarationFact {
+            anchor: anchor(d.span),
+            name: d.name.clone(),
+            kind: d.kind,
+            extent: d.span,
+            extra_anchors: Vec::new(),
+            digests: None,
+        });
+        if d.of_module {
+            facts.module_aliases.push(d.span);
+        }
+    }
+    facts.reads = native_doc
+        .references
+        .iter()
+        .filter(|r| r.role == ReferenceRole::Read)
+        .map(|r| r.span)
+        .collect();
+    facts.reads.sort_unstable();
+    facts
+}
+
+/// Join the facts of notes, headings, and blocks to the declarations of a document, by span.
+fn join_notes(doc: &mut Doc, native_doc: &NativeDocument) {
+    let notes: HashMap<(u32, u32), &crate::snapshot::NoteRecord> = native_doc
+        .declarations
+        .iter()
+        .filter_map(|d| d.note.as_ref().map(|n| (d.span, n)))
+        .collect();
+    for d in &mut doc.declared {
+        let record = if d.fact.kind == DeclKind::Module {
+            native_doc.note.as_ref()
+        } else {
+            let anchor = &d.fact.anchor;
+            notes.get(&(anchor.start_byte, anchor.end_byte)).copied()
+        };
+        if let (Some(record), Some(decl)) = (record, d.decl.as_mut()) {
+            decl.note = Some(record.clone());
+        }
+    }
+}
+
+/// The anchor of each virtual symbol, by the key that the pack gave it.
+type VirtualAnchors<'a> = HashMap<&'a str, SourceAnchor>;
+
+/// Declare the symbols that no document declares. A reference to one of them is external.
+/// Return the external symbols, and the anchor of each virtual symbol by key.
+fn declare_virtual<'a>(
+    virtual_symbols: &'a [VirtualSymbol],
+    index: &mut DeclarationIndex,
+    report: &mut IndexReport,
+) -> Result<(BTreeMap<SymbolId, SymbolInfo>, VirtualAnchors<'a>), ScippyError> {
     let mut externals: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
-    let mut virtual_anchors: HashMap<&str, SourceAnchor> = HashMap::new();
-    for (n, virtual_symbol) in output.virtual_symbols.iter().enumerate() {
+    let mut virtual_anchors = VirtualAnchors::new();
+    for (n, virtual_symbol) in virtual_symbols.iter().enumerate() {
         let identity = &virtual_symbol.identity;
         match IdentityBuilder::new(SCHEME, identity.package.clone()).symbol(&identity.descriptors) {
             Ok(symbol) => {
@@ -192,7 +243,7 @@ pub(super) fn index_native_pack(
                     decl: None,
                 });
             }
-            Err(error) => run.report.diagnostics.push(Diagnostic {
+            Err(error) => report.diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
                 stage: Stage::Identity,
                 file: None,
@@ -202,12 +253,19 @@ pub(super) fn index_native_pack(
             }),
         }
     }
+    Ok((externals, virtual_anchors))
+}
 
-    // Stage D replaced: the targets of the pack are the ends of the bindings.
+/// The bindings of the references of a native document. The targets of the pack are the ends.
+fn native_bindings(
+    native_doc: &NativeDocument,
+    virtual_anchors: &HashMap<&str, SourceAnchor>,
+) -> Vec<RawBinding> {
     let place = |anchor: SourceAnchor, external: bool| Place { anchor, external };
-    let mut by_document: BTreeMap<ProjectRelativePath, Vec<RawBinding>> = BTreeMap::new();
-    for (_, native_doc) in &docs {
-        let bindings = native_doc.references.iter().map(|r| {
+    native_doc
+        .references
+        .iter()
+        .map(|r| {
             let ends = r
                 .targets
                 .iter()
@@ -241,50 +299,40 @@ pub(super) fn index_native_pack(
                 shadowed_ends: Vec::new(),
                 bound: None,
             }
-        });
-        by_document.insert(native_doc.path.clone(), bindings.collect());
-    }
+        })
+        .collect()
+}
 
-    // Stage E: reconcile. Stage G: build the documents.
-    let mut finisher = Finisher::new(pack.scip_language().to_string(), true, &externals);
-    let mut out = Vec::new();
-    let mut stubs = Vec::new();
-    for (doc, native_doc) in docs {
-        let bindings = by_document.remove(&doc.path).unwrap_or_default();
-        let targeting = Targeting::new(&*model, Vec::new());
-        let mut reconciled = reconcile(
-            &index,
-            bindings,
-            &HashSet::new(),
-            &HashSet::new(),
-            &targeting,
-        );
-        // A reference to a skipped file has no end. The pack says so, and the reason is more exact.
-        let skipped: HashSet<(u32, u32)> = native_doc
-            .references
-            .iter()
-            .filter(|r| r.target_skipped)
-            .map(|r| r.span)
-            .collect();
-        for r in &mut reconciled {
-            let span = (r.reference.start_byte, r.reference.end_byte);
-            if skipped.contains(&span)
-                && r.outcome == BindingOutcome::Unresolved(UnresolvedReason::NoPath)
-            {
-                r.outcome = BindingOutcome::Unresolved(UnresolvedReason::TargetSkipped);
-            }
-        }
-        finisher.account(run, &doc, &reconciled);
-        let built = finisher.build(doc, &reconciled, native_doc.stub);
-        if native_doc.stub {
-            stubs.push(built);
-        } else {
-            out.push(built);
+/// A reference to a skipped file has no end. The pack says so, and the reason is more exact.
+fn mark_skipped_targets(reconciled: &mut [Reconciled], native_doc: &NativeDocument) {
+    let skipped: HashSet<(u32, u32)> = native_doc
+        .references
+        .iter()
+        .filter(|r| r.target_skipped)
+        .map(|r| r.span)
+        .collect();
+    for r in reconciled {
+        let span = (r.reference.start_byte, r.reference.end_byte);
+        if skipped.contains(&span)
+            && r.outcome == BindingOutcome::Unresolved(UnresolvedReason::NoPath)
+        {
+            r.outcome = BindingOutcome::Unresolved(UnresolvedReason::TargetSkipped);
         }
     }
-    Ok(PackIndex {
-        documents: out,
-        stubs,
-        external_symbols: finisher.into_referenced(),
-    })
+}
+
+/// The edge that a link or an embed of a native pack adds to the snapshot.
+fn link_edge(link: &NativeLink) -> AnalysisEdge {
+    AnalysisEdge {
+        kind: if link.embed { "embed" } else { "link" }.to_owned(),
+        path: link.path.as_str().to_owned(),
+        source: None,
+        span: link.span,
+        reference_span: link.reference_span,
+        anchor_span: link.anchor_span,
+        link_kind: Some(link.kind.clone()),
+        label: link.label.clone(),
+        state: Some(link.state.to_owned()),
+        anchor_state: Some(link.anchor_state.to_owned()),
+    }
 }
