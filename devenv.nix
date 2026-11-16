@@ -8,6 +8,8 @@
   # when a commit changes none of the task inputs.
   # Run `testee doctor` after any edit to this table.
   # `scripts/verify.sh` runs the same three Cargo steps by hand.
+  # Testee runs `git clean -ffdx -e .devenv` in its slot, which deletes `target/`.
+  # Each Cargo task sets `CARGO_TARGET_DIR` under `.devenv/`, so the build stays warm.
   tasks =
     let
       # Files that no check or test task reads.
@@ -21,6 +23,10 @@
         ".copyroom-local.json"
         "scripts/**"
       ];
+      # Keep the Cargo target dir under `.devenv/`. The slot clean keeps that path.
+      cargoEnv = ''
+        export CARGO_TARGET_DIR="''${DEVENV_STATE:?DEVENV_STATE is not set}/cargo-target"
+      '';
       # The timeouts cover a cold Cargo build in a new Testee workspace.
       # Measure a warm run, then set each timeout to about twice that time.
       # The tests call the scip CLI. Make them fail, not skip, when it is missing.
@@ -38,19 +44,26 @@
       };
 
       "check:lint" = {
-        exec = "cargo clippy --workspace --all-targets -- -D warnings";
+        exec = ''
+          ${cargoEnv}
+          cargo clippy --workspace --all-targets -- -D warnings
+        '';
         input.testee.ignores = unread;
         input.testee.timeout_s = 900;
       };
 
       "check:types" = {
-        exec = "cargo check --workspace --all-targets";
+        exec = ''
+          ${cargoEnv}
+          cargo check --workspace --all-targets
+        '';
         input.testee.ignores = unread;
         input.testee.timeout_s = 900;
       };
 
       "test:quick" = {
         exec = ''
+          ${cargoEnv}
           ${scipEnv}
           cargo test --workspace --lib
         '';
@@ -60,6 +73,7 @@
 
       "test:full" = {
         exec = ''
+          ${cargoEnv}
           ${scipEnv}
           cargo test --workspace
         '';
