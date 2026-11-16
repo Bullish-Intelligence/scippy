@@ -11,6 +11,8 @@
   # when a commit changes none of the task inputs.
   # Run `testee doctor` after any edit to this table.
   # `scripts/verify.sh` runs `testee verify --profile quick` for the edit loop.
+  # `test:full` runs the fast set. Slow tests carry `#[ignore = "slow: ..."]`.
+  # `opt:slow` runs them. It does not count for GREEN.
   # Testee runs `git clean -ffdx -e .devenv` in its slot, which deletes `target/`.
   # Each Cargo task sets `CARGO_TARGET_DIR` under `.devenv/`, so the build stays warm.
   tasks =
@@ -78,12 +80,28 @@
         input.testee.timeout_s = hangGuard;
       };
 
+      # The fast set: every test that has no `#[ignore]`. It is the required gate.
+      # Nextest skips the ignored tests. `opt:slow` runs them.
       "test:full" = {
         exec = ''
           ${cargoEnv}
           ${scipEnv}
           cargo nextest run --workspace --profile ci
           cargo test --workspace --doc
+        '';
+        input.testee.ignores = unread;
+        input.testee.timeout_s = hangGuard;
+      };
+
+      # The slow set: end-to-end tests that call the scip CLI, and the cache tests.
+      # `--run-ignored only` runs the 27 tests that carry `#[ignore]`. Doctests have none.
+      # Run it with `testee verify opt:slow` when a change touches indexing,
+      # resolution, the scip output, or the metalayer cache.
+      "opt:slow" = {
+        exec = ''
+          ${cargoEnv}
+          ${scipEnv}
+          cargo nextest run --workspace --profile ci --run-ignored only
         '';
         input.testee.ignores = unread;
         input.testee.timeout_s = hangGuard;

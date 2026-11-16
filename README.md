@@ -530,7 +530,10 @@ devenv shell -- testee verify
 
 `testee verify` is the only gate. Run it before you land a change.
 It runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo check`, and `cargo test --workspace`.
-The tests run `scip lint`, `scip snapshot`, and `scip test` on the Python, TypeScript, and Loci fixtures.
+The gate runs the fast tests. Slow tests carry `#[ignore = "slow: runs in opt:slow"]`.
+Run `testee verify opt:slow` when a change touches indexing, resolution, the scip output, or the metalayer cache.
+It is not part of the default gate.
+The slow tests run `scip lint`, `scip snapshot`, and `scip test` on the Python, TypeScript, and Loci fixtures.
 The Loci expectations come from `loci-core`. To make them again, run `scripts/loci-oracle.sh`.
 During an edit, run the quick local check. It is not the gate:
 

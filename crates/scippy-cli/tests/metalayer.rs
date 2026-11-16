@@ -41,6 +41,7 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn cli_publishes_each_run_and_a_parse_failure_gives_a_failed_file() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
@@ -128,6 +129,7 @@ fn publish(layer: &mut Metalayer, snapshot: &AnalysisSnapshot) -> i64 {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn cached_graphs_follow_transitive_repository_dependencies() {
     let scratch = tempfile::tempdir().unwrap();
     let fixture =
@@ -195,6 +197,7 @@ fn outcome<'a>(
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn cached_graphs_and_published_relations_match_clean_runs_after_edits() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
@@ -414,6 +417,7 @@ fn output_and_metalayer_on_one_path_fail_and_keep_the_database() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn output_and_graph_cache_on_one_path_fail() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
@@ -525,6 +529,7 @@ fn check_broken_cache(damage: impl Fn(&Path)) {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn a_truncated_cache_gives_one_warning_and_the_clean_output() {
     check_broken_cache(|cache| {
         let size = fs::metadata(cache).unwrap().len();
@@ -538,11 +543,13 @@ fn a_truncated_cache_gives_one_warning_and_the_clean_output() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn a_garbage_cache_moves_aside_and_gives_the_clean_output() {
     check_broken_cache(|cache| fs::write(cache, vec![0x5a; 8192]).unwrap());
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn a_directory_as_the_cache_gives_one_warning_and_the_clean_output() {
     check_broken_cache(|cache| {
         fs::remove_file(cache).unwrap();
@@ -551,6 +558,7 @@ fn a_directory_as_the_cache_gives_one_warning_and_the_clean_output() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn swapped_cache_rows_are_rebuilt_and_give_the_clean_output() {
     for swap_checksums in [false, true] {
         let scratch = tempfile::tempdir().unwrap();
@@ -593,6 +601,7 @@ fn swapped_cache_rows_are_rebuilt_and_give_the_clean_output() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn a_locked_cache_turns_the_cache_off_after_one_timeout() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");

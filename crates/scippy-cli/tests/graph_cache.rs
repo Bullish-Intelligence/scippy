@@ -42,6 +42,7 @@ fn graphs(out: &Output) -> String {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn a_warm_run_equals_a_clean_run() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
@@ -68,6 +69,7 @@ fn a_warm_run_equals_a_clean_run() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn the_cap_keeps_the_file_small_and_the_output_the_same() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
@@ -140,6 +142,7 @@ fn same_as_clean(root: &Path, scratch: &Path, cache: &Path, name: &str) -> Outpu
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn two_edits_of_one_file_leave_one_row_for_it() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path().join("project");
@@ -164,6 +167,7 @@ fn two_edits_of_one_file_leave_one_row_for_it() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn projects_with_the_same_relative_path_keep_their_rows() {
     let scratch = tempfile::tempdir().unwrap();
     let cache = scratch.path().join("graphs.sqlite");

@@ -268,6 +268,7 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn the_scippy_sources_publish() {
     let repository: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let scratch = tempfile::tempdir().unwrap();

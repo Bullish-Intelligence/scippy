@@ -259,6 +259,7 @@ fn an_output_in_a_missing_directory_fails() {
 
 /// The index must pass `scip lint`. The step skips when the CLI is absent.
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_lint_accepts_the_cli_output() {
     let found = std::env::var_os("PATH")
         .into_iter()

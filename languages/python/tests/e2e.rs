@@ -1569,6 +1569,7 @@ fn the_lint_tolerance_accepts_only_a_defined_relationship_target() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn every_relationship_target_has_symbol_information() {
     for name in SCIP_FIXTURES {
         let indexed = index(name);
@@ -1589,6 +1590,7 @@ fn every_relationship_target_has_symbol_information() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_lint_accepts_every_fixture_index() {
     let Some(scip) = scip() else { return };
     for name in SCIP_FIXTURES {
@@ -1606,6 +1608,7 @@ fn scip_lint_accepts_every_fixture_index() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_test_accepts_the_annotated_sources() {
     let Some(scip) = scip() else { return };
     for name in SCIP_FIXTURES {
@@ -1643,6 +1646,7 @@ fn check_golden(name: &str, actual: &str) {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_snapshot_matches_the_golden_files() {
     let Some(scip) = scip() else { return };
     let scratch = tempfile::tempdir().unwrap();

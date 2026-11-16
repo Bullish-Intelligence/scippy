@@ -871,6 +871,7 @@ fn the_same_input_gives_the_same_bytes() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn parallel_shards_give_the_bytes_of_a_sequential_run() {
     for name in ["roots", "deps"] {
         let prepared = prepare(name);
@@ -934,6 +935,7 @@ fn all_fixtures() -> Vec<&'static str> {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_lint_accepts_every_fixture_index() {
     let Some(scip) = scip() else { return };
     for name in all_fixtures() {
@@ -951,6 +953,7 @@ fn scip_lint_accepts_every_fixture_index() {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_test_accepts_the_annotated_notes() {
     let Some(scip) = scip() else { return };
     for name in all_fixtures() {
@@ -988,6 +991,7 @@ fn check_golden(name: &str, actual: &str) {
 }
 
 #[test]
+#[ignore = "slow: runs in opt:slow"]
 fn scip_snapshot_matches_the_golden_files() {
     let Some(scip) = scip() else { return };
     let scratch = tempfile::tempdir().unwrap();
