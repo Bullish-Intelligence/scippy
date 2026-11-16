@@ -167,13 +167,13 @@ fn the_relation_drops_local_targets_and_definition_sites() {
     let mut layer = layer(dir.path());
     publish(&mut layer, &rich());
     let view = layer.view().unwrap().unwrap();
-    let rows = view.file_references(RelationQuery::default()).unwrap();
+    let rows = view.relations(RelationQuery::default()).unwrap();
     let flat: Vec<_> = rows
         .iter()
         .map(|r| {
             (
                 r.path.as_str(),
-                r.target.symbol.as_str(),
+                r.target.symbol.symbol.as_str(),
                 r.kind,
                 r.supports,
                 r.limited,
@@ -241,7 +241,7 @@ fn a_local_symbol_in_two_files_stays_two_symbols() {
         .unwrap();
     assert_eq!(
         references[0].outcome,
-        Outcome::Resolved(SymbolRef::local("local 0", "b.py"))
+        StoredOutcome::Resolved(SymbolRef::local("local 0", "b.py"))
     );
 }
 
@@ -279,7 +279,7 @@ fn the_rows_equal_the_snapshot_and_hold_no_dangling_key() {
         .unwrap();
     assert_eq!(
         candidates[0].outcome,
-        Outcome::Ambiguous(vec![SymbolRef::global("g ext."), SymbolRef::global("g z.")])
+        StoredOutcome::Ambiguous(vec![SymbolRef::global("g ext."), SymbolRef::global("g z.")])
     );
 }
 
@@ -356,8 +356,11 @@ fn a_bounded_search_publishes_and_keeps_its_marks() {
     let all = view.references(ReferenceQuery::default()).unwrap();
     assert_eq!(all.len(), 3);
     assert_eq!(all[1].limited, Some(Bound::Work));
-    assert_eq!(all[2].outcome, Outcome::Bounded("queue-length".into()));
-    let rows = view.file_references(RelationQuery::default()).unwrap();
+    assert_eq!(
+        all[2].outcome,
+        StoredOutcome::Bounded("queue-length".into())
+    );
+    let rows = view.relations(RelationQuery::default()).unwrap();
     assert_eq!((rows[0].supports, rows[0].limited), (2, 1));
 }
 
@@ -533,13 +536,13 @@ fn a_failed_publication_keeps_the_previous_revision_and_relations() {
     );
     let view = layer.view().unwrap().unwrap();
     assert_eq!(view.revision().id, 1);
-    let rows = view.file_references(RelationQuery::default()).unwrap();
+    let rows = view.relations(RelationQuery::default()).unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].target, SymbolRef::global("first"));
+    assert_eq!(rows[0].target.symbol, SymbolRef::global("first"));
     let references = view.references(ReferenceQuery::default()).unwrap();
     assert_eq!(
         references[0].outcome,
-        Outcome::Resolved(SymbolRef::global("first"))
+        StoredOutcome::Resolved(SymbolRef::global("first"))
     );
 }
 
@@ -693,10 +696,13 @@ fn a_reader_sees_one_revision_while_a_writer_publishes() {
         };
         let expected = SymbolRef::global(format!("t{}", view.revision().id - 1));
         let references = view.references(ReferenceQuery::default()).unwrap();
-        assert_eq!(references[0].outcome, Outcome::Resolved(expected.clone()));
-        let rows = view.file_references(RelationQuery::default()).unwrap();
+        assert_eq!(
+            references[0].outcome,
+            StoredOutcome::Resolved(expected.clone())
+        );
+        let rows = view.relations(RelationQuery::default()).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].target, expected);
+        assert_eq!(rows[0].target.symbol, expected);
         last = view.revision().id;
     }
     handle.join().unwrap();
@@ -1056,13 +1062,16 @@ fn a_link_with_an_anchor_gives_one_edge_and_two_supports() {
     assert_eq!(embed[0].kind, RelationKind::Embed);
     // The relation counts by kind.
     let rows = view
-        .file_references(RelationQuery {
+        .relations(RelationQuery {
             path: Some("src.md".into()),
-            kind: Some(RelationKind::Link),
+            kinds: vec![RelationKind::Link],
             ..Default::default()
         })
         .unwrap();
-    let t = rows.iter().find(|r| r.target.symbol == "g t.md/").unwrap();
+    let t = rows
+        .iter()
+        .find(|r| r.target.symbol.symbol == "g t.md/")
+        .unwrap();
     assert_eq!(t.supports, 2);
 }
 

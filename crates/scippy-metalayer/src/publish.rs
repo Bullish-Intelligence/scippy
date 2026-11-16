@@ -7,11 +7,12 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use scippy_core::{
-    AnalysisSnapshot, Bound, INCOMPLETE_CODES, ReferenceKind, ReferenceOutcome, ScippyError,
+    AnalysisDocument, AnalysisSnapshot, Bound, INCOMPLETE_CODES, ReferenceKind, ReferenceOutcome,
+    ScippyError,
 };
 use sha2::{Digest, Sha256};
 
-use crate::identity::{Family, IdSource, Identity, IdentityOptions};
+use crate::identity::{Family, IdSource, IdentityOptions, IdentityStore};
 use crate::rebind::{
     RebindInput, RebindReport, items_meta_key, orphan_children_of_orphans, rebind, rebind_not_last,
 };
@@ -158,6 +159,15 @@ fn scip_local(symbol: &str) -> bool {
     symbol.starts_with("local ")
 }
 
+/// The files of the previous revision with the digest of its input.
+type PreviousFiles = (String, BTreeMap<String, String>);
+
+/// A reference location: the file, the start, and the end.
+type Location = (i64, u32, u32);
+
+/// A reference row and its target, by location.
+type Located = HashMap<Location, (i64, Option<i64>)>;
+
 pub(crate) fn publish(
     db: &mut Connection,
     s: &AnalysisSnapshot,
@@ -174,7 +184,67 @@ pub(crate) fn publish(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage)?;
 
-    // The root set.
+    check_root_set(&tx, &key, s, o)?;
+    let (parent, revision) = next_revision(&tx)?;
+    let previous = if identity.is_some() {
+        read_previous_files(&tx)?
+    } else {
+        None
+    };
+
+    clear_facts(&tx, s)?;
+    let mut documents: Vec<&AnalysisDocument> = s.documents.iter().collect();
+    documents.sort_by(|a, b| a.path.cmp(&b.path));
+    let rows = collect_file_rows(s, &documents);
+    insert_support_inputs(&tx, s)?;
+    let (files, manifest) = insert_files(&tx, &rows)?;
+    let mut symbols = insert_symbols(&tx, s, &documents, &files)?;
+    let imports = insert_occurrences_and_edges(&tx, &documents, &files, &mut symbols)?;
+    let located = insert_references(&tx, s, &files, &mut symbols, &imports)?;
+    insert_edges(&tx, s, &files, &mut symbols, &located)?;
+    insert_diagnostics(&tx, s)?;
+    derive_file_reference(&tx)?;
+    let (input_complete, analysis_exact) = check_flags(&tx, s)?;
+
+    // The revision row. Older revisions go.
+    let scip_sha256 = sha256_hex(&s.scip);
+    let digest = input_digest(s, &key, &manifest);
+    insert_revision(
+        &tx,
+        &RevisionRow {
+            revision,
+            parent,
+            digest: &digest,
+            tool_version: &s.tool_version,
+            input_complete,
+            analysis_exact,
+            strict: o.strict,
+            scip_sha256: &scip_sha256,
+            scip_size: s.scip.len() as i64,
+        },
+    )?;
+
+    // The identity store locks after the facts store. It commits first. When the facts commit
+    // fails, the next publish finds the store bound to this input and binds nothing again.
+    let rebinding = match identity {
+        Some((path, ids)) => Some(rebind_identity(s, o, &key, &digest, previous, path, ids)?),
+        None => None,
+    };
+    tx.commit().map_err(storage)?;
+    Ok(Published {
+        revision,
+        scip_sha256,
+        rebind: rebinding,
+    })
+}
+
+/// Check the root set of the database against the run. Add it when the database has none.
+fn check_root_set(
+    tx: &Transaction<'_>,
+    key: &str,
+    s: &AnalysisSnapshot,
+    o: &PublishOptions,
+) -> Result<(), ScippyError> {
     let stored: Option<(String, String)> = tx
         .query_row(
             "SELECT key, project_root FROM root_set WHERE id = 1",
@@ -210,8 +280,11 @@ pub(crate) fn publish(
             .map_err(storage)?;
         }
     }
+    Ok(())
+}
 
-    // The revision id. Never reuse an id: the new id follows the highest id.
+/// The revision id and its parent. Never reuse an id: the new id follows the highest id.
+fn next_revision(tx: &Transaction<'_>) -> Result<(Option<i64>, i64), ScippyError> {
     let parent: Option<i64> = tx
         .query_row("SELECT max(id) FROM revision", [], |r| r.get(0))
         .map_err(storage)?;
@@ -219,40 +292,37 @@ pub(crate) fn publish(
         .unwrap_or(0)
         .checked_add(1)
         .ok_or_else(|| ScippyError::Storage("revision overflow".into()))?;
+    Ok((parent, revision))
+}
 
-    // The files of the previous revision, for the file pairing of the rebinding. They are valid
-    // only when that revision is the one that the identity store bound.
-    let previous: Option<(String, BTreeMap<String, String>)> = if identity.is_some() {
-        let digest: Option<String> = tx
-            .query_row(
-                "SELECT input_digest FROM revision ORDER BY id DESC LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(storage)?;
-        match digest {
-            Some(digest) => {
-                let mut st = tx
-                    .prepare(
-                        "SELECT path, sha256 FROM file WHERE status = 'indexed' AND sha256 IS NOT NULL",
-                    )
-                    .map_err(storage)?;
-                let rows = st
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                    .map_err(storage)?;
-                let files = rows
-                    .collect::<Result<BTreeMap<_, _>, _>>()
-                    .map_err(storage)?;
-                Some((digest, files))
-            }
-            None => None,
-        }
-    } else {
-        None
+/// The files of the previous revision, for the file pairing of the rebinding. They are valid
+/// only when that revision is the one that the identity store bound.
+fn read_previous_files(tx: &Transaction<'_>) -> Result<Option<PreviousFiles>, ScippyError> {
+    let digest: Option<String> = tx
+        .query_row(
+            "SELECT input_digest FROM revision ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some(digest) = digest else {
+        return Ok(None);
     };
+    let mut st = tx
+        .prepare("SELECT path, sha256 FROM file WHERE status = 'indexed' AND sha256 IS NOT NULL")
+        .map_err(storage)?;
+    let rows = st
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(storage)?;
+    let files = rows
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(storage)?;
+    Ok(Some((digest, files)))
+}
 
-    // Replace every fact. Delete the child tables first.
+/// Replace every fact. Delete the child tables first.
+fn clear_facts(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(), ScippyError> {
     for table in [
         "file_reference",
         "edge",
@@ -275,11 +345,15 @@ pub(crate) fn publish(
         )
         .map_err(storage)?;
     }
+    Ok(())
+}
 
-    // Files. A lost file has a row with its status. A document without a lost record is indexed.
-    // A document that has a lost record keeps its facts under the row of the lost file.
-    let mut documents: Vec<&scippy_core::AnalysisDocument> = s.documents.iter().collect();
-    documents.sort_by(|a, b| a.path.cmp(&b.path));
+/// The file rows. A lost file has a row with its status. A document without a lost record is
+/// indexed. A document that has a lost record keeps its facts under the row of the lost file.
+fn collect_file_rows<'a>(
+    s: &'a AnalysisSnapshot,
+    documents: &[&'a AnalysisDocument],
+) -> BTreeMap<&'a str, FileRow<'a>> {
     let mut rows: BTreeMap<&str, FileRow<'_>> = BTreeMap::new();
     for lost in &s.lost_files {
         rows.entry(lost.path.as_str()).or_insert(FileRow {
@@ -293,7 +367,7 @@ pub(crate) fn publish(
             stale: false,
         });
     }
-    for d in &documents {
+    for d in documents {
         let language = (!d.language.is_empty()).then_some(d.language.as_str());
         match rows.get_mut(d.path.as_str()) {
             Some(row) => {
@@ -320,6 +394,10 @@ pub(crate) fn publish(
             }
         }
     }
+    rows
+}
+
+fn insert_support_inputs(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(), ScippyError> {
     for input in &s.support_inputs {
         tx.prepare_cached(
             "INSERT INTO support_input (path, real_path, sha256) VALUES (?1, ?2, ?3)",
@@ -327,9 +405,17 @@ pub(crate) fn publish(
         .and_then(|mut st| st.execute(params![input.path, input.real_path, input.sha256]))
         .map_err(storage)?;
     }
+    Ok(())
+}
+
+/// Insert the file rows. Return the row id of each path and the manifest for the digest.
+fn insert_files<'a>(
+    tx: &Transaction<'_>,
+    rows: &BTreeMap<&'a str, FileRow<'a>>,
+) -> Result<(HashMap<&'a str, i64>, Vec<ManifestRow<'a>>), ScippyError> {
     let mut files: HashMap<&str, i64> = HashMap::with_capacity(rows.len());
     let mut manifest = Vec::with_capacity(rows.len());
-    for (path, row) in &rows {
+    for (path, row) in rows {
         tx.prepare_cached(
             "INSERT INTO file (root_id, path, pack, language, status, reason, sha256, size, real_path, stale)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -356,21 +442,23 @@ pub(crate) fn publish(
             sha256: row.sha256,
         });
     }
+    Ok((files, manifest))
+}
 
-    // Symbols that the documents declare, then the external symbols.
+/// Symbols that the documents declare, then the external symbols.
+fn insert_symbols(
+    tx: &Transaction<'_>,
+    s: &AnalysisSnapshot,
+    documents: &[&AnalysisDocument],
+    files: &HashMap<&str, i64>,
+) -> Result<Symbols, ScippyError> {
     let mut symbols = Symbols {
         ids: HashMap::new(),
     };
-    for d in &documents {
+    for d in documents {
         let file = files[d.path.as_str()];
         for info in &d.symbols {
-            symbols.insert(
-                &tx,
-                Some(file),
-                &info.symbol,
-                &info.kind,
-                &info.display_name,
-            )?;
+            symbols.insert(tx, Some(file), &info.symbol, &info.kind, &info.display_name)?;
         }
     }
     for info in &s.external_symbols {
@@ -380,16 +468,24 @@ pub(crate) fn publish(
                 info.symbol
             )));
         }
-        symbols.insert(&tx, None, &info.symbol, &info.kind, &info.display_name)?;
+        symbols.insert(tx, None, &info.symbol, &info.kind, &info.display_name)?;
     }
+    Ok(symbols)
+}
 
-    // Occurrences and the edges that the declarations carry. An import occurrence marks the
-    // reference at the same span as an import reference.
+/// Occurrences and the edges that the declarations carry. An import occurrence marks the
+/// reference at the same span as an import reference. Return the import occurrences.
+fn insert_occurrences_and_edges(
+    tx: &Transaction<'_>,
+    documents: &[&AnalysisDocument],
+    files: &HashMap<&str, i64>,
+    symbols: &mut Symbols,
+) -> Result<HashSet<(i64, u32, u32, i64)>, ScippyError> {
     let mut imports: HashSet<(i64, u32, u32, i64)> = HashSet::new();
-    for d in &documents {
+    for d in documents {
         let file = files[d.path.as_str()];
         for occurrence in &d.occurrences {
-            let symbol = symbols.of_fact(&tx, file, &occurrence.symbol)?;
+            let symbol = symbols.of_fact(tx, file, &occurrence.symbol)?;
             if occurrence.role == "import" {
                 imports.insert((file, occurrence.start, occurrence.end, symbol));
             }
@@ -410,10 +506,10 @@ pub(crate) fn publish(
         }
         let mut seen: HashSet<(&str, i64, i64)> = HashSet::new();
         for info in &d.symbols {
-            let source = symbols.of_fact(&tx, file, &info.symbol)?;
+            let source = symbols.of_fact(tx, file, &info.symbol)?;
             for (kind, targets) in [("override", &info.implements), ("alias", &info.references)] {
                 for target in targets {
-                    let target = symbols.of_fact(&tx, file, target)?;
+                    let target = symbols.of_fact(tx, file, target)?;
                     if !seen.insert((kind, source, target)) {
                         continue;
                     }
@@ -426,11 +522,19 @@ pub(crate) fn publish(
             }
         }
     }
+    Ok(imports)
+}
 
-    // References, the candidates of the ambiguous ones, and the import edges.
-    // `located` maps a reference location to its row and its target.
-    let mut located: HashMap<(i64, u32, u32), (i64, Option<i64>)> =
-        HashMap::with_capacity(s.references.len());
+/// References, the candidates of the ambiguous ones, and the import edges. Return a map from
+/// a reference location to its row and its target.
+fn insert_references(
+    tx: &Transaction<'_>,
+    s: &AnalysisSnapshot,
+    files: &HashMap<&str, i64>,
+    symbols: &mut Symbols,
+    imports: &HashSet<(i64, u32, u32, i64)>,
+) -> Result<Located, ScippyError> {
+    let mut located: Located = HashMap::with_capacity(s.references.len());
     for r in &s.references {
         let file = *files.get(r.path.as_str()).ok_or_else(|| {
             ScippyError::Storage(format!(
@@ -441,7 +545,7 @@ pub(crate) fn publish(
         let (outcome, target, reason, limited) = match &r.outcome {
             ReferenceOutcome::Resolved(t) => (
                 "resolved",
-                Some(symbols.of_fact(&tx, file, t)?),
+                Some(symbols.of_fact(tx, file, t)?),
                 None,
                 r.limited.map(Bound::code),
             ),
@@ -483,7 +587,7 @@ pub(crate) fn publish(
             sorted.sort();
             sorted.dedup();
             for (ordinal, candidate) in sorted.into_iter().enumerate() {
-                let symbol = symbols.of_fact(&tx, file, candidate)?;
+                let symbol = symbols.of_fact(tx, file, candidate)?;
                 tx.prepare_cached(
                     "INSERT INTO reference_candidate (reference_id, ordinal, symbol_id) VALUES (?1, ?2, ?3)",
                 )
@@ -492,9 +596,18 @@ pub(crate) fn publish(
             }
         }
     }
+    Ok(located)
+}
 
-    // The edges that the run gave: inheritance, links, and embeds. An edge names its references
-    // by location.
+/// The edges that the run gave: inheritance, links, and embeds. An edge names its references
+/// by location.
+fn insert_edges(
+    tx: &Transaction<'_>,
+    s: &AnalysisSnapshot,
+    files: &HashMap<&str, i64>,
+    symbols: &mut Symbols,
+    located: &Located,
+) -> Result<(), ScippyError> {
     for e in &s.edges {
         let file = *files.get(e.path.as_str()).ok_or_else(|| {
             ScippyError::Storage(format!("an edge lies in {:?}, which is not a file", e.path))
@@ -515,7 +628,7 @@ pub(crate) fn publish(
         let source = e
             .source
             .as_deref()
-            .map(|symbol| symbols.of_fact(&tx, file, symbol))
+            .map(|symbol| symbols.of_fact(tx, file, symbol))
             .transpose()?;
         tx.prepare_cached(
             "INSERT INTO edge (kind, file_id, source_id, target_id, start, end, reference_id,
@@ -540,8 +653,10 @@ pub(crate) fn publish(
         })
         .map_err(storage)?;
     }
+    Ok(())
+}
 
-    // Diagnostics.
+fn insert_diagnostics(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(), ScippyError> {
     for d in &s.diagnostics {
         tx.prepare_cached(
             "INSERT INTO diagnostic (root_id, severity, stage, code, message, path, start, end)
@@ -560,8 +675,11 @@ pub(crate) fn publish(
         })
         .map_err(storage)?;
     }
+    Ok(())
+}
 
-    // The relation. It follows from the facts in the same transaction.
+/// The relation. It follows from the facts in the same transaction.
+fn derive_file_reference(tx: &Transaction<'_>) -> Result<(), ScippyError> {
     tx.execute(
         "INSERT INTO file_reference (file_id, target_id, kind, supports, limited)
          SELECT file_id, target_id, kind, count(*), count(limited) FROM support
@@ -569,8 +687,12 @@ pub(crate) fn publish(
         [],
     )
     .map_err(storage)?;
+    Ok(())
+}
 
-    // The flags follow from the rows. A snapshot that disagrees is a bug in the caller.
+/// The flags follow from the rows. A snapshot that disagrees is a bug in the caller. Return
+/// `input_complete` and `analysis_exact`.
+fn check_flags(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(bool, bool), ScippyError> {
     let codes = INCOMPLETE_CODES
         .iter()
         .map(|c| format!("'{c}'"))
@@ -600,79 +722,92 @@ pub(crate) fn publish(
             s.input_complete, s.analysis_exact
         )));
     }
+    Ok((input_complete, analysis_exact))
+}
 
-    // The revision row. Older revisions go.
-    let scip_sha256 = sha256_hex(&s.scip);
-    let digest = input_digest(s, &key, &manifest);
+/// The values of the revision row.
+struct RevisionRow<'a> {
+    revision: i64,
+    parent: Option<i64>,
+    digest: &'a str,
+    tool_version: &'a str,
+    input_complete: bool,
+    analysis_exact: bool,
+    strict: bool,
+    scip_sha256: &'a str,
+    scip_size: i64,
+}
+
+/// Insert the revision row. Older revisions go.
+fn insert_revision(tx: &Transaction<'_>, row: &RevisionRow<'_>) -> Result<(), ScippyError> {
     tx.execute(
         "INSERT INTO revision (id, root_id, parent, input_digest, tool_version, position_encoding,
                                input_complete, analysis_exact, strict, scip_sha256, scip_size)
          VALUES (?1, 1, ?2, ?3, ?4, 'utf8-byte', ?5, ?6, ?7, ?8, ?9)",
         params![
-            revision,
-            parent,
-            digest,
-            s.tool_version,
-            input_complete,
-            analysis_exact,
-            o.strict,
-            scip_sha256,
-            s.scip.len() as i64,
+            row.revision,
+            row.parent,
+            row.digest,
+            row.tool_version,
+            row.input_complete,
+            row.analysis_exact,
+            row.strict,
+            row.scip_sha256,
+            row.scip_size,
         ],
     )
     .map_err(storage)?;
-    tx.execute("DELETE FROM revision WHERE id < ?1", [revision])
+    tx.execute("DELETE FROM revision WHERE id < ?1", [row.revision])
         .map_err(storage)?;
+    Ok(())
+}
 
-    // The identity store locks after the facts store. It commits first. When the facts commit
-    // fails, the next publish finds the store bound to this input and binds nothing again.
-    let rebinding = match identity {
-        Some((path, ids)) => {
-            let options = IdentityOptions {
-                root_key: Some(key.clone()),
-                replace_root_set: o.replace_root_set,
-            };
-            let mut store = Identity::open(path, &options)?;
-            let bound = store.bound_input_digest()?;
-            let old_files = previous
-                .filter(|(old, _)| bound.as_deref() == Some(old))
-                .map(|(_, files)| files);
-            let input = RebindInput::from_snapshot(s, &digest, old_files);
-            let notes = RebindInput::notes_from_snapshot(s, &digest);
-            // The input digest does not cover the package version, which is in each symbol.
-            // The items digest does, so a version-only bump rebinds.
-            let same = bound.as_deref() == Some(digest.as_str())
-                && [&input, &notes].iter().all(|input| {
-                    store
-                        .meta(items_meta_key(input.family))
-                        .ok()
-                        .flatten()
-                        .as_deref()
-                        == Some(input.items_digest().as_str())
-                });
-            if same {
-                orphan_children_of_orphans(&mut store, Family::Code, &digest)?;
-                orphan_children_of_orphans(&mut store, Family::Note, &digest)?;
-                Some(RebindReport {
-                    skipped: true,
-                    ..RebindReport::default()
-                })
-            } else {
-                // Two commits, code then notes. `bound_input_digest` tells a reader that every
-                // family is bound to this input. The notes commit is the last one, so it sets
-                // the digest in the same transaction that binds the notes. A stop after the
-                // code commit leaves the old digest: the next publish then binds again.
-                let mut report = rebind_not_last(&mut store, &input, ids)?;
-                report.merge(rebind(&mut store, &notes, ids)?);
-                Some(report)
-            }
-        }
-        None => None,
+/// Rebind the identity store to this run. The store commits its own transactions before the
+/// caller commits the facts.
+fn rebind_identity(
+    s: &AnalysisSnapshot,
+    o: &PublishOptions,
+    key: &str,
+    digest: &str,
+    previous: Option<PreviousFiles>,
+    path: &Path,
+    ids: &dyn IdSource,
+) -> Result<RebindReport, ScippyError> {
+    let options = IdentityOptions {
+        root_key: Some(key.to_owned()),
+        replace_root_set: o.replace_root_set,
     };
-    tx.commit().map_err(storage)?;
-    Ok(Published {
-        revision,
-        scip_sha256,
-        rebind: rebinding,
-    })
+    let mut store = IdentityStore::open(path, &options)?;
+    let bound = store.bound_input_digest()?;
+    let old_files = previous
+        .filter(|(old, _)| bound.as_deref() == Some(old))
+        .map(|(_, files)| files);
+    let input = RebindInput::from_snapshot(s, digest, old_files);
+    let notes = RebindInput::notes_from_snapshot(s, digest);
+    // The input digest does not cover the package version, which is in each symbol.
+    // The items digest does, so a version-only bump rebinds.
+    let same = bound.as_deref() == Some(digest)
+        && [&input, &notes].iter().all(|input| {
+            store
+                .meta(items_meta_key(input.family))
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some(input.items_digest().as_str())
+        });
+    if same {
+        orphan_children_of_orphans(&mut store, Family::Code, digest)?;
+        orphan_children_of_orphans(&mut store, Family::Note, digest)?;
+        return Ok(RebindReport {
+            skipped: true,
+            ..RebindReport::default()
+        });
+    }
+    // Two commits, code then notes. `bound_input_digest` tells a reader that every
+    // family is bound to this input. The notes commit is the last one, so it sets
+    // the digest in the same transaction that binds the notes. A stop after the
+    // code commit leaves the old digest: the next publish then binds again.
+    let mut report = rebind_not_last(&mut store, &input, ids)?;
+    report.merge(rebind(&mut store, &notes, ids)?);
+    Ok(report)
 }

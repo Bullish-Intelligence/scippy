@@ -16,8 +16,8 @@ use sha2::{Digest, Sha256};
 use crate::read::{optional_symbol_at, symbol_at, symbol_columns};
 use crate::schema::{APPLICATION_ID, storage};
 use crate::{
-    EdgeKind, EdgeRecord, FileRecord, InputRecord, Metalayer, Outcome, OutcomeKind, ReferenceQuery,
-    ReferenceRecord, RelationKind, SymbolRef, View,
+    EdgeKind, EdgeRecord, FileRecord, InputRecord, Metalayer, OutcomeKind, ReferenceQuery,
+    ReferenceRecord, RelationKind, StoredOutcome, SymbolRef, View,
 };
 
 /// The counts of one revision. Each map holds every known key, also with the count zero.
@@ -314,7 +314,7 @@ impl View<'_> {
                 outcome: Some(OutcomeKind::Ambiguous),
             })?
             .into_iter()
-            .filter(|r| matches!(&r.outcome, Outcome::Ambiguous(c) if c.contains(symbol)))
+            .filter(|r| matches!(&r.outcome, StoredOutcome::Ambiguous(c) if c.contains(symbol)))
             .collect())
     }
 }
@@ -331,7 +331,10 @@ mod explain_tests {
         publish(&mut layer, &rich());
         let view = layer.view().unwrap().unwrap();
         let at = view.references_at("a.py", (14, 15)).unwrap().unwrap();
-        assert_eq!(at.outcome, Outcome::Resolved(SymbolRef::global("g f().")));
+        assert_eq!(
+            at.outcome,
+            StoredOutcome::Resolved(SymbolRef::global("g f()."))
+        );
         assert!(view.references_at("a.py", (14, 16)).unwrap().is_none());
         assert!(view.references_at("b.py", (14, 15)).unwrap().is_none());
 
@@ -359,7 +362,7 @@ mod explain_tests {
 
 /// Which file-to-symbol relations to read. A field that is `None` or empty does not filter.
 #[derive(Clone, Debug, Default)]
-pub struct RelationQuery2 {
+pub struct RelationQuery {
     /// The source file.
     pub path: Option<String>,
     /// The target symbol.
@@ -398,14 +401,22 @@ pub struct EdgeQuery {
 }
 
 impl View<'_> {
+    /// The id filter of a query target. `None` means that the symbol is not in this revision,
+    /// so the query matches nothing. `Some(None)` means that the query has no target.
+    fn target_filter(
+        &self,
+        target: Option<&SymbolRef>,
+    ) -> Result<Option<Option<i64>>, ScippyError> {
+        match target {
+            None => Ok(Some(None)),
+            Some(symbol) => Ok(self.symbol_id(symbol)?.map(Some)),
+        }
+    }
+
     /// The relations that match the query, sorted by path, target symbol, and kind.
-    pub fn relations(&self, q: RelationQuery2) -> Result<Vec<RelationRecord>, ScippyError> {
-        let target = match &q.target {
-            None => None,
-            Some(symbol) => match self.symbol_id(symbol)? {
-                Some(id) => Some(id),
-                None => return Ok(Vec::new()),
-            },
+    pub fn relations(&self, q: RelationQuery) -> Result<Vec<RelationRecord>, ScippyError> {
+        let Some(target) = self.target_filter(q.target.as_ref())? else {
+            return Ok(Vec::new());
         };
         let sql = format!(
             "SELECT f.path, fr.kind, fr.supports, fr.limited, {}, t.kind, t.display_name, tf.path
@@ -461,12 +472,8 @@ impl View<'_> {
 
     /// The edges that match the query, sorted by path, span, kind, source, and target.
     pub fn edges_where(&self, q: &EdgeQuery) -> Result<Vec<EdgeRecord>, ScippyError> {
-        let target = match &q.target {
-            None => None,
-            Some(symbol) => match self.symbol_id(symbol)? {
-                Some(id) => Some(id),
-                None => return Ok(Vec::new()),
-            },
+        let Some(target) = self.target_filter(q.target.as_ref())? else {
+            return Ok(Vec::new());
         };
         let sql = format!(
             "SELECT e.kind, f.path, e.start, e.end, e.link_kind, e.label, e.state, e.anchor_state,
@@ -551,16 +558,16 @@ mod relation_tests {
         let mut layer = layer(dir.path());
         publish(&mut layer, &rich());
         let view = layer.view().unwrap().unwrap();
-        let all = view.relations(RelationQuery2::default()).unwrap();
+        let all = view.relations(RelationQuery::default()).unwrap();
         assert!(!all.is_empty());
         let external = view
-            .relations(RelationQuery2 {
+            .relations(RelationQuery {
                 external: Some(true),
                 ..Default::default()
             })
             .unwrap();
         let internal = view
-            .relations(RelationQuery2 {
+            .relations(RelationQuery {
                 external: Some(false),
                 ..Default::default()
             })
@@ -569,14 +576,14 @@ mod relation_tests {
         assert!(external.iter().all(|r| r.target.external));
         assert!(internal.iter().all(|r| !r.target.external));
         let named = view
-            .relations(RelationQuery2 {
+            .relations(RelationQuery {
                 target_name: Some(all[0].target.display_name.clone()),
                 ..Default::default()
             })
             .unwrap();
         assert!(named.contains(&all[0]));
         let none = view
-            .relations(RelationQuery2 {
+            .relations(RelationQuery {
                 kinds: vec![RelationKind::Embed],
                 ..Default::default()
             })

@@ -4,8 +4,8 @@ use rusqlite::Connection;
 use scippy_core::ScippyError;
 
 use crate::identity::{
-    IDENTITY_APPLICATION_ID, IdSource, Identity, IdentityOptions, Migration, backup_path,
-    format_utc,
+    IDENTITY_APPLICATION_ID, IdSource, IdentityOptions, IdentityStore, LOCATOR_HISTORY, Migration,
+    backup_path, format_utc, join_container, split_container,
 };
 use crate::*;
 
@@ -36,11 +36,11 @@ fn locator(entity_id: &str, key: &str, input: &str) -> Locator {
     }
 }
 
-fn open(path: &Path) -> Identity {
-    Identity::open(path, &IdentityOptions::default()).unwrap()
+fn open(path: &Path) -> IdentityStore {
+    IdentityStore::open(path, &IdentityOptions::default()).unwrap()
 }
 
-fn error_text(result: Result<Identity, ScippyError>) -> String {
+fn error_text(result: Result<IdentityStore, ScippyError>) -> String {
     result.expect_err("the open must fail").to_string()
 }
 
@@ -93,7 +93,7 @@ fn reopen_keeps_the_data() {
     let store = open(&path);
     assert_eq!(store.get_entity(&e.id).unwrap(), Some(e.clone()));
     drop(store);
-    let reader = Identity::open_read_only(&path).unwrap();
+    let reader = IdentityStore::open_read_only(&path).unwrap();
     assert_eq!(reader.get_entity(&e.id).unwrap(), Some(e));
     assert_eq!(reader.version(), IDENTITY_VERSION);
 }
@@ -102,11 +102,11 @@ fn reopen_keeps_the_data() {
 fn read_only_open_never_creates_and_never_writes() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("none.identity.db");
-    assert!(Identity::open_read_only(&missing).is_err());
+    assert!(IdentityStore::open_read_only(&missing).is_err());
     assert!(!missing.exists());
     let path = dir.path().join("a.identity.db");
     drop(open(&path));
-    let mut reader = Identity::open_read_only(&path).unwrap();
+    let mut reader = IdentityStore::open_read_only(&path).unwrap();
     let ids = FixedIds::default();
     assert!(
         reader
@@ -122,17 +122,19 @@ fn open_refuses_a_foreign_file() {
     let facts = dir.path().join("facts.db");
     drop(Metalayer::open(&facts).unwrap());
     assert!(
-        error_text(Identity::open(&facts, &IdentityOptions::default()))
+        error_text(IdentityStore::open(&facts, &IdentityOptions::default()))
             .contains("not a Scippy identity store")
     );
-    assert!(Identity::open_read_only(&facts).is_err());
+    assert!(IdentityStore::open_read_only(&facts).is_err());
     // A file with tables and no application id.
     let other = dir.path().join("other.db");
     Connection::open(&other)
         .unwrap()
         .execute_batch("CREATE TABLE t (x)")
         .unwrap();
-    assert!(error_text(Identity::open(&other, &IdentityOptions::default())).contains("has tables"));
+    assert!(
+        error_text(IdentityStore::open(&other, &IdentityOptions::default())).contains("has tables")
+    );
 }
 
 #[test]
@@ -149,12 +151,12 @@ fn open_refuses_a_newer_version_and_leaves_the_file() {
         .unwrap()
         .execute_batch("PRAGMA user_version=2")
         .unwrap();
-    let text = error_text(Identity::open(&path, &IdentityOptions::default()));
+    let text = error_text(IdentityStore::open(&path, &IdentityOptions::default()));
     assert!(
         text.contains("version 2") && text.contains("reads version 1"),
         "{text}"
     );
-    assert!(Identity::open_read_only(&path).is_err());
+    assert!(IdentityStore::open_read_only(&path).is_err());
     // No table is dropped and no backup exists.
     assert!(!backup_path(&path, 2).exists());
     let db = Connection::open(&path).unwrap();
@@ -184,7 +186,7 @@ fn an_older_store_is_copied_then_migrated_forward() {
         .unwrap();
     }
     let steps: &[Migration] = &[fake_v0_to_v1];
-    let store = Identity::open_with(&path, &IdentityOptions::default(), 1, steps).unwrap();
+    let store = IdentityStore::open_with(&path, &IdentityOptions::default(), 1, steps).unwrap();
     assert_eq!(store.version(), 1);
     drop(store);
 
@@ -231,7 +233,7 @@ fn a_failed_migration_rolls_back_and_keeps_the_backup() {
         .unwrap();
     }
     let steps: &[Migration] = &[fail];
-    assert!(Identity::open_with(&path, &IdentityOptions::default(), 1, steps).is_err());
+    assert!(IdentityStore::open_with(&path, &IdentityOptions::default(), 1, steps).is_err());
     let db = Connection::open(&path).unwrap();
     let rows: i64 = db
         .query_row("SELECT count(*) FROM old", [], |r| r.get(0))
@@ -246,7 +248,7 @@ fn a_missing_migration_step_is_an_error() {
     let path = dir.path().join("a.identity.db");
     drop(open(&path));
     // Version 1 to version 2 has no step in the real list.
-    let text = error_text(Identity::open_with(
+    let text = error_text(IdentityStore::open_with(
         &path,
         &IdentityOptions::default(),
         2,
@@ -265,15 +267,16 @@ fn the_root_set_guard_binds_refuses_and_replaces() {
     let ids = FixedIds::default();
     let e = entity(&ids, EntityKind::Module);
     {
-        let mut store = Identity::open(&path, &IdentityOptions::with_root_key("key-a")).unwrap();
+        let mut store =
+            IdentityStore::open(&path, &IdentityOptions::with_root_key("key-a")).unwrap();
         assert_eq!(store.root_key().unwrap().as_deref(), Some("key-a"));
         store.insert_entity(&e).unwrap();
     }
     // The same key opens. No key skips the guard.
-    drop(Identity::open(&path, &IdentityOptions::with_root_key("key-a")).unwrap());
+    drop(IdentityStore::open(&path, &IdentityOptions::with_root_key("key-a")).unwrap());
     drop(open(&path));
     // Another key is refused, and the store stays bound to the first key.
-    let result = Identity::open(&path, &IdentityOptions::with_root_key("key-b"));
+    let result = IdentityStore::open(&path, &IdentityOptions::with_root_key("key-b"));
     match result {
         Err(ScippyError::RootSetMismatch { stored, requested }) => {
             assert_eq!((stored.as_str(), requested.as_str()), ("key-a", "key-b"));
@@ -284,7 +287,7 @@ fn the_root_set_guard_binds_refuses_and_replaces() {
     // A replace binds the new key and keeps the data.
     let mut options = IdentityOptions::with_root_key("key-b");
     options.replace_root_set = true;
-    let store = Identity::open(&path, &options).unwrap();
+    let store = IdentityStore::open(&path, &options).unwrap();
     assert_eq!(store.root_key().unwrap().as_deref(), Some("key-b"));
     assert_eq!(store.get_entity(&e.id).unwrap(), Some(e));
 }
@@ -601,7 +604,8 @@ fn a_foreign_file_is_refused_before_the_wal_mode_is_set() {
     // Bytes 18 and 19 of the header are 1 in rollback mode and 2 in WAL mode.
     assert_eq!(before.0[18], 1);
     assert!(
-        error_text(Identity::open(&path, &IdentityOptions::default())).contains("not a Scippy")
+        error_text(IdentityStore::open(&path, &IdentityOptions::default()))
+            .contains("not a Scippy")
     );
     assert_eq!(state(&path), before);
     // A file with another application id and no tables.
@@ -612,7 +616,8 @@ fn a_foreign_file_is_refused_before_the_wal_mode_is_set() {
         .unwrap();
     let before = state(&other);
     assert!(
-        error_text(Identity::open(&other, &IdentityOptions::default())).contains("not a Scippy")
+        error_text(IdentityStore::open(&other, &IdentityOptions::default()))
+            .contains("not a Scippy")
     );
     assert_eq!(state(&other), before);
 }

@@ -9,7 +9,8 @@ use std::process::ExitCode;
 
 use clap::Args as ClapArgs;
 use scippy_metalayer::{
-    FileRecord, Outcome, ReferenceRecord, RelationQuery, Source, SymbolRecord, SymbolRef, View,
+    FileRecord, ReferenceRecord, RelationQuery, Source, StoredOutcome, SymbolRecord, SymbolRef,
+    View,
 };
 use serde_json::{Value, json};
 
@@ -103,15 +104,15 @@ impl Text {
 /// The reference record of the contract. The candidates are sorted by symbol string.
 fn reference_value(reference: &ReferenceRecord) -> Value {
     let (outcome, reason, candidates) = match &reference.outcome {
-        Outcome::Resolved(_) => ("resolved", None, Vec::new()),
-        Outcome::Ambiguous(candidates) => {
+        StoredOutcome::Resolved(_) => ("resolved", None, Vec::new()),
+        StoredOutcome::Ambiguous(candidates) => {
             let mut sorted = candidates.clone();
             sorted.sort();
             sorted.dedup();
             ("ambiguous", None, sorted)
         }
-        Outcome::Unresolved(reason) => ("unresolved", Some(reason.clone()), Vec::new()),
-        Outcome::Bounded(bound) => ("bounded", Some(bound.clone()), Vec::new()),
+        StoredOutcome::Unresolved(reason) => ("unresolved", Some(reason.clone()), Vec::new()),
+        StoredOutcome::Bounded(bound) => ("bounded", Some(bound.clone()), Vec::new()),
         _ => ("unknown", None, Vec::new()),
     };
     json!({
@@ -168,10 +169,10 @@ pub fn run(args: Args) -> ExitCode {
             ))
         })?;
 
-        let relations = view.file_references(RelationQuery {
+        let relations = view.relations(RelationQuery {
             path: Some(file.path.clone()),
             target: Some(wanted.clone()),
-            kind: None,
+            ..Default::default()
         })?;
         let supports = view.supports(&file.path, &wanted)?;
         let ambiguous = view.ambiguous_with(&file.path, &wanted)?;
@@ -211,7 +212,12 @@ pub fn run(args: Args) -> ExitCode {
                     outcome: None,
                 })?
                 .iter()
-                .filter(|r| matches!(r.outcome, Outcome::Unresolved(_) | Outcome::Ambiguous(_)))
+                .filter(|r| {
+                    matches!(
+                        r.outcome,
+                        StoredOutcome::Unresolved(_) | StoredOutcome::Ambiguous(_)
+                    )
+                })
                 .count();
             json!(count)
         } else {
@@ -277,7 +283,7 @@ fn write_human(
     out: &mut String,
     file: &FileRecord,
     target: &SymbolRecord,
-    relations: &[scippy_metalayer::FileReferenceRecord],
+    relations: &[scippy_metalayer::RelationRecord],
     supports: &[Value],
     ambiguous: &[Value],
     unresolved_in_file: &Value,

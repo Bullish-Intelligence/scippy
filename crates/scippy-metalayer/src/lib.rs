@@ -20,33 +20,25 @@ use scippy_core::{AnalysisSnapshot, ScippyError};
 
 pub use scippy_core::{Bound, ReferenceKind};
 
-/// The state of an entity binding. It differs from [`Outcome`], the outcome of a reference.
-pub use identity::Outcome as BindOutcome;
 pub use identity::{
-    AcceptAction, AcceptResult, Annotation, AnnotationEntry, AnnotationFilter, CONTAINER_SEPARATOR,
-    Entity, EntityDetail, EntityKind, Family, FixedIds, IDENTITY_VERSION, IdSource, Identity,
-    IdentityError, IdentityOptions, IdentityProbe, LOCATOR_HISTORY, Locator, LocatorMatch,
-    OutcomeRow, StatusEntry, SystemIds, Tier, default_identity_path, join_container,
-    split_container,
+    AcceptAction, AcceptResult, Annotation, AnnotationEntry, AnnotationFilter, BindOutcome, Entity,
+    EntityDetail, EntityKind, Family, FixedIds, IDENTITY_VERSION, IdSource, IdentityError,
+    IdentityOptions, IdentityProbe, IdentityStore, Locator, LocatorMatch, OutcomeRow, StatusEntry,
+    SystemIds, Tier, default_identity_path,
 };
 pub use index_run::{
     IndexFailure, IndexRun, Publication, PublishTarget, SnapshotFacts, index_and_publish,
 };
 pub use publish::{PublishOptions, Published};
 pub use query::{Counts, Probe, SymbolRecord};
-pub use query::{EdgeQuery, RelationQuery2, RelationRecord};
+pub use query::{EdgeQuery, RelationQuery, RelationRecord};
 pub use query::{FileState, compare_file};
 pub use read::View;
-pub use rebind::{
-    Item as RebindItem, MIN_BODY_TOKENS, MIN_BODY_TOKENS_ENV, ORPHAN_GC_PUBLISHES, RebindInput,
-    RebindReport, block_suffix, child_key, entity_kind, heading_suffix, min_body_tokens, note_key,
-    rebind, rebind_with, symbol_key,
-};
+pub use rebind::RebindReport;
 pub use records::{
-    DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
-    InputRecord, OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery,
-    ReferenceRecord, RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord,
-    SymbolRef,
+    DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileStatus, InputRecord, OccurrenceRecord,
+    OccurrenceRole, OutcomeKind, ReferenceQuery, ReferenceRecord, RelationKind, RevisionInfo,
+    RootSetInfo, Source, StoredOutcome, SupportRecord, SymbolRef,
 };
 pub use schema::SCHEMA_VERSION;
 

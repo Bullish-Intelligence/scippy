@@ -4,7 +4,7 @@ use std::fmt::Write;
 use std::process::ExitCode;
 
 use clap::Args as ClapArgs;
-use scippy_metalayer::{RelationKind, RelationQuery2, RelationRecord, SymbolRef};
+use scippy_metalayer::{RelationKind, RelationQuery, RelationRecord, SymbolRef};
 use serde_json::{Value, json};
 
 use super::common::{CliError, Common, Output, execute, list_value};
@@ -86,7 +86,7 @@ pub fn run(args: Args) -> ExitCode {
             .map(|k| kind_of(k))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| CliError::bad_argument("unknown kind"))?;
-        let relations = view.relations(RelationQuery2 {
+        let relations = view.relations(RelationQuery {
             path: args.from.clone(),
             target,
             target_name: args.target_name.clone(),

@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 use scippy_core::{AnalysisDocument, AnalysisSnapshot, AnalysisSymbol, DeclRecord};
 
-use crate::identity::{Identity, IdentityOptions};
+use crate::identity::{IdentityOptions, IdentityStore};
 use crate::publish::sha256_hex;
+use crate::rebind::{MIN_BODY_TOKENS, RebindInput, min_body_tokens, rebind, symbol_key};
 use crate::*;
 
 /// One declaration of a test file.
@@ -337,8 +338,8 @@ impl World {
             .unwrap_or_default()
     }
 
-    fn store(&self) -> Identity {
-        Identity::open(self.identity_path(), &IdentityOptions::default()).unwrap()
+    fn store(&self) -> IdentityStore {
+        IdentityStore::open(self.identity_path(), &IdentityOptions::default()).unwrap()
     }
 }
 

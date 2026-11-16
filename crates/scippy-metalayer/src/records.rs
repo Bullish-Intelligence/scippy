@@ -195,10 +195,11 @@ pub struct OccurrenceRecord {
     pub role: OccurrenceRole,
 }
 
-/// The result of the search for one reference.
+/// The result of the search for one reference, as the database stores it. It matches
+/// `scippy_core::ReferenceOutcome`, but its targets are [`SymbolRef`] values, not symbol strings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Outcome {
+pub enum StoredOutcome {
     Resolved(SymbolRef),
     /// The candidates, in the order of their symbol strings.
     Ambiguous(Vec<SymbolRef>),
@@ -215,7 +216,7 @@ pub struct ReferenceRecord {
     pub path: String,
     pub span: (u32, u32),
     pub kind: Option<ReferenceKind>,
-    pub outcome: Outcome,
+    pub outcome: StoredOutcome,
     /// For a resolved reference: the bound that stopped the search.
     pub limited: Option<Bound>,
 }
@@ -257,27 +258,6 @@ pub struct DiagnosticRecord {
     pub message: String,
     pub path: Option<String>,
     pub span: Option<(u32, u32)>,
-}
-
-/// File F depends on symbol S.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct FileReferenceRecord {
-    pub path: String,
-    pub target: SymbolRef,
-    pub kind: RelationKind,
-    /// The count of supports.
-    pub supports: u32,
-    /// The supports that rest on a stopped search.
-    pub limited: u32,
-}
-
-/// Which file-to-symbol relations to read. A field that is `None` does not filter.
-#[derive(Clone, Debug, Default)]
-pub struct RelationQuery {
-    pub path: Option<String>,
-    pub target: Option<SymbolRef>,
-    pub kind: Option<RelationKind>,
 }
 
 /// One source location that supports a relation.

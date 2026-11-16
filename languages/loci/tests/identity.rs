@@ -6,7 +6,7 @@ use std::fs;
 use scippy_core::{AnalysisSnapshot, IndexRequest, index_project_with_snapshot};
 use scippy_loci::LociPack;
 use scippy_metalayer::{
-    FixedIds, Identity, Metalayer, PublishOptions, RebindReport, default_identity_path,
+    FixedIds, IdentityStore, Metalayer, PublishOptions, RebindReport, default_identity_path,
 };
 
 const MANIFEST: &str = "schema = 1\nid = \"01a08b81-648f-70e8-bb5f-cd8c53f0f303\"\n";
@@ -69,8 +69,8 @@ impl Vault {
             .unwrap()
     }
 
-    fn store(&self) -> Identity {
-        Identity::open_read_only(self.identity_path()).unwrap()
+    fn store(&self) -> IdentityStore {
+        IdentityStore::open_read_only(self.identity_path()).unwrap()
     }
 
     /// The id and the state of the entity that a locator names.

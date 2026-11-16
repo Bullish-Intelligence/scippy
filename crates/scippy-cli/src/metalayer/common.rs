@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use clap::Args;
 use scippy_core::ScippyError;
 use scippy_metalayer::{
-    FixedIds, IDENTITY_VERSION, IdSource, Identity, IdentityError, IdentityOptions, IdentityProbe,
-    Metalayer, Probe, SCHEMA_VERSION, SystemIds, View, default_identity_path,
+    FixedIds, IDENTITY_VERSION, IdSource, IdentityError, IdentityOptions, IdentityProbe,
+    IdentityStore, Metalayer, Probe, SCHEMA_VERSION, SystemIds, View, default_identity_path,
 };
 use serde_json::{Value, json};
 
@@ -306,7 +306,7 @@ pub fn execute_identity(
     command: &'static str,
     args: &IdentityArgs,
     access: Access,
-    run: impl FnOnce(&mut Identity, &dyn IdSource) -> Result<Output, CliError>,
+    run: impl FnOnce(&mut IdentityStore, &dyn IdSource) -> Result<Output, CliError>,
 ) -> ExitCode {
     match read_identity(command, args, access, run) {
         Ok((envelope, output)) => {
@@ -332,10 +332,10 @@ fn read_identity(
     command: &'static str,
     args: &IdentityArgs,
     access: Access,
-    run: impl FnOnce(&mut Identity, &dyn IdSource) -> Result<Output, CliError>,
+    run: impl FnOnce(&mut IdentityStore, &dyn IdSource) -> Result<Output, CliError>,
 ) -> Result<(Value, Output), CliError> {
     let path = args.store_path();
-    match Identity::probe(&path)? {
+    match IdentityStore::probe(&path)? {
         IdentityProbe::Missing => {
             return Err(CliError::new(
                 "no-identity-store",
@@ -369,8 +369,8 @@ fn read_identity(
         }
     }
     let mut store = match access {
-        Access::Read => Identity::open_read_only(&path)?,
-        Access::Write => Identity::open(&path, &IdentityOptions::default())?,
+        Access::Read => IdentityStore::open_read_only(&path)?,
+        Access::Write => IdentityStore::open(&path, &IdentityOptions::default())?,
     };
     let ids = id_source();
     let output = run(&mut store, ids.as_ref())?;

@@ -2,17 +2,17 @@
 
 use std::path::Path;
 
-use crate::identity::{Identity, IdentityOptions};
+use crate::identity::{IdentityOptions, IdentityStore, join_container};
 use crate::*;
 
-fn open(path: &Path) -> Identity {
-    Identity::open(path, &IdentityOptions::default()).unwrap()
+fn open(path: &Path) -> IdentityStore {
+    IdentityStore::open(path, &IdentityOptions::default()).unwrap()
 }
 
 /// Add an entity with one locator. `path`, `container` (display names joined by `.`), and `name`
 /// make the locator. The id is `id`.
 fn declare(
-    store: &mut Identity,
+    store: &mut IdentityStore,
     id: &str,
     kind: EntityKind,
     path: &str,
@@ -35,7 +35,14 @@ fn declare(
     entity
 }
 
-fn locate(store: &mut Identity, id: &str, path: &str, container: &[&str], name: &str, input: &str) {
+fn locate(
+    store: &mut IdentityStore,
+    id: &str,
+    path: &str,
+    container: &[&str],
+    name: &str,
+    input: &str,
+) {
     let key = format!("{path} {}{name}", container.join("."));
     store
         .push_locator(&Locator {
@@ -55,7 +62,13 @@ fn locate(store: &mut Identity, id: &str, path: &str, container: &[&str], name: 
         .unwrap();
 }
 
-fn flag(store: &mut Identity, id: &str, outcome: BindOutcome, tier: Option<Tier>, keys: &[&str]) {
+fn flag(
+    store: &mut IdentityStore,
+    id: &str,
+    outcome: BindOutcome,
+    tier: Option<Tier>,
+    keys: &[&str],
+) {
     store
         .set_outcome(&OutcomeRow {
             entity_id: id.into(),
@@ -67,7 +80,7 @@ fn flag(store: &mut Identity, id: &str, outcome: BindOutcome, tier: Option<Tier>
         .unwrap();
 }
 
-fn note(store: &mut Identity, ids: &FixedIds, id: &str, body: &str) -> Annotation {
+fn note(store: &mut IdentityStore, ids: &FixedIds, id: &str, body: &str) -> Annotation {
     store.add(ids, id, body, None, None).unwrap()
 }
 
@@ -75,7 +88,7 @@ fn kind_of<T: std::fmt::Debug>(result: Result<T, IdentityError>) -> &'static str
     result.expect_err("the call must fail").kind()
 }
 
-fn store() -> (tempfile::TempDir, Identity) {
+fn store() -> (tempfile::TempDir, IdentityStore) {
     let dir = tempfile::tempdir().unwrap();
     let store = open(&dir.path().join("a.identity.db"));
     (dir, store)
@@ -285,7 +298,7 @@ fn accept_clears_a_moved_entity_and_refuses_other_states() {
 }
 
 /// An ambiguous entity `old`, and the declarations `n1` and `n2` that it may mean.
-fn ambiguity(s: &mut Identity) {
+fn ambiguity(s: &mut IdentityStore) {
     declare(s, "old", EntityKind::Function, "pkg/a.py", &[], "pick");
     declare(s, "n1", EntityKind::Function, "pkg/b.py", &[], "pick");
     declare(s, "n2", EntityKind::Function, "pkg/c.py", &[], "pick");
@@ -449,23 +462,29 @@ fn reject_refuses_a_matched_entity() {
 fn probe_and_read_only_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("a.identity.db");
-    assert_eq!(Identity::probe(&path).unwrap(), IdentityProbe::Missing);
+    assert_eq!(IdentityStore::probe(&path).unwrap(), IdentityProbe::Missing);
     std::fs::write(&path, "text, not SQLite\n").unwrap();
-    assert_eq!(Identity::probe(&path).unwrap(), IdentityProbe::NotIdentity);
+    assert_eq!(
+        IdentityStore::probe(&path).unwrap(),
+        IdentityProbe::NotIdentity
+    );
     std::fs::remove_file(&path).unwrap();
     let mut s = open(&path);
     declare(&mut s, "f1", EntityKind::Function, "pkg/a.py", &[], "a");
     drop(s);
     assert_eq!(
-        Identity::probe(&path).unwrap(),
+        IdentityStore::probe(&path).unwrap(),
         IdentityProbe::Version(IDENTITY_VERSION)
     );
     // A facts store is not an identity store.
     let facts = dir.path().join("facts.sqlite");
     drop(Metalayer::open(&facts).unwrap());
-    assert_eq!(Identity::probe(&facts).unwrap(), IdentityProbe::NotIdentity);
+    assert_eq!(
+        IdentityStore::probe(&facts).unwrap(),
+        IdentityProbe::NotIdentity
+    );
 
-    let mut ro = Identity::open_read_only(&path).unwrap();
+    let mut ro = IdentityStore::open_read_only(&path).unwrap();
     assert_eq!(ro.resolve("pkg/a.py::a").unwrap().id, "f1");
     assert_eq!(ro.bound_input_digest().unwrap(), None);
     let ids = FixedIds::default();

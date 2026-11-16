@@ -6,7 +6,9 @@ use std::fmt::Write;
 use std::process::ExitCode;
 
 use clap::{Args as ClapArgs, Subcommand};
-use scippy_metalayer::{AcceptAction, AnnotationFilter, BindOutcome, IdSource, Identity, Tier};
+use scippy_metalayer::{
+    AcceptAction, AnnotationFilter, BindOutcome, IdSource, IdentityStore, Tier,
+};
 use serde_json::json;
 
 use super::common::{Access, CliError, IdentityArgs, Output, execute_identity, list_value};
@@ -134,7 +136,7 @@ fn io(error: std::fmt::Error) -> CliError {
     CliError::new("io", error.to_string())
 }
 
-fn add(store: &mut Identity, ids: &dyn IdSource, args: &AddArgs) -> Result<Output, CliError> {
+fn add(store: &mut IdentityStore, ids: &dyn IdSource, args: &AddArgs) -> Result<Output, CliError> {
     let annotation = store.add(
         ids,
         &args.locator,
@@ -154,7 +156,7 @@ fn add(store: &mut Identity, ids: &dyn IdSource, args: &AddArgs) -> Result<Outpu
     ))
 }
 
-fn list(store: &mut Identity, args: &ListArgs) -> Result<Output, CliError> {
+fn list(store: &mut IdentityStore, args: &ListArgs) -> Result<Output, CliError> {
     let mut filter = AnnotationFilter::default();
     filter.entity.clone_from(&args.entity);
     filter.path.clone_from(&args.path);
@@ -188,7 +190,7 @@ fn list(store: &mut Identity, args: &ListArgs) -> Result<Output, CliError> {
     Ok(Output::new(list_value(items, None), text))
 }
 
-fn rm(store: &mut Identity, args: &RmArgs) -> Result<Output, CliError> {
+fn rm(store: &mut IdentityStore, args: &RmArgs) -> Result<Output, CliError> {
     let annotation = store.remove(&args.annotation_id)?;
     Ok(Output::new(
         json!({"removed": annotation_json(&annotation)}),
@@ -196,7 +198,7 @@ fn rm(store: &mut Identity, args: &RmArgs) -> Result<Output, CliError> {
     ))
 }
 
-fn status(store: &mut Identity, args: &StatusArgs) -> Result<Output, CliError> {
+fn status(store: &mut IdentityStore, args: &StatusArgs) -> Result<Output, CliError> {
     let mut text = String::new();
     let mut items = Vec::new();
     for entry in store.status()? {
@@ -255,7 +257,7 @@ fn parse_tier(text: &str) -> Result<Tier, CliError> {
         })
 }
 
-fn accept(store: &mut Identity, args: &AcceptArgs) -> Result<Output, CliError> {
+fn accept(store: &mut IdentityStore, args: &AcceptArgs) -> Result<Output, CliError> {
     if args.all {
         let tier = parse_tier(args.tier.as_deref().unwrap_or_default())?;
         let accepted = store.accept_all(tier)?;
@@ -299,7 +301,7 @@ fn accept(store: &mut Identity, args: &AcceptArgs) -> Result<Output, CliError> {
     ))
 }
 
-fn reject(store: &mut Identity, args: &RejectArgs) -> Result<Output, CliError> {
+fn reject(store: &mut IdentityStore, args: &RejectArgs) -> Result<Output, CliError> {
     let entity = store.resolve(&args.entity)?;
     let vetoed = store.reject(&entity.id)?;
     let detail = store.detail(&entity.id)?;

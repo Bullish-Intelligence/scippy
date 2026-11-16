@@ -16,22 +16,22 @@ use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use scippy_core::{AnalysisSnapshot, ScippyError};
 
 use crate::identity::{
-    EntityKind, Family, IdSource, Identity, Locator, Outcome, OutcomeRow, Tier, join_container,
-    push_locator_in,
+    BindOutcome, EntityKind, Family, IdSource, IdentityStore, Locator, OutcomeRow, Tier,
+    join_container, push_locator_in,
 };
 use crate::schema::storage;
 
 /// The smallest `body_tokens` that lets a body digest bind (tiers T4 and T5). A body below this
 /// size is too short to tell two declarations apart. `id-eval` calibrates the value.
-pub const MIN_BODY_TOKENS: i64 = 10;
+pub(crate) const MIN_BODY_TOKENS: i64 = 10;
 
 /// The environment variable that overrides [`MIN_BODY_TOKENS`] for one run. Evaluation sweeps
 /// use it. It is not a stable interface: a later version may remove it.
-pub const MIN_BODY_TOKENS_ENV: &str = "SCIPPY_IDENTITY_MIN_BODY_TOKENS";
+pub(crate) const MIN_BODY_TOKENS_ENV: &str = "SCIPPY_IDENTITY_MIN_BODY_TOKENS";
 
 /// The minimum body size of this run: the variable [`MIN_BODY_TOKENS_ENV`] when it holds a
 /// whole number, else [`MIN_BODY_TOKENS`].
-pub fn min_body_tokens() -> i64 {
+pub(crate) fn min_body_tokens() -> i64 {
     std::env::var(MIN_BODY_TOKENS_ENV)
         .ok()
         .and_then(|text| text.trim().parse().ok())
@@ -39,7 +39,7 @@ pub fn min_body_tokens() -> i64 {
 }
 
 /// An unannotated orphan goes after this many rebindings.
-pub const ORPHAN_GC_PUBLISHES: usize = 100;
+pub(crate) const ORPHAN_GC_PUBLISHES: usize = 100;
 
 /// The `meta` key of the digests of the most recent rebindings, one per line.
 const META_RECENT_DIGESTS: &str = "recent_digests";
@@ -65,7 +65,7 @@ const SEP: char = '\u{1f}';
 ///
 /// The version field becomes `.`, the SCIP text for an empty field. A local symbol and a text
 /// that is not a symbol give `None`.
-pub fn symbol_key(symbol: &str) -> Option<String> {
+pub(crate) fn symbol_key(symbol: &str) -> Option<String> {
     if symbol.starts_with("local ") {
         return None;
     }
@@ -96,12 +96,12 @@ pub fn symbol_key(symbol: &str) -> Option<String> {
 }
 
 /// The identity key of a child: the entity id of the parent and the name of the child.
-pub fn child_key(parent_id: &str, name: &str) -> String {
+pub(crate) fn child_key(parent_id: &str, name: &str) -> String {
     format!("{parent_id}/{name}")
 }
 
 /// The entity kind of a SCIP kind name.
-pub fn entity_kind(scip_kind: &str) -> EntityKind {
+pub(crate) fn entity_kind(scip_kind: &str) -> EntityKind {
     match scip_kind {
         "Module" => EntityKind::Module,
         "Class" | "Interface" | "Enum" | "TypeAlias" | "Namespace" => EntityKind::Class,
@@ -117,7 +117,7 @@ pub fn entity_kind(scip_kind: &str) -> EntityKind {
 /// One declaration of the new run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct Item {
+pub(crate) struct Item {
     /// The identity key. A child has no key of its own: the engine builds it from the entity id
     /// of the parent and `child_name`. The field of a child is ignored.
     pub key: String,
@@ -149,7 +149,7 @@ impl Item {
 /// What one rebinding reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct RebindInput {
+pub(crate) struct RebindInput {
     /// The `input_digest` of the facts of the new run.
     pub input_digest: String,
     pub family: Family,
@@ -176,8 +176,8 @@ impl RebindInput {
         }
         for doc in &snapshot.documents {
             files.insert(doc.path.clone(), doc.sha256.clone());
-            // The note family reads the documents of the Loci pack.
-            if doc.pack.as_deref() == Some(LOCI_PACK) {
+            // The note family reads the documents that carry note records.
+            if has_note_record(doc) {
                 continue;
             }
             for sym in &doc.symbols {
@@ -233,11 +233,16 @@ impl RebindInput {
     }
 }
 
-/// The id of the Loci language pack.
-const LOCI_PACK: &str = "loci";
+/// The document has a note record. A pack that gives note records declares that its documents
+/// belong to the note family.
+fn has_note_record(doc: &scippy_core::AnalysisDocument) -> bool {
+    doc.symbols
+        .iter()
+        .any(|sym| sym.decl.as_ref().is_some_and(|d| d.note.is_some()))
+}
 
 /// The identity key of a note: `id:<loci.id>`, else `path:<path>`.
-pub fn note_key(loci_id: Option<&str>, path: &str) -> String {
+pub(crate) fn note_key(loci_id: Option<&str>, path: &str) -> String {
     match loci_id {
         Some(id) => format!("id:{id}"),
         None => format!("path:{path}"),
@@ -246,12 +251,12 @@ pub fn note_key(loci_id: Option<&str>, path: &str) -> String {
 
 /// The part of the key of a heading below the key of its note: the texts of the ancestors, the
 /// text, and the ordinal among equal siblings.
-pub fn heading_suffix(ancestors: &[String], text: &str, ordinal: u32) -> String {
+pub(crate) fn heading_suffix(ancestors: &[String], text: &str, ordinal: u32) -> String {
     format!("{}/{text}#{ordinal}", ancestors.join("/"))
 }
 
 /// The part of the key of a block below the key of its note.
-pub fn block_suffix(block_id: &str) -> String {
+pub(crate) fn block_suffix(block_id: &str) -> String {
     format!("^{block_id}")
 }
 
@@ -1116,7 +1121,7 @@ fn parse_outcome(
     candidates: Option<String>,
     since_digest: String,
 ) -> Result<OutcomeRow, ScippyError> {
-    let outcome = Outcome::parse(&outcome)
+    let outcome = BindOutcome::parse(&outcome)
         .ok_or_else(|| ScippyError::Storage(format!("unknown outcome {outcome:?}")))?;
     let tier = match tier {
         Some(text) => Some(
@@ -1420,7 +1425,7 @@ fn apply_bind(
         if old
             .outcome
             .as_ref()
-            .is_some_and(|o| o.outcome != Outcome::Moved)
+            .is_some_and(|o| o.outcome != BindOutcome::Moved)
         {
             clear_outcome(tx, &old.id)?;
         }
@@ -1429,7 +1434,7 @@ fn apply_bind(
             tx,
             &OutcomeRow {
                 entity_id: old.id.clone(),
-                outcome: Outcome::Moved,
+                outcome: BindOutcome::Moved,
                 tier: Some(tier),
                 candidates: Vec::new(),
                 since_digest: digest.into(),
@@ -1447,8 +1452,8 @@ fn apply_bind(
 /// An entity that no tier binds keeps its row, as `ambiguous` or `orphaned`. A declaration that
 /// no entity claims gets a new id. The function is idempotent: the same input a second time
 /// changes nothing but the recent digests.
-pub fn rebind(
-    identity: &mut Identity,
+pub(crate) fn rebind(
+    identity: &mut IdentityStore,
     input: &RebindInput,
     ids: &dyn IdSource,
 ) -> Result<RebindReport, ScippyError> {
@@ -1456,8 +1461,8 @@ pub fn rebind(
 }
 
 /// [`rebind`] with a chosen minimum body size. The tests and the calibration use it.
-pub fn rebind_with(
-    identity: &mut Identity,
+pub(crate) fn rebind_with(
+    identity: &mut IdentityStore,
     input: &RebindInput,
     ids: &dyn IdSource,
     min_tokens: i64,
@@ -1468,7 +1473,7 @@ pub fn rebind_with(
 /// [`rebind`] for a family that is not the last one of a publish. It leaves `bound_input_digest`
 /// as it was. The last family of the publish sets the digest: see `publish`.
 pub(crate) fn rebind_not_last(
-    identity: &mut Identity,
+    identity: &mut IdentityStore,
     input: &RebindInput,
     ids: &dyn IdSource,
 ) -> Result<RebindReport, ScippyError> {
@@ -1476,7 +1481,7 @@ pub(crate) fn rebind_not_last(
 }
 
 fn rebind_commit(
-    identity: &mut Identity,
+    identity: &mut IdentityStore,
     input: &RebindInput,
     ids: &dyn IdSource,
     min_tokens: i64,
@@ -1619,11 +1624,11 @@ fn rebind_in(
             })
             .unwrap_or_default();
         let (outcome, tier, candidates) = match (&pool.hints[o], candidates.is_empty()) {
-            (Some((tier, _)), false) => (Outcome::Ambiguous, Some(*tier), candidates),
-            _ => (Outcome::Orphaned, None, Vec::new()),
+            (Some((tier, _)), false) => (BindOutcome::Ambiguous, Some(*tier), candidates),
+            _ => (BindOutcome::Orphaned, None, Vec::new()),
         };
         match outcome {
-            Outcome::Ambiguous => report.ambiguous += 1,
+            BindOutcome::Ambiguous => report.ambiguous += 1,
             _ => report.orphaned += 1,
         }
         let same = old.outcome.as_ref().is_some_and(|row| {
@@ -1813,8 +1818,8 @@ fn orphan_children(
 
 /// Orphan the children of the orphaned entities of a family, without a rebinding. Publish calls
 /// it when the store is already bound to the input, so a `reject` takes effect on parameters.
-pub fn orphan_children_of_orphans(
-    identity: &mut Identity,
+pub(crate) fn orphan_children_of_orphans(
+    identity: &mut IdentityStore,
     family: Family,
     input_digest: &str,
 ) -> Result<usize, ScippyError> {

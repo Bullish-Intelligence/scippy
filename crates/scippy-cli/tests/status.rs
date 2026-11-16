@@ -13,7 +13,7 @@ use scippy_core::{
     index_project_with_snapshot,
 };
 use scippy_loci::LociPack;
-use scippy_metalayer::{FileStatus, Metalayer, Outcome, PublishOptions, ReferenceQuery};
+use scippy_metalayer::{FileStatus, Metalayer, PublishOptions, ReferenceQuery, StoredOutcome};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
@@ -457,7 +457,7 @@ fn a_note_over_the_note_limit_is_skipped_and_its_link_is_a_skipped_target() {
     assert_eq!(references.len(), 1);
     assert_eq!(
         references[0].outcome,
-        Outcome::Unresolved("target-skipped".into())
+        StoredOutcome::Unresolved("target-skipped".into())
     );
 }
 

@@ -104,10 +104,10 @@ fn supports(layer: &mut Metalayer, path: &str, part: &str) -> Option<u32> {
         path: Some(path.to_owned()),
         ..Default::default()
     };
-    view.file_references(query)
+    view.relations(query)
         .unwrap()
         .into_iter()
-        .find(|r| r.target.symbol.contains(part))
+        .find(|r| r.target.symbol.symbol.contains(part))
         .map(|r| r.supports)
 }
 

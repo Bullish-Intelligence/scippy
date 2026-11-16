@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::Outcome as BindOutcome;
+use super::BindOutcome;
 use super::*;
 
 /// One entity that a locator matches. [`IdentityError::AmbiguousLocator`] lists them.
@@ -96,7 +96,7 @@ impl From<ScippyError> for IdentityError {
     }
 }
 
-/// The result of [`Identity::probe`].
+/// The result of [`IdentityStore::probe`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IdentityProbe {
@@ -137,7 +137,7 @@ impl EntityDetail {
     }
 }
 
-/// The filter of [`Identity::list`]. Each set field narrows the result.
+/// The filter of [`IdentityStore::list`]. Each set field narrows the result.
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
 pub struct AnnotationFilter {
@@ -172,7 +172,7 @@ pub struct StatusEntry {
     pub annotations: usize,
 }
 
-/// What [`Identity::accept`] did.
+/// What [`IdentityStore::accept`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AcceptAction {
@@ -187,7 +187,7 @@ pub enum AcceptAction {
     },
 }
 
-/// The result of [`Identity::accept`].
+/// The result of [`IdentityStore::accept`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct AcceptResult {
@@ -197,7 +197,7 @@ pub struct AcceptResult {
 
 impl Locator {
     /// The locator text of an entity of `kind` at this locator, in the form that
-    /// [`Identity::resolve`] accepts: `path::Outer.Inner`, `note.md#H1/H2`, `note.md^id`.
+    /// [`IdentityStore::resolve`] accepts: `path::Outer.Inner`, `note.md#H1/H2`, `note.md^id`.
     /// A module shows as `path::`.
     pub fn display(&self, kind: EntityKind) -> String {
         let mut names = self.containers();
@@ -262,7 +262,7 @@ fn annotation_count(db: &Connection, entity_id: &str) -> Result<i64, ScippyError
     .map_err(storage)
 }
 
-impl Identity {
+impl IdentityStore {
     /// Look at a path without opening it for use. It never writes, creates, or migrates.
     pub fn probe(path: impl AsRef<Path>) -> Result<IdentityProbe, ScippyError> {
         let path = path.as_ref();

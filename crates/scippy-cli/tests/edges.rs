@@ -6,7 +6,7 @@ use std::path::Path;
 use scippy_core::{AnalysisSnapshot, IndexRequest, index_project_with_snapshot};
 use scippy_loci::LociPack;
 use scippy_metalayer::{
-    EdgeKind, Metalayer, Outcome, PublishOptions, ReferenceKind, ReferenceQuery, RelationKind,
+    EdgeKind, Metalayer, PublishOptions, ReferenceKind, ReferenceQuery, RelationKind, StoredOutcome,
 };
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
@@ -146,7 +146,7 @@ fn the_reference_kind_is_plain_member_or_keyword_and_none_for_a_native_pack() {
     );
     assert!(
         all.iter()
-            .any(|r| matches!(r.outcome, Outcome::Resolved(_)))
+            .any(|r| matches!(r.outcome, StoredOutcome::Resolved(_)))
     );
 }
 

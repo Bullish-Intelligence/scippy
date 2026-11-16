@@ -9,10 +9,10 @@ use scippy_core::ScippyError;
 
 use crate::publish::sha256_hex;
 use crate::records::{
-    DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileReferenceRecord, FileStatus,
-    InputRecord, OccurrenceRecord, OccurrenceRole, Outcome, OutcomeKind, ReferenceQuery,
-    ReferenceRecord, RelationKind, RelationQuery, RevisionInfo, RootSetInfo, Source, SupportRecord,
-    SymbolRef, parse_bound, parse_reference_kind,
+    DiagnosticRecord, EdgeKind, EdgeRecord, FileRecord, FileStatus, InputRecord, OccurrenceRecord,
+    OccurrenceRole, OutcomeKind, ReferenceQuery, ReferenceRecord, RelationKind, RevisionInfo,
+    RootSetInfo, Source, StoredOutcome, SupportRecord, SymbolRef, parse_bound,
+    parse_reference_kind,
 };
 use crate::schema::storage;
 
@@ -268,9 +268,9 @@ impl<'a> View<'a> {
             let (path, span, kind, outcome, reason, limited, id, target) = row.map_err(storage)?;
             let outcome = match OutcomeKind::parse(&outcome)? {
                 OutcomeKind::Resolved => {
-                    Outcome::Resolved(target.ok_or_else(|| missing("a resolved target"))?)
+                    StoredOutcome::Resolved(target.ok_or_else(|| missing("a resolved target"))?)
                 }
-                OutcomeKind::Ambiguous => Outcome::Ambiguous(
+                OutcomeKind::Ambiguous => StoredOutcome::Ambiguous(
                     candidates
                         .query_map([id], |r| symbol_at(r, 0))
                         .map_err(storage)?
@@ -278,9 +278,11 @@ impl<'a> View<'a> {
                         .map_err(storage)?,
                 ),
                 OutcomeKind::Unresolved => {
-                    Outcome::Unresolved(reason.ok_or_else(|| missing("a reason"))?)
+                    StoredOutcome::Unresolved(reason.ok_or_else(|| missing("a reason"))?)
                 }
-                OutcomeKind::Bounded => Outcome::Bounded(reason.ok_or_else(|| missing("a bound"))?),
+                OutcomeKind::Bounded => {
+                    StoredOutcome::Bounded(reason.ok_or_else(|| missing("a bound"))?)
+                }
             };
             out.push(ReferenceRecord {
                 path,
@@ -324,58 +326,6 @@ impl<'a> View<'a> {
             })
             .map_err(storage)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(storage)
-    }
-
-    /// The file-to-symbol relations that match the query, sorted by path, target, and kind.
-    pub fn file_references(
-        &self,
-        q: RelationQuery,
-    ) -> Result<Vec<FileReferenceRecord>, ScippyError> {
-        let target = match &q.target {
-            None => None,
-            Some(symbol) => match self.symbol_id(symbol)? {
-                Some(id) => Some(id),
-                None => return Ok(Vec::new()),
-            },
-        };
-        let sql = format!(
-            "SELECT f.path, fr.kind, fr.supports, fr.limited, {}
-             FROM file_reference fr
-             JOIN file f ON f.id = fr.file_id
-             JOIN symbol t ON t.id = fr.target_id
-             LEFT JOIN file tf ON tf.id = t.file_id
-             WHERE (?1 IS NULL OR f.path = ?1) AND (?2 IS NULL OR fr.target_id = ?2)
-               AND (?3 IS NULL OR fr.kind = ?3)
-             ORDER BY f.path, t.symbol, fr.kind",
-            symbol_columns("t", "tf")
-        );
-        let mut statement = self.tx.prepare(&sql).map_err(storage)?;
-        let rows = statement
-            .query_map(
-                params![q.path, target, q.kind.map(RelationKind::as_str)],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        symbol_at(r, 4)?,
-                    ))
-                },
-            )
-            .map_err(storage)?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (path, kind, supports, limited, target) = row.map_err(storage)?;
-            out.push(FileReferenceRecord {
-                path,
-                target,
-                kind: RelationKind::parse(&kind)?,
-                supports,
-                limited,
-            });
-        }
-        Ok(out)
     }
 
     /// The source locations in `path` that support the relation to `target`.

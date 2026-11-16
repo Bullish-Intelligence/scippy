@@ -494,7 +494,7 @@ pub fn identity_store(name: &str) -> PathBuf {
     let path = identity_path(name);
     let _ = fs::remove_file(&path);
     drop(
-        scippy_metalayer::Identity::open(&path, &scippy_metalayer::IdentityOptions::default())
+        scippy_metalayer::IdentityStore::open(&path, &scippy_metalayer::IdentityOptions::default())
             .unwrap(),
     );
     let db = rusqlite::Connection::open(&path).unwrap();

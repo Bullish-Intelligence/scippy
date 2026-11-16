@@ -22,9 +22,9 @@ pub(crate) const IDENTITY_APPLICATION_ID: i32 = 0x5343_4944;
 /// The identity store format version that this code reads and writes.
 pub const IDENTITY_VERSION: i32 = 1;
 /// A locator history holds the newest entries only. Seq 0 is the current locator.
-pub const LOCATOR_HISTORY: usize = 16;
+pub(crate) const LOCATOR_HISTORY: usize = 16;
 /// The separator of the display names in `Locator::container`.
-pub const CONTAINER_SEPARATOR: char = '\u{1f}';
+pub(crate) const CONTAINER_SEPARATOR: char = '\u{1f}';
 
 /// The tables. The design is in `METALAYER_IDENTITY.md`, section 4.
 pub(crate) const IDENTITY_DDL: &str = "
@@ -301,17 +301,18 @@ impl Tier {
     }
 }
 
-/// The binding state of an entity. The store holds a row for each state except `Matched`.
+/// The binding state of an entity. It is not the outcome of a reference search: see
+/// [`StoredOutcome`](crate::StoredOutcome). The store holds a row for each state except `Matched`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum Outcome {
+pub enum BindOutcome {
     Matched,
     Moved,
     Ambiguous,
     Orphaned,
 }
 
-impl Outcome {
+impl BindOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Matched => "matched",
@@ -375,7 +376,7 @@ impl Locator {
 }
 
 /// Join display names with [`CONTAINER_SEPARATOR`].
-pub fn join_container<S: AsRef<str>>(names: &[S]) -> String {
+pub(crate) fn join_container<S: AsRef<str>>(names: &[S]) -> String {
     let mut out = String::new();
     for (i, name) in names.iter().enumerate() {
         if i > 0 {
@@ -387,7 +388,7 @@ pub fn join_container<S: AsRef<str>>(names: &[S]) -> String {
 }
 
 /// Split a container text into display names. An empty text gives no names.
-pub fn split_container(container: &str) -> Vec<&str> {
+pub(crate) fn split_container(container: &str) -> Vec<&str> {
     if container.is_empty() {
         Vec::new()
     } else {
@@ -401,7 +402,7 @@ pub fn split_container(container: &str) -> Vec<&str> {
 pub struct OutcomeRow {
     pub entity_id: String,
     /// `Moved`, `Ambiguous`, or `Orphaned`. `set_outcome` refuses `Matched`.
-    pub outcome: Outcome,
+    pub outcome: BindOutcome,
     pub tier: Option<Tier>,
     /// The keys of the candidates.
     pub candidates: Vec<String>,
@@ -432,7 +433,7 @@ pub use ops::{
 
 // ---- The store ----
 
-/// Options of [`Identity::open`].
+/// Options of [`IdentityStore::open`].
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
 pub struct IdentityOptions {
@@ -453,16 +454,16 @@ impl IdentityOptions {
 }
 
 /// The identity store. It holds entities, locators, outcomes, vetoes, and annotations.
-pub struct Identity {
+pub struct IdentityStore {
     /// The connection. The rebinding engine runs its own transaction on it.
     pub(crate) db: Connection,
     path: PathBuf,
     version: i32,
 }
 
-impl fmt::Debug for Identity {
+impl fmt::Debug for IdentityStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Identity")
+        f.debug_struct("IdentityStore")
             .field("path", &self.path)
             .field("version", &self.version)
             .finish()
@@ -529,7 +530,7 @@ pub(crate) fn backup_path(path: &Path, version: i32) -> PathBuf {
     path.with_file_name(name)
 }
 
-impl Identity {
+impl IdentityStore {
     /// Open or create the identity store.
     ///
     /// A new file gets the tables. A newer version is refused. An older version is copied to
@@ -732,7 +733,7 @@ fn annotation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
     })
 }
 
-/// The body of [`Identity::push_locator`], for a caller that holds a transaction.
+/// The body of [`IdentityStore::push_locator`], for a caller that holds a transaction.
 pub(crate) fn push_locator_in(tx: &Transaction<'_>, locator: &Locator) -> Result<(), ScippyError> {
     // Two steps keep the primary key free of clashes while the seq numbers move.
     tx.execute(
@@ -774,7 +775,7 @@ pub(crate) fn push_locator_in(tx: &Transaction<'_>, locator: &Locator) -> Result
 }
 
 // The annotation API calls most of these helpers. The rebinding code calls the rest.
-impl Identity {
+impl IdentityStore {
     /// Read one `meta` value.
     pub(crate) fn meta(&self, key: &str) -> Result<Option<String>, ScippyError> {
         self.db
@@ -881,9 +882,9 @@ impl Identity {
 
     #[allow(dead_code)]
     /// Set the outcome of an entity. An existing row is replaced. `Matched` has no row:
-    /// use [`Identity::clear_outcome`].
+    /// use [`IdentityStore::clear_outcome`].
     pub(crate) fn set_outcome(&mut self, row: &OutcomeRow) -> Result<(), ScippyError> {
-        if row.outcome == Outcome::Matched {
+        if row.outcome == BindOutcome::Matched {
             return Err(ScippyError::Storage(
                 "a matched entity has no outcome row".into(),
             ));
@@ -946,7 +947,7 @@ impl Identity {
         let Some((entity_id, outcome, tier, candidates, since_digest)) = row else {
             return Ok(None);
         };
-        let outcome = Outcome::parse(&outcome)
+        let outcome = BindOutcome::parse(&outcome)
             .ok_or_else(|| ScippyError::Storage(format!("unknown outcome {outcome:?}")))?;
         let tier = match tier {
             Some(text) => Some(
