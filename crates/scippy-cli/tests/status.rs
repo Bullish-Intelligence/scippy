@@ -287,8 +287,10 @@ fn the_scippy_sources_publish() {
     let output = scratch.path().join("index.scip");
     let paths: [(&str, &Path); 2] = [("-o", &output), ("--metalayer", &database)];
     let run = scippy(&[root.to_str().unwrap()], &paths);
-    assert!(
-        run.status.success(),
+    // The fixtures syntax_error/bad.py and syntax_error/bad.ts lose input, so the run ends with 3.
+    assert_eq!(
+        run.status.code(),
+        Some(3),
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
