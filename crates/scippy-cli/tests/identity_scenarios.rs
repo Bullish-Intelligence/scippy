@@ -413,7 +413,6 @@ fn version_bump_matches_everything_by_t1() {
 }
 
 #[test]
-#[ignore = "engine bug: a pyproject-only edit keeps input_digest, so rebinding skips and the locator symbol keeps the old version"]
 fn version_bump_updates_the_symbol_of_the_current_locator() {
     let (before, after) = pair("version_bump");
     for ent in before.ents.values() {

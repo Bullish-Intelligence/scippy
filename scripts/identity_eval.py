@@ -579,6 +579,7 @@ def main():
     rp.add_argument("--scippy", required=True, help="the scippy binary")
     rp.add_argument("--pairs", type=int, default=20)
     rp.add_argument("--moves", type=int, default=0, help="include up to K commits that rename or move files")
+    rp.add_argument("--min-body", type=int, default=None, help="N: the minimum body size in tokens")
     rp.add_argument("--time-pairs", type=int, default=0, help="time the first K pairs")
     rp.add_argument("--time-reps", type=int, default=1)
     rp.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="extra `scippy index` arguments")
@@ -591,6 +592,9 @@ def main():
     op.add_argument("--reps", type=int, default=3)
     op.set_defaults(func=cmd_overhead)
     args = parser.parse_args()
+    if getattr(args, "min_body", None):
+        # The engine reads N from this variable. Child processes inherit it.
+        os.environ["SCIPPY_IDENTITY_MIN_BODY_TOKENS"] = str(args.min_body)
     args.func(args)
 
 
