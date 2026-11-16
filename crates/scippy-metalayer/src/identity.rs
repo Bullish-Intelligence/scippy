@@ -454,7 +454,8 @@ impl IdentityOptions {
 
 /// The identity store. It holds entities, locators, outcomes, vetoes, and annotations.
 pub struct Identity {
-    db: Connection,
+    /// The connection. The rebinding engine runs its own transaction on it.
+    pub(crate) db: Connection,
     path: PathBuf,
     version: i32,
 }

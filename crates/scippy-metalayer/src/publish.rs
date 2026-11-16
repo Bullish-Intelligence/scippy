@@ -3,12 +3,16 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
-use rusqlite::{Connection, Transaction, TransactionBehavior, params};
+use std::path::Path;
+
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use scippy_core::{
     AnalysisSnapshot, Bound, INCOMPLETE_CODES, ReferenceKind, ReferenceOutcome, ScippyError,
 };
 use sha2::{Digest, Sha256};
 
+use crate::identity::{IdSource, Identity, IdentityOptions};
+use crate::rebind::{RebindInput, RebindReport, rebind};
 use crate::schema::{SCHEMA_VERSION, storage};
 
 /// The version of the digest format. Change it when the digest input changes.
@@ -30,6 +34,8 @@ pub struct Published {
     pub revision: i64,
     /// The SHA-256 of the SCIP bytes of the same run.
     pub scip_sha256: String,
+    /// What the identity rebinding did. `None` when the publish ran without an identity store.
+    pub rebind: Option<RebindReport>,
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -145,6 +151,7 @@ pub(crate) fn publish(
     db: &mut Connection,
     s: &AnalysisSnapshot,
     o: &PublishOptions,
+    identity: Option<(&Path, &dyn IdSource)>,
 ) -> Result<Published, ScippyError> {
     // A strict run rejects incomplete input before it opens a transaction.
     if o.strict && !s.input_complete {
@@ -201,6 +208,36 @@ pub(crate) fn publish(
         .unwrap_or(0)
         .checked_add(1)
         .ok_or_else(|| ScippyError::Storage("revision overflow".into()))?;
+
+    // The files of the previous revision, for the file pairing of the rebinding. They are valid
+    // only when that revision is the one that the identity store bound.
+    let previous: Option<(String, BTreeMap<String, String>)> = if identity.is_some() {
+        let digest: Option<String> = tx
+            .query_row(
+                "SELECT input_digest FROM revision ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(storage)?;
+        match digest {
+            Some(digest) => {
+                let mut st = tx
+                    .prepare(
+                        "SELECT path, sha256 FROM file WHERE status = 'indexed' AND sha256 IS NOT NULL",
+                    )
+                    .map_err(storage)?;
+                let rows = st
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(storage)?;
+                let files = rows.collect::<Result<BTreeMap<_, _>, _>>().map_err(storage)?;
+                Some((digest, files))
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
 
     // Replace every fact. Delete the child tables first.
     for table in [
@@ -545,6 +582,7 @@ pub(crate) fn publish(
 
     // The revision row. Older revisions go.
     let scip_sha256 = sha256_hex(&s.scip);
+    let digest = input_digest(s, &key, &manifest);
     tx.execute(
         "INSERT INTO revision (id, root_id, parent, input_digest, tool_version, position_encoding,
                                input_complete, analysis_exact, strict, scip_sha256, scip_size)
@@ -552,7 +590,7 @@ pub(crate) fn publish(
         params![
             revision,
             parent,
-            input_digest(s, &key, &manifest),
+            digest,
             s.tool_version,
             input_complete,
             analysis_exact,
@@ -564,9 +602,35 @@ pub(crate) fn publish(
     .map_err(storage)?;
     tx.execute("DELETE FROM revision WHERE id < ?1", [revision])
         .map_err(storage)?;
+
+    // The identity store locks after the facts store. It commits first. When the facts commit
+    // fails, the next publish finds the store bound to this input and binds nothing again.
+    let rebinding = match identity {
+        Some((path, ids)) => {
+            let options = IdentityOptions {
+                root_key: Some(key.clone()),
+                replace_root_set: o.replace_root_set,
+            };
+            let mut store = Identity::open(path, &options)?;
+            if store.bound_input_digest()?.as_deref() == Some(digest.as_str()) {
+                Some(RebindReport {
+                    skipped: true,
+                    ..RebindReport::default()
+                })
+            } else {
+                let old_files = previous
+                    .filter(|(old, _)| store.bound_input_digest().ok().flatten().as_deref() == Some(old))
+                    .map(|(_, files)| files);
+                let input = RebindInput::from_snapshot(s, &digest, old_files);
+                Some(rebind(&mut store, &input, ids)?)
+            }
+        }
+        None => None,
+    };
     tx.commit().map_err(storage)?;
     Ok(Published {
         revision,
         scip_sha256,
+        rebind: rebinding,
     })
 }

@@ -10,7 +10,7 @@ use scippy_core::{
     write_scip,
 };
 use scippy_loci::LociPack;
-use scippy_metalayer::{Metalayer, PublishOptions};
+use scippy_metalayer::{Metalayer, PublishOptions, default_identity_path};
 use scippy_python::PythonPack;
 use scippy_typescript::TypeScriptPack;
 
@@ -84,6 +84,13 @@ struct IndexArgs {
     /// Without this flag, the run fails and keeps the database.
     #[arg(long, requires = "metalayer")]
     replace_root_set: bool,
+    /// Keep entity ids in this identity store. The default is beside the metalayer database:
+    /// `<name>.identity.db`. The store keeps the ids across edits, moves, and renames.
+    #[arg(long, requires = "metalayer", conflicts_with = "no_identity")]
+    identity: Option<PathBuf>,
+    /// Publish without the identity store. The run does not rebind entities.
+    #[arg(long, requires = "metalayer")]
+    no_identity: bool,
     /// Stop the search for one reference after this many units of work. The reference has no
     /// target. The default is in `ResolveLimits`.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
@@ -144,6 +151,20 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// The identity store of a run: the `--identity` path, or the default beside the metalayer
+/// database. `None` when the run has no database or has `--no-identity`.
+fn identity_path(args: &IndexArgs) -> Option<PathBuf> {
+    let metalayer = args.metalayer.as_ref()?;
+    if args.no_identity {
+        return None;
+    }
+    Some(
+        args.identity
+            .clone()
+            .unwrap_or_else(|| default_identity_path(metalayer)),
+    )
+}
+
 /// Refuse two output paths that name the same file. A SQLite database also owns the
 /// `-wal`, `-shm`, and `-journal` files beside it.
 fn check_paths(args: &IndexArgs) -> Result<(), String> {
@@ -157,6 +178,9 @@ fn check_paths(args: &IndexArgs) -> Result<(), String> {
     if let Some(path) = &args.graph_cache {
         named.push(("--graph-cache", resolve(path)));
     }
+    if let Some(path) = identity_path(args) {
+        named.push(("--identity", resolve(&path)));
+    }
     for (i, (first, a)) in named.iter().enumerate() {
         for (second, b) in &named[i + 1..] {
             if a == b {
@@ -168,7 +192,7 @@ fn check_paths(args: &IndexArgs) -> Result<(), String> {
         }
     }
     for (database, base) in &named {
-        if *database != "--metalayer" && *database != "--graph-cache" {
+        if !["--metalayer", "--graph-cache", "--identity"].contains(database) {
             continue;
         }
         for suffix in ["-wal", "-shm", "-journal"] {
@@ -203,6 +227,7 @@ fn main() -> ExitCode {
                 eprintln!("scippy: {message}");
                 return ExitCode::FAILURE;
             }
+            let identity = identity_path(&args);
             let IndexArgs {
                 project_root,
                 output,
@@ -218,6 +243,8 @@ fn main() -> ExitCode {
                 metalayer,
                 strict,
                 replace_root_set,
+                identity: _,
+                no_identity: _,
                 max_work,
                 max_queue_len,
                 max_arena_cells,
@@ -268,17 +295,22 @@ fn main() -> ExitCode {
                         }
                         return Err(ScippyError::Incomplete);
                     }
+                    let mut rebind = None;
                     let revision = match metalayer {
                         Some(path) => {
                             let options = PublishOptions {
                                 strict,
                                 replace_root_set,
                             };
-                            Some(
-                                Metalayer::open(path)?
-                                    .publish(&snapshot, &options)?
-                                    .revision,
-                            )
+                            let mut layer = Metalayer::open(path)?;
+                            let published = match &identity {
+                                Some(store) => {
+                                    layer.publish_with_identity(&snapshot, &options, store)?
+                                }
+                                None => layer.publish(&snapshot, &options)?,
+                            };
+                            rebind = published.rebind;
+                            Some(published.revision)
                         }
                         None => None,
                     };
@@ -288,7 +320,7 @@ fn main() -> ExitCode {
                         )),
                         None => e,
                     })?;
-                    Ok((report, revision))
+                    Ok((report, revision.map(|r| (r, rebind))))
                 })
             } else {
                 index_project(&request, &registry()).map(|report| (report, None))
@@ -343,8 +375,22 @@ fn main() -> ExitCode {
                             report.graph_cache_hits, report.graph_cache_misses
                         );
                     }
-                    if let Some(revision) = revision {
+                    if let Some((revision, rebind)) = revision {
                         println!("metalayer revision: {revision}");
+                        if let Some(r) = rebind {
+                            if r.skipped {
+                                println!("identity: unchanged");
+                            } else {
+                                println!(
+                                    "identity: bound {}, minted {}, ambiguous {}, orphaned {}, collected {}",
+                                    r.bound_total(),
+                                    r.minted,
+                                    r.ambiguous,
+                                    r.orphaned,
+                                    r.collected
+                                );
+                            }
+                        }
                     }
                     ExitCode::SUCCESS
                 }

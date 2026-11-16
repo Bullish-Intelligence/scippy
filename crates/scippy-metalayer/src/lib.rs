@@ -8,6 +8,7 @@ mod identity;
 mod publish;
 mod query;
 mod read;
+mod rebind;
 mod records;
 mod schema;
 
@@ -28,6 +29,10 @@ pub use identity::{
     split_container,
 };
 pub use publish::{PublishOptions, Published};
+pub use rebind::{
+    Item as RebindItem, MIN_BODY_TOKENS, ORPHAN_GC_PUBLISHES, RebindInput, RebindReport, child_key,
+    entity_kind, rebind, rebind_with, symbol_key,
+};
 pub use query::{Counts, Probe, SymbolRecord};
 pub use query::{EdgeQuery, RelationQuery2, RelationRecord};
 pub use query::{FileState, compare_file};
@@ -76,7 +81,38 @@ impl Metalayer {
                 "the metalayer database is open for reading".into(),
             ));
         }
-        publish::publish(&mut self.db, snapshot, options)
+        publish::publish(&mut self.db, snapshot, options, None)
+    }
+
+    /// [`Metalayer::publish`], and rebind the identity store at `identity` to the new facts.
+    ///
+    /// The store is created when it does not exist. The function commits the identity store
+    /// first and the facts store second. When the second commit fails, the next publish keeps
+    /// the ids: every entity matches by tier T1. The root-set guard of the identity store uses
+    /// `options.replace_root_set`.
+    pub fn publish_with_identity(
+        &mut self,
+        snapshot: &AnalysisSnapshot,
+        options: &PublishOptions,
+        identity: &Path,
+    ) -> Result<Published, ScippyError> {
+        self.publish_with_identity_ids(snapshot, options, identity, &SystemIds)
+    }
+
+    /// [`Metalayer::publish_with_identity`] with a chosen id source. Tests use a fixed source.
+    pub fn publish_with_identity_ids(
+        &mut self,
+        snapshot: &AnalysisSnapshot,
+        options: &PublishOptions,
+        identity: &Path,
+        ids: &dyn IdSource,
+    ) -> Result<Published, ScippyError> {
+        if self.read_only {
+            return Err(ScippyError::Storage(
+                "the metalayer database is open for reading".into(),
+            ));
+        }
+        publish::publish(&mut self.db, snapshot, options, Some((identity, ids)))
     }
 
     /// Start one read transaction. The result is `None` when nothing is published.
@@ -90,5 +126,7 @@ impl Metalayer {
 mod identity_ops_tests;
 #[cfg(test)]
 mod identity_tests;
+#[cfg(test)]
+mod rebind_tests;
 #[cfg(test)]
 mod tests;
