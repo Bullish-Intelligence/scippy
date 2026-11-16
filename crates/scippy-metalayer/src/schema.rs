@@ -9,7 +9,7 @@ use scippy_core::ScippyError;
 /// Marks a database file as a Scippy read model. The bytes spell "SCPY".
 pub(crate) const APPLICATION_ID: i32 = 0x5343_5059;
 /// The storage format version that this code reads and writes.
-pub const SCHEMA_VERSION: i32 = 9;
+pub const SCHEMA_VERSION: i32 = 10;
 /// The SHA-256 of `DDL` for each version that shipped, oldest first. The last entry is the
 /// current version. A change of `DDL` needs a new entry with a higher `SCHEMA_VERSION`: the
 /// test `the_ddl_hash_follows_the_version` fails otherwise. Never edit an old entry.
@@ -27,6 +27,10 @@ pub(crate) const DDL_HISTORY: &[(i32, &str)] = &[
         9,
         "aef21da97b62fe2d79dc80a297ca1148025db9e4c88f587c44aecb6bd4a57705",
     ),
+    (
+        10,
+        "bca1e138e06926cd1f83f0359033a03616975662ec71d81baeae7e7b61d0f4fe",
+    ),
 ];
 
 /// The tables and views. The design is in `METALAYER_SCHEMA.md`, section 3.
@@ -42,7 +46,6 @@ CREATE TABLE root_member (
 
 CREATE TABLE revision (
   id INTEGER PRIMARY KEY,
-  parent INTEGER,
   input_digest TEXT NOT NULL,
   tool_version TEXT NOT NULL,
   position_encoding TEXT NOT NULL CHECK (position_encoding = 'utf8-byte'),

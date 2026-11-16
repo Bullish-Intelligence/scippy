@@ -141,7 +141,6 @@ pub struct RootSetInfo {
 #[non_exhaustive]
 pub struct RevisionInfo {
     pub id: i64,
-    pub parent: Option<i64>,
     pub input_digest: String,
     pub tool_version: String,
     pub input_complete: bool,

@@ -22,7 +22,6 @@ pub fn run(args: Args) -> ExitCode {
         let root_set = view.root_set()?;
         let counts = view.counts()?;
         let value = json!({
-            "parent": revision.parent,
             "strict": revision.strict,
             "counts": {
                 "files": counts.files,
@@ -43,10 +42,6 @@ pub fn run(args: Args) -> ExitCode {
             writeln!(text, "{name}  {value}").map_err(|e| CliError::new("io", e.to_string()))
         };
         line("revision", &revision.id)?;
-        line(
-            "parent",
-            &revision.parent.map_or("-".to_owned(), |p| p.to_string()),
-        )?;
         line("created_at", &revision.created_at)?;
         line("tool_version", &revision.tool_version)?;
         line("input_digest", &revision.input_digest)?;

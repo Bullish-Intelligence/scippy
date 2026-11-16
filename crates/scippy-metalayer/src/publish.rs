@@ -185,7 +185,7 @@ pub(crate) fn publish(
         .map_err(storage)?;
 
     check_root_set(&tx, &key, s, o)?;
-    let (parent, revision) = next_revision(&tx)?;
+    let revision = next_revision(&tx)?;
     let previous = if identity.is_some() {
         read_previous_files(&tx)?
     } else {
@@ -213,7 +213,6 @@ pub(crate) fn publish(
         &tx,
         &RevisionRow {
             revision,
-            parent,
             digest: &digest,
             tool_version: &s.tool_version,
             input_complete,
@@ -283,16 +282,15 @@ fn check_root_set(
     Ok(())
 }
 
-/// The revision id and its parent. Never reuse an id: the new id follows the highest id.
-fn next_revision(tx: &Transaction<'_>) -> Result<(Option<i64>, i64), ScippyError> {
-    let parent: Option<i64> = tx
+/// The revision id. Never reuse an id: the new id follows the highest id.
+fn next_revision(tx: &Transaction<'_>) -> Result<i64, ScippyError> {
+    let highest: Option<i64> = tx
         .query_row("SELECT max(id) FROM revision", [], |r| r.get(0))
         .map_err(storage)?;
-    let revision = parent
+    highest
         .unwrap_or(0)
         .checked_add(1)
-        .ok_or_else(|| ScippyError::Storage("revision overflow".into()))?;
-    Ok((parent, revision))
+        .ok_or_else(|| ScippyError::Storage("revision overflow".into()))
 }
 
 /// The files of the previous revision, for the file pairing of the rebinding. They are valid
@@ -728,7 +726,6 @@ fn check_flags(tx: &Transaction<'_>, s: &AnalysisSnapshot) -> Result<(bool, bool
 /// The values of the revision row.
 struct RevisionRow<'a> {
     revision: i64,
-    parent: Option<i64>,
     digest: &'a str,
     tool_version: &'a str,
     input_complete: bool,
@@ -741,12 +738,11 @@ struct RevisionRow<'a> {
 /// Insert the revision row. Older revisions go.
 fn insert_revision(tx: &Transaction<'_>, row: &RevisionRow<'_>) -> Result<(), ScippyError> {
     tx.execute(
-        "INSERT INTO revision (id, parent, input_digest, tool_version, position_encoding,
+        "INSERT INTO revision (id, input_digest, tool_version, position_encoding,
                                input_complete, analysis_exact, strict, scip_sha256, scip_size)
-         VALUES (?1, ?2, ?3, ?4, 'utf8-byte', ?5, ?6, ?7, ?8, ?9)",
+         VALUES (?1, ?2, ?3, 'utf8-byte', ?4, ?5, ?6, ?7, ?8)",
         params![
             row.revision,
-            row.parent,
             row.digest,
             row.tool_version,
             row.input_complete,

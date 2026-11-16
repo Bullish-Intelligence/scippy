@@ -1,5 +1,4 @@
 revision  1
-parent  -
 created_at  <created_at>
 tool_version  <tool_version>
 input_digest  <input_digest>
@@ -12,7 +11,7 @@ input_complete  false
 analysis_exact  true
 strict  false
 position_encoding  utf8-byte
-schema_version  9
+schema_version  10
 files  failed=0 indexed=11 shadowed=0 skipped=1
 symbols  27
 references  ambiguous=2 bounded=0 resolved=18 unresolved=5

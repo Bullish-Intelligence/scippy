@@ -8,6 +8,6 @@
   "ok": false,
   "error": {
     "kind": "schema-mismatch",
-    "message": "the metalayer database has format version 3, but this build reads version 9; run `scippy index` to rebuild it"
+    "message": "the metalayer database has format version 3, but this build reads version 10; run `scippy index` to rebuild it"
   }
 }

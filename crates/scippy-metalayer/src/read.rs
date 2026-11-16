@@ -54,23 +54,22 @@ impl<'a> View<'a> {
     pub(crate) fn begin(tx: Transaction<'a>) -> Result<Option<Self>, ScippyError> {
         let revision = tx
             .query_row(
-                "SELECT id, parent, input_digest, tool_version, input_complete, analysis_exact,
+                "SELECT id, input_digest, tool_version, input_complete, analysis_exact,
                         strict, scip_sha256, created_at, scip_size, position_encoding
                  FROM revision ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
                     Ok(RevisionInfo {
                         id: r.get(0)?,
-                        parent: r.get(1)?,
-                        input_digest: r.get(2)?,
-                        tool_version: r.get(3)?,
-                        input_complete: r.get(4)?,
-                        analysis_exact: r.get(5)?,
-                        strict: r.get(6)?,
-                        scip_sha256: r.get(7)?,
-                        created_at: r.get(8)?,
-                        scip_size: r.get(9)?,
-                        position_encoding: r.get(10)?,
+                        input_digest: r.get(1)?,
+                        tool_version: r.get(2)?,
+                        input_complete: r.get(3)?,
+                        analysis_exact: r.get(4)?,
+                        strict: r.get(5)?,
+                        scip_sha256: r.get(6)?,
+                        created_at: r.get(7)?,
+                        scip_size: r.get(8)?,
+                        position_encoding: r.get(9)?,
                     })
                 },
             )

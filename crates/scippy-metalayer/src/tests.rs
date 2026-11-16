@@ -548,7 +548,7 @@ fn a_failed_publication_keeps_the_previous_revision_and_relations() {
 }
 
 #[test]
-fn a_revision_follows_its_parent_and_older_revisions_go() {
+fn a_revision_follows_the_highest_id_and_older_revisions_go() {
     let dir = tempfile::tempdir().unwrap();
     let mut layer = layer(dir.path());
     publish(&mut layer, &snapshot("a"));
@@ -565,7 +565,7 @@ fn a_revision_follows_its_parent_and_older_revisions_go() {
     assert_eq!(count(&layer, "revision"), 1);
     let view = layer.view().unwrap().unwrap();
     let info = view.revision();
-    assert_eq!((info.id, info.parent), (2, Some(1)));
+    assert_eq!(info.id, 2);
     assert!(info.strict && info.input_complete && info.analysis_exact);
     assert_eq!(info.scip_sha256, sha256_hex(b"scip"));
     assert_eq!(info.scip_sha256, published.scip_sha256);

@@ -3,9 +3,8 @@
   "$id": "https://scippy.invalid/schema/metalayer-v1/show.value.json",
   "title": "The value of `metalayer show`",
   "type": "object",
-  "required": ["parent", "strict", "counts"],
+  "required": ["strict", "counts"],
   "properties": {
-    "parent": {"type": ["integer", "null"], "description": "The id of the previous revision."},
     "strict": {"type": "boolean"},
     "counts": {
       "type": "object",
