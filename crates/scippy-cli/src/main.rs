@@ -5,19 +5,18 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use scippy_core::{
-    IndexRequest, InputLimits, LanguagePack, ScippyError, index_project_for_publish, write_scip,
+use scippy_core::{IndexRequest, InputLimits};
+use scippy_metalayer::{
+    IndexFailure, IndexRun, PublishTarget, default_identity_path, index_and_publish,
 };
-use scippy_loci::LociPack;
-use scippy_metalayer::{Metalayer, PublishOptions, default_identity_path};
-use scippy_python::PythonPack;
-use scippy_typescript::TypeScriptPack;
 
-use index_output::{Publication, RunOutput, SnapshotFacts};
+use index_output::RunOutput;
+use registry::registry;
 
 mod cache_choice;
 mod index_output;
 mod metalayer;
+mod registry;
 
 #[derive(Parser)]
 #[command(version, about = "Produce a SCIP index of a source tree")]
@@ -226,11 +225,6 @@ fn check_paths(args: &IndexArgs, cache: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 
-/// The static registry of built-in language packs.
-fn registry() -> [&'static dyn LanguagePack; 3] {
-    [&PythonPack, &TypeScriptPack, &LociPack]
-}
-
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Languages => {
@@ -307,57 +301,20 @@ fn main() -> ExitCode {
             if let Some(bytes) = memory_budget {
                 request.memory_budget = bytes;
             }
-            // The CLI applies `--strict` itself, so that it can print the diagnostics first.
-            // Every run needs the snapshot flags for its exit code.
-            let indexed = {
-                // The SCIP file follows the check and the publication. A failed run keeps the
-                // old file.
-                index_project_for_publish(&request, &registry()).and_then(|(report, snapshot)| {
-                    // A strict run opens no database and writes no file for lost input.
-                    if strict && !snapshot.input_complete {
-                        for diagnostic in &report.diagnostics {
-                            eprintln!("{diagnostic}");
-                        }
-                        return Err(ScippyError::Incomplete);
-                    }
-                    let mut publication = None;
-                    if let Some(path) = metalayer {
-                        let options = PublishOptions {
-                            strict,
-                            replace_root_set,
-                        };
-                        let mut layer = Metalayer::open(&path)?;
-                        let published = match &identity {
-                            Some(store) => {
-                                layer.publish_with_identity(&snapshot, &options, store)?
-                            }
-                            None => layer.publish(&snapshot, &options)?,
-                        };
-                        publication = Some(Publication {
-                            database: path,
-                            revision: published.revision,
-                            rebind: published.rebind,
-                        });
-                    }
-                    write_scip(&request.output, &snapshot.scip).map_err(
-                        |e| match &publication {
-                            Some(p) => ScippyError::Storage(format!(
-                                "revision {} is committed, but the SCIP file failed: {e}",
-                                p.revision
-                            )),
-                            None => e,
-                        },
-                    )?;
-                    let facts = SnapshotFacts {
-                        input_complete: snapshot.input_complete,
-                        analysis_exact: snapshot.analysis_exact,
-                        lost_files: snapshot.lost_files,
-                    };
-                    Ok((report, facts, publication))
-                })
-            };
+            // The library applies `--strict` itself, so that the CLI can print the diagnostics
+            // first. Every run needs the snapshot flags for its exit code.
+            let target = metalayer.map(|database| PublishTarget {
+                database,
+                identity,
+                replace_root_set,
+            });
+            let indexed = index_and_publish(&request, &registry(), strict, target.as_ref());
             match indexed {
-                Ok((report, facts, publication)) => {
+                Ok(IndexRun {
+                    report,
+                    facts,
+                    publication,
+                }) => {
                     for diagnostic in &report.diagnostics {
                         eprintln!("{diagnostic}");
                     }
@@ -371,9 +328,12 @@ fn main() -> ExitCode {
                     } else {
                         print!("{}", run.text());
                     }
-                    facts.exit_code()
+                    index_output::exit_code(&facts)
                 }
-                Err(error) => {
+                Err(IndexFailure { error, diagnostics }) => {
+                    for diagnostic in &diagnostics {
+                        eprintln!("{diagnostic}");
+                    }
                     if json {
                         println!("{}", index_output::error_envelope(error));
                     } else {

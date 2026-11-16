@@ -1,6 +1,8 @@
 //! Exercise the persistent experiment against full Scippy runs.
 
 mod common;
+
+use common::copy_tree;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,19 +27,6 @@ fn run(
     request.graph_cache = cache;
     request.jobs = 4;
     index_project_with_snapshot(&request, &[&PythonPack, &TypeScriptPack, &LociPack]).unwrap()
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 #[test]

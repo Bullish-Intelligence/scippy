@@ -2,7 +2,8 @@
 //!
 //! One module holds one command. A command module has an `Args` struct (`clap::Args`, with
 //! `#[command(flatten)] common: Common`) and `fn run(Args) -> ExitCode`. It calls
-//! [`common::execute`]. Every command is registered here, so a lane edits its own module only.
+//! [`common::execute`]. Every command is registered here. The split keeps each command, its
+//! arguments, and its output in one file, and keeps the shared envelope code in [`common`].
 
 mod annotate;
 mod check;

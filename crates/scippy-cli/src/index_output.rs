@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use scippy_core::{AnalysisFile, Diagnostic, IndexReport, ScippyError};
-use scippy_metalayer::RebindReport;
+use scippy_core::{Diagnostic, IndexReport, ScippyError};
+use scippy_metalayer::{Publication, SnapshotFacts};
 use serde_json::{Value, json};
 
 use crate::metalayer::{CliError, run_envelope};
@@ -13,34 +13,14 @@ use crate::metalayer::{CliError, run_envelope};
 /// failure. `--strict` turns lost input into a failure (code 1) before this.
 pub const EXIT_INCOMPLETE: u8 = 3;
 
-/// What the snapshot of a run adds to its report.
-pub struct SnapshotFacts {
-    /// The snapshot flag `input_complete`: the run lost no input.
-    pub input_complete: bool,
-    /// The snapshot flag `analysis_exact`: no reference search stopped at a limit.
-    pub analysis_exact: bool,
-    /// Every accepted file that the run did not index, with its status.
-    pub lost_files: Vec<AnalysisFile>,
-}
-
-impl SnapshotFacts {
-    /// The exit code of a run that finished: 0 when the run lost no input and its analysis is
-    /// exact, else [`EXIT_INCOMPLETE`].
-    pub fn exit_code(&self) -> ExitCode {
-        if self.input_complete && self.analysis_exact {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::from(EXIT_INCOMPLETE)
-        }
+/// The exit code of a run that finished: 0 when the run lost no input and its analysis is
+/// exact, else [`EXIT_INCOMPLETE`].
+pub fn exit_code(facts: &SnapshotFacts) -> ExitCode {
+    if facts.input_complete && facts.analysis_exact {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(EXIT_INCOMPLETE)
     }
-}
-
-/// What a run published to the metalayer database.
-pub struct Publication {
-    pub database: PathBuf,
-    pub revision: i64,
-    /// `None` when the run used no identity store.
-    pub rebind: Option<RebindReport>,
 }
 
 /// Everything that one finished run reports.

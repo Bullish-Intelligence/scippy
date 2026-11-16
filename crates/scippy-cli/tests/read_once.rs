@@ -1,5 +1,8 @@
 //! Check that a run reads each input file once, and that a file that changes in the run is stale.
 
+#[path = "../../../test-support/copy_tree.rs"]
+mod copy_tree;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,20 +13,9 @@ use scippy_loci::LociPack;
 use scippy_metalayer::{Metalayer, PublishOptions};
 use scippy_python::PythonPack;
 
-const EDITED: &str = "src/base/types.py";
+use copy_tree::copy_tree;
 
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
-}
+const EDITED: &str = "src/base/types.py";
 
 /// Copy the fixture with three Python roots that depend on each other. Return the vault folder.
 /// The root `base` is a dependency of `lib`, and `lib` is a dependency of `app`.

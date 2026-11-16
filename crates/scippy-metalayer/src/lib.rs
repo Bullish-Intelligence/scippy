@@ -5,6 +5,7 @@
 //! `METALAYER_SCHEMA.md`. The database is rebuildable: the SCIP file stays the canonical output.
 
 mod identity;
+mod index_run;
 mod publish;
 mod query;
 mod read;
@@ -27,6 +28,9 @@ pub use identity::{
     IdentityError, IdentityOptions, IdentityProbe, LOCATOR_HISTORY, Locator, LocatorMatch,
     OutcomeRow, StatusEntry, SystemIds, Tier, default_identity_path, join_container,
     split_container,
+};
+pub use index_run::{
+    IndexFailure, IndexRun, Publication, PublishTarget, SnapshotFacts, index_and_publish,
 };
 pub use publish::{PublishOptions, Published};
 pub use query::{Counts, Probe, SymbolRecord};

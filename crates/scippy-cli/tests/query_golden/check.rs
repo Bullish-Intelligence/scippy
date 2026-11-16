@@ -3,8 +3,9 @@
 //! A case that changes files works on a copy of the fixture project with its own database.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use crate::common::copy_tree;
 use crate::harness::{golden, golden_db, golden_text, project_root, run, scratch_db};
 
 /// An indexed copy of the fixture project that a test may change.
@@ -12,19 +13,6 @@ pub struct Copy {
     pub root: PathBuf,
     pub db: PathBuf,
     pub scip: PathBuf,
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 pub fn indexed_copy(name: &str) -> Copy {

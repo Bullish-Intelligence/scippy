@@ -12,10 +12,7 @@ use std::process::ExitCode;
 
 use clap::Args as ClapArgs;
 use scippy_core::{IndexRequest, LanguagePack, ScippyError, discover_files};
-use scippy_loci::LociPack;
 use scippy_metalayer::{FileState, compare_file};
-use scippy_python::PythonPack;
-use scippy_typescript::TypeScriptPack;
 use serde_json::json;
 
 use super::common::{CliError, Common, Output, execute};
@@ -36,11 +33,6 @@ pub struct Args {
     /// Look for files that the walk accepts and the manifest lacks.
     #[arg(long)]
     discover: bool,
-}
-
-/// The built-in packs. Discovery uses those that the manifest names.
-fn registry() -> [&'static dyn LanguagePack; 3] {
-    [&PythonPack, &TypeScriptPack, &LociPack]
 }
 
 fn scip_state(state: FileState) -> &'static str {
@@ -88,7 +80,7 @@ pub fn run(args: Args) -> ExitCode {
         let mut new = Vec::new();
         if args.discover {
             let packs: BTreeSet<&str> = files.iter().filter_map(|f| f.pack.as_deref()).collect();
-            let languages: Vec<&dyn LanguagePack> = registry()
+            let languages: Vec<&dyn LanguagePack> = crate::registry::registry()
                 .into_iter()
                 .filter(|p| packs.contains(p.id()))
                 .collect();

@@ -1,6 +1,7 @@
 //! Check the status of each file, the `--strict` flag, and the publish of a lossy run.
 
 mod common;
+use common::copy_tree;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -271,20 +272,6 @@ fn a_complete_run_exits_with_0_and_a_lost_input_run_with_3() {
     write(&root, "bad.py", "def broken(:\n");
     assert_eq!(scippy(&[root_arg], &paths).status.code(), Some(3));
     assert_eq!(scippy(&[root_arg, "--json"], &paths).status.code(), Some(3));
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        let kind = entry.file_type().unwrap();
-        if kind.is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else if kind.is_file() {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 #[test]

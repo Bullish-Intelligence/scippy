@@ -2,6 +2,12 @@
 
 use std::process::Command;
 
+#[path = "../../../../test-support/copy_tree.rs"]
+#[allow(dead_code)]
+mod copy_tree;
+#[allow(unused_imports)]
+pub use copy_tree::copy_tree;
+
 /// A command for the `scippy` binary that never touches the cache of the user.
 ///
 /// The default graph cache lives in the user cache folder. This command turns the cache off with

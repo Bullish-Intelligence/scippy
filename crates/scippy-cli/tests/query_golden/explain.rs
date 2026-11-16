@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::common::copy_tree;
 use crate::harness::{golden, golden_db, golden_exit, golden_text, scratch_db};
 
 const BASE_MODULE: &str = "scippy python demo . pkg/base/";
@@ -98,19 +99,6 @@ fn local_symbol_without_a_file_is_not_found() {
         &["explain", "--from", "pkg/child.py", "--to", "local 0"],
         1,
     );
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 /// Index a private copy of the fixture, then change one file and delete another.

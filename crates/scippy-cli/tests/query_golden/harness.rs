@@ -14,6 +14,8 @@ use std::sync::OnceLock;
 use jsonschema::{Retrieve, Uri, Validator};
 use serde_json::{Value, json};
 
+use crate::common::copy_tree;
+
 const SCHEMA_ID: &str = "https://scippy.invalid/schema/";
 const HINT: &str = "run `UPDATE_GOLDEN=1 cargo test -p scippy-cli --test query_golden` to update; a change is a contract change";
 
@@ -35,19 +37,6 @@ pub struct Run {
 
 fn manifest(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
-    }
 }
 
 /// The directory of the shared fixture. The name is a key of the inputs: the `scippy` binary,
