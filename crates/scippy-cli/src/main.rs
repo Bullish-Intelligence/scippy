@@ -19,7 +19,11 @@ mod metalayer;
 mod registry;
 
 #[derive(Parser)]
-#[command(version, about = "Produce a SCIP index of a source tree")]
+#[command(
+    name = "scippy",
+    version,
+    about = "Produce a SCIP index of a source tree"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -500,7 +500,10 @@ fn same_body(min: i64, o: &Old, i: &Item) -> bool {
 
 /// T3 accepts a pair in another path that has an equal container or an equal body.
 fn t3_accept(min: i64, o: &Old, i: &Item) -> bool {
-    o.cur.path != i.path && (o.cur.container == i.container || same_body(min, o, i))
+    // A class signature is only its name and bases, so two top-level classes need an equal body.
+    let top_class = o.kind == EntityKind::Class && o.cur.container.is_empty();
+    let same_place = o.cur.container == i.container && !top_class;
+    o.cur.path != i.path && (same_place || same_body(min, o, i))
 }
 
 impl<'a> Pool<'a> {

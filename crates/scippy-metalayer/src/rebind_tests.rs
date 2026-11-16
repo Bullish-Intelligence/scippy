@@ -743,6 +743,50 @@ fn t3_binds_a_declaration_that_moves_to_another_file() {
     assert_eq!(row.path, "b.py");
 }
 
+fn class(desc: &str, name: &str) -> Sym {
+    Sym {
+        kind: "Class",
+        ..func(desc, name)
+    }
+}
+
+#[test]
+fn t3_binds_a_top_level_class_that_moves_with_an_equal_body() {
+    let mut w = World::new();
+    w.publish(&[
+        file("a.py", vec![class("a/Note#", "Note")]),
+        file("b.py", vec![func("b/h().", "h")]),
+    ]);
+    let id = w.row("a/Note#").id;
+    let report = w.publish(&[
+        file("a.py", vec![func("a/g().", "g")]),
+        file("b.py", vec![class("b/Note#", "Note"), func("b/h().", "h")]),
+    ]);
+    assert_eq!(report.bound.get("T3"), Some(&1));
+    assert_eq!(w.row("b/Note#").id, id);
+    assert_eq!(w.state("b/Note#"), "moved:T3");
+}
+
+#[test]
+fn t3_does_not_bind_two_different_top_level_classes_with_the_same_name() {
+    let mut w = World::new();
+    w.publish(&[
+        file("a.py", vec![class("a/Note#", "Note")]),
+        file("b.py", vec![func("b/h().", "h")]),
+    ]);
+    let id = w.row("a/Note#").id;
+    let report = w.publish(&[
+        file("a.py", vec![func("a/g().", "g")]),
+        file(
+            "b.py",
+            vec![class("b/Note#", "Note").body("other"), func("b/h().", "h")],
+        ),
+    ]);
+    assert_eq!(report.bound.get("T3"), None);
+    assert_eq!(w.state("a/Note#"), "orphaned");
+    assert_ne!(w.row("b/Note#").id, id);
+}
+
 #[test]
 fn t3_with_equal_content_in_two_files_is_ambiguous() {
     let mut w = World::new();

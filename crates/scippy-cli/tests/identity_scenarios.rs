@@ -357,6 +357,27 @@ fn a_method_of_a_deleted_class_does_not_bind_to_a_method_of_a_new_class_in_the_s
     assert_orphan_and_mint(&before, &after, "demo/a.py", "Draft");
 }
 
+#[test]
+fn a_deleted_top_level_class_does_not_bind_to_a_different_class_of_the_same_name() {
+    // Widget in a.py is deleted. A different Widget (same name, same bases) is new in g.py.
+    let (before, after) = pair("wrong_class");
+    let old = before.find("demo/a.py", "class", "Widget");
+    after.assert_orphaned(&old.id);
+    let fresh = after.find("demo/g.py", "class", "Widget");
+    assert!(!before.ents.contains_key(&fresh.id));
+    assert!(after.outcome(&fresh.id).is_none());
+    let moved = after.outcomes.values().filter(|o| o.outcome == "moved");
+    assert_eq!(moved.count(), 0, "{:?}", after.outcomes);
+}
+
+#[test]
+fn a_top_level_class_that_moves_with_an_equal_body_is_moved_by_t3() {
+    let (before, after) = pair("move_class");
+    let old = before.find("demo/a.py", "class", "Widget");
+    after.assert_moved(&old.id, &["T3"]);
+    assert_eq!(after.ents[&old.id].path, "demo/c.py");
+}
+
 /// The methods of Widget are orphaned, and the methods of `class` are new, with new parameters.
 fn assert_orphan_and_mint(before: &Snap, after: &Snap, path: &str, class: &str) {
     for name in ["run", "reset"] {
