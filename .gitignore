@@ -16,3 +16,4 @@
 /.loci
 devenv.local.nix
 __pycache__/
+/.workspaces/
