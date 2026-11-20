@@ -1,0 +1,17 @@
+# Rust build output
+/target/
+
+# devenv local state
+devenv.lock
+.devenv/
+.direnv/
+.devenv.flake.nix
+
+# Machine-local Devman links
+.envrc
+.agents
+.claude/skills
+.devman/workflows
+.devman/runs
+.loci
+devenv.local.nix
