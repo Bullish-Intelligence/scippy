@@ -89,7 +89,7 @@ in
         "CLAUDE.md"
         ".gitignore"
         ".tmuxp.yaml"
-        ".copyroom-local.json"
+        ".copyroom.json"
         "scripts/**"
       ];
       # Keep the Cargo target dir under `.devenv/`. The slot clean keeps that path.
