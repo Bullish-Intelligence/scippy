@@ -398,6 +398,13 @@ annotation only: `list`, `Sequence`, `Iterable`, `Iterator`, `set`, `frozenset`,
 A container class of the project does not give its element type. Neither does a dict subclass
 with type arguments in its base class.
 
+### Return annotations
+
+A call of a function with a return annotation follows the annotation only. The `return`
+statements of the body add nothing. The body stays visible when the annotation names no class:
+`Self`, `Any`, `Type[...]`, a `TypeVar`, `ParamSpec`, or type alias that the same file binds, a type
+parameter of a `def` or `class`, and a string annotation.
+
 ## Input limits
 
 The walker skips a file larger than 1 MiB (`--max-file-bytes`) with a `file-too-large` warning.
@@ -538,6 +545,11 @@ shares them across shards. Parallel shards cut the wall time of the workspace to
 `scripts/oracle/RESULTS.md` has the numbers. To check a speed change,
 index the oracle corpora with the old and the new build, and compare the `.scip` and `--trace`
 files with `cmp`.
+
+The fork also contracts the graph of each file at the end of a build. It prunes the scope nodes
+that lead nowhere and merges the chains of plain scope nodes. On mypy this halves the arena cells
+of the file phase and cuts the peak memory by 1.2 GB. Unlike the changes above, it can change the
+output: on mypy it changes 47 locations, and 33 of them were bounded references that now resolve.
 
 ## Parallel roots
 

@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The fork pin moves to `3240d66`. The fork contracts the graph of each file, and a call of an annotated function follows the return annotation only. On mypy, the bounded references fall from 330 to 0, the raw recall rises from 94.11% to 94.19%, the wall time falls from 1,515 s to 533 s, and the peak memory falls from 5.45 GB to 4.22 GB. There are no wrong targets.
 - `metalayer show` no longer prints `parent`; facts schema 10.
 - `scippy metalayer check` takes `--project-root`. The old `--root` stays as a hidden alias.
 - Metalayer facts schema version 9: the unused `root_id` column is gone. Older facts databases rebuild on open.

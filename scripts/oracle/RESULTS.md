@@ -615,3 +615,45 @@ since 2026-11-09 (notes and roots grew).
 
 Kinds: wikilink 9,597, embed 211, frontmatter_link 17,402, markdown_link 23,603, markdown_embed 13,
 tag 10,435. Verdict, Gate 5: still met, now rerun after `04caacd`.
+
+## Run 2026-11-21: graph contraction and return annotations
+
+Fork commit 3240d66 on cda555a; Scippy on main 06df48a. The fork pin moves over two changes.
+
+- Contraction: the builder simplifies the graph of each file at the end of a build. It prunes the
+  scope nodes that lead nowhere. It merges each chain of plain scope nodes that have one incoming
+  and one outgoing edge, and it keeps the precedence of the first edge. `set_contract_graph(false)`
+  turns it off. Scippy leaves it on.
+- Return annotations (annot2): a call of an annotated function follows the return annotation only.
+  The value of the body stays when the annotation names no class: `Self`, `Any`, `Type[...]`, a
+  `TypeVar`, `ParamSpec`, or alias that the same file binds, a type parameter, or a string.
+
+Setup: mypy (187 files) scored against scip-python 0.6.8. Before is the pin cda555a. After is the
+pin 3240d66. Both ran with `--trace`. The two changes also ran alone, to split the effects.
+
+| mypy | Before | Contraction alone | annot2 alone | Both |
+|---|---|---|---|---|
+| Wrong targets | 0 | 0 | 0 | 0 |
+| Raw recall | 94.11% | 94.11% | 94.19% | 94.19% |
+| Recall with plausible targets | 98.31% | 98.33% | 98.48% | 98.48% |
+| Bounded references | 330 | 296 | 0 | 0 |
+| Wall time | 1,515 s | 1,290 s | 710 s | 533 s |
+| Peak memory | 5.45 GB | 4.21 GB | 5.51 GB | 4.22 GB |
+
+Contraction alone cuts the arena cells of the file phase from 83.4M to 37.4M and the peak memory
+by 1.24 GB. Its Scippy output changes in 47 locations of mypy. 33 of them were bounded references
+that now resolve. In 2 locations (`meet.py:617` and `:625`) Scippy reports a superset of targets that
+still holds the answer of scip-python.
+
+annot2 alone changes 381 locations of mypy. About 143 are gains that scip-python confirms. 9 are
+losses where scip-python agrees with the old answer. A known shadowing issue causes them. A
+separate investigation looks into it.
+
+| Corpus | Contraction alone | annot2 alone |
+|---|---|---|
+| rich | 0 changed locations | 7 changed, 0 losses |
+| stdlib | 0 changed locations | 1 changed |
+
+Contraction applies to every language of the fork, so the TypeScript pack builds smaller graphs
+too. Its golden and digest tests pass with no change to the golden files. The gate (`testee verify`,
+full) is green on the commit of the bump.
