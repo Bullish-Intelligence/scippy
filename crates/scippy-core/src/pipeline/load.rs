@@ -97,7 +97,7 @@ pub(super) fn load_file(
                     Severity::Warning,
                     "repaired-syntax",
                     Some((error.start_byte, error.end_byte)),
-                    "the grammar rejects this file. The pack blanked out the syntax that it does not know"
+                    "the grammar rejects this file. The pack repaired the syntax that it does not know. A repair can blank text, and a name in blanked text gets no occurrence"
                         .to_string(),
                 ));
                 tree

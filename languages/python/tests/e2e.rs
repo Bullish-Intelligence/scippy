@@ -1409,6 +1409,208 @@ fn a_syntax_error_skips_one_file_and_the_others_still_index() {
     );
 }
 
+// ---- Python 3.14 syntax that the grammar rejects (repair_syntax) ----
+
+/// The files of `py314` that got a `repaired-syntax` diagnostic, sorted.
+fn repaired_files(indexed: &Indexed) -> Vec<&str> {
+    let mut files: Vec<&str> = indexed
+        .report
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "repaired-syntax")
+        .filter_map(|d| d.file.as_deref())
+        .collect();
+    files.sort_unstable();
+    files
+}
+
+/// Check that each name in `names` is a plain reference to its class in `base.py`.
+fn assert_exception_references(indexed: &Indexed, file: &str, context: &str, names: &[&str]) {
+    for name in names {
+        let found = indexed.find(file, &format!("{context}{name}"), name);
+        assert_eq!(found.len(), 1, "{file}: {name}");
+        assert_eq!(found[0].symbol, global(&format!("base/{name}#")));
+        assert_eq!(
+            found[0].symbol_roles, 0,
+            "{file}: {name} is a plain reference"
+        );
+    }
+}
+
+#[test]
+fn an_except_clause_without_brackets_and_with_three_names_is_repaired() {
+    // R-1: the grammar reads `except A, B, C:` as an error.
+    let indexed = index("py314");
+    assert_eq!(indexed.report.files_skipped, 0);
+    assert_eq!(indexed.report.files_indexed, 6);
+    assert!(indexed.document("except_many.py").is_some());
+    // The first clause names three classes, and the second clause names two.
+    assert_exception_references(&indexed, "except_many.py", "except ", &["Boom"]);
+    assert_exception_references(&indexed, "except_many.py", "except Boom, ", &["Bust"]);
+    assert_exception_references(
+        &indexed,
+        "except_many.py",
+        "except Boom, Bust, ",
+        &["Crash"],
+    );
+    assert_exception_references(&indexed, "except_many.py", "except ", &["Fail"]);
+    assert_exception_references(&indexed, "except_many.py", "except Fail, ", &["Bust"]);
+    // The source file keeps its commas.
+    let text = fs::read_to_string(fixture("py314").join("except_many.py")).unwrap();
+    assert!(text.contains("except Boom, Bust, Crash:"));
+}
+
+#[test]
+fn an_except_star_clause_without_brackets_is_repaired() {
+    // R-1: the grammar reads `except* A, B:` as an error, even with two names.
+    let indexed = index("py314");
+    assert!(indexed.document("except_star.py").is_some());
+    assert_exception_references(&indexed, "except_star.py", "except* ", &["Boom"]);
+    assert_exception_references(&indexed, "except_star.py", "except* Boom, ", &["Bust"]);
+    assert_exception_references(&indexed, "except_star.py", "except* ", &["Crash"]);
+}
+
+#[test]
+fn a_clause_with_two_names_gives_two_references_and_no_binding() {
+    // R-1 gap check: the grammar reads `except A, B:` as the Python 2 form `except A, name:`
+    // and gives no error, so the core never calls the repair. The binding rules of the fork
+    // have no rule for that form, so `B` is an expression and a reference. This is the right
+    // result for Python 3.14. This test pins it. If the fork ever binds `B`, this test fails.
+    let indexed = index("py314");
+    assert!(indexed.document("except_two.py").is_some());
+    assert_exception_references(&indexed, "except_two.py", "except ", &["Boom"]);
+    assert_exception_references(&indexed, "except_two.py", "except Boom, ", &["Bust"]);
+    // No definition occurrence in the function, and no repair for this file.
+    let document = indexed.document("except_two.py").unwrap();
+    let definitions: Vec<_> = document
+        .occurrences
+        .iter()
+        .filter(|o| is_definition(o))
+        .map(|o| o.symbol.as_str())
+        .collect();
+    assert_eq!(
+        definitions,
+        [
+            global("except_two/").as_str(),
+            global("except_two/run().").as_str()
+        ]
+    );
+    assert!(!repaired_files(&indexed).contains(&"except_two.py"));
+}
+
+#[test]
+fn a_template_string_is_read_as_an_f_string() {
+    // R-2: the grammar 0.23.5 has no t-string.
+    let indexed = index("py314");
+    assert!(indexed.document("tstring.py").is_some());
+    let name = global("tstring/name.");
+    let width = global("tstring/width.");
+    let at = |context, word| indexed.symbols_of("tstring.py", context, word);
+    assert_eq!(at("t\"hello {name", "name"), [name.as_str()]);
+    // A raw template, a call, a conversion, a nested field in the format specification, and `=`.
+    assert_eq!(at("{render", "render"), [global("base/render().").as_str()]);
+    assert_eq!(at("render(name", "name"), [name.as_str()]);
+    assert_eq!(at(">{width", "width"), [width.as_str()]);
+    assert_eq!(at("{width=", "width"), [width.as_str()]);
+    // A template inside an f-string, and an f-string inside a template.
+    assert_eq!(at("f\"inner {name", "name"), [name.as_str()]);
+    assert_eq!(at("t\"deep {width", "width"), [width.as_str()]);
+    // The prefix of the source stays.
+    let text = fs::read_to_string(fixture("py314").join("tstring.py")).unwrap();
+    assert!(text.contains("plain = t\"hello"));
+}
+
+#[test]
+fn a_type_parameter_default_is_blanked_and_reported() {
+    // R-3: no grammar version knows a default. The repair blanks it. The type parameter, its
+    // bound, and every use of it stay. The names inside the default get no occurrence.
+    let indexed = index("py314");
+    assert!(indexed.document("typeparams.py").is_some());
+    let at = |context, word| indexed.find("typeparams.py", context, word);
+    let declared = at("class Box[T", "T");
+    assert_eq!(declared.len(), 1);
+    assert!(is_definition(declared[0]));
+    let own = declared[0].symbol.clone();
+    assert!(
+        own.starts_with("local "),
+        "a type parameter is local: {own}"
+    );
+    assert_eq!(at("item: T", "T")[0].symbol, own);
+    assert_eq!(at("-> T:\n        return self", "T")[0].symbol, own);
+    // The bound is a reference. The default is not read.
+    assert_eq!(at("T: Bust", "Bust")[0].symbol, global("base/Bust#"));
+    assert!(at("class Box[T = Boom", "Boom").is_empty());
+    assert!(at("Bust = Boom", "Boom").is_empty());
+    assert!(at("type Pair[T = Boom", "Boom").is_empty());
+    // The alias and the function are declared.
+    assert!(is_definition(at("type Pair", "Pair")[0]));
+    assert_eq!(
+        at("type Pair", "Pair")[0].symbol,
+        global("typeparams/Pair#")
+    );
+    assert!(is_definition(at("def first", "first")[0]));
+    // The report says that the pack blanked syntax.
+    let diagnostic = indexed
+        .report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "repaired-syntax" && d.file.as_deref() == Some("typeparams.py"))
+        .expect("a repaired-syntax diagnostic");
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    assert!(
+        diagnostic.message.contains("blanked"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        diagnostic.message.contains("no occurrence"),
+        "{}",
+        diagnostic.message
+    );
+    // The source file keeps its defaults.
+    let text = fs::read_to_string(fixture("py314").join("typeparams.py")).unwrap();
+    assert!(text.contains("class Box[T = Boom]:"));
+}
+
+#[test]
+fn each_repair_gives_one_diagnostic_and_a_clean_file_gives_none() {
+    let indexed = index("py314");
+    assert_eq!(
+        repaired_files(&indexed),
+        [
+            "except_many.py",
+            "except_star.py",
+            "tstring.py",
+            "typeparams.py"
+        ]
+    );
+}
+
+#[test]
+fn a_repair_does_not_hide_a_real_syntax_error() {
+    // R-1, R-2, R-3: a file that still fails after the repair is skipped, as before.
+    let (_scratch, indexed) = index_files(&[
+        (
+            "a.py",
+            "try:\n    pass\nexcept A, B, C:\n    pass\ndef broken(:\n    pass\n",
+        ),
+        // Python 3.14 rejects `as` without brackets, so the repair leaves the clause alone.
+        ("b.py", "try:\n    pass\nexcept A, B, C as e:\n    pass\n"),
+        ("good.py", "x = 1\n"),
+    ]);
+    assert!(indexed.document("a.py").is_none());
+    assert!(indexed.document("b.py").is_none());
+    assert!(indexed.document("good.py").is_some());
+    assert_eq!(indexed.report.files_skipped, 2);
+    assert!(
+        !indexed
+            .report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "repaired-syntax")
+    );
+}
+
 // ---- packages, roots, cycles ----
 
 #[test]

@@ -145,6 +145,30 @@
 //! is an external declaration, so the reference resolves to its symbol. A project module that has
 //! the name of a stub, such as `typing.py`, wins over the stub.
 
+//! # Syntax that the grammar rejects
+//!
+//! The pack uses `tree-sitter-python` 0.23.5. Its grammar does not know three constructs of
+//! Python 3.14. The pack repairs them in `Analysis::repair_syntax`. The core calls the repair for
+//! a file that has a syntax error. The core parses the repaired text. It raises the warning
+//! `repaired-syntax` and keeps the file. A file that still fails is skipped with `syntax-error`.
+//! Every repair keeps the length in bytes and every line break, and it never changes the source
+//! file. The module `repair` has the scanner.
+//!
+//! | Rule | Construct | Repair |
+//! |---|---|---|
+//! | R-1 | PEP 758: `except A, B, C:` and `except* A, B:` | The commas of the type list become `\|`. The references are the same as in the form with brackets. |
+//! | R-2 | PEP 750: `t"..{x}.."` | The prefix `t` becomes `f`. The fields keep their references. |
+//! | R-3 | PEP 696: `class C[T = int]` | The default becomes spaces. The names inside it get no occurrence. |
+//!
+//! R-3 loses facts, and the `repaired-syntax` message says so. The type parameter and its bound
+//! stay. A skipped file would lose all of its facts, so the pack prefers the repair.
+//!
+//! The form `except A, B:` with two names needs no repair. The grammar reads it as the Python 2
+//! form `except A, name:` and gives no error, so the core never calls the repair. The binding
+//! rules of the fork have no rule for that form, so `B` is a reference and no binding. That is
+//! the right result for Python 3.14. A test pins it. The repair still rewrites such a clause when
+//! another construct in the same file triggers it.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -155,6 +179,7 @@ use scippy_core::{
 };
 
 mod manifest;
+mod repair;
 mod rules;
 
 use manifest::Project;
@@ -221,6 +246,10 @@ impl Analysis for PythonPack {
 
     fn extraction_spec(&self) -> ExtractionSpec {
         ExtractionSpec { query: QUERY }
+    }
+
+    fn repair_syntax(&self, source: &str) -> Option<String> {
+        repair::repair(source)
     }
 
     fn default_package(&self) -> Package {

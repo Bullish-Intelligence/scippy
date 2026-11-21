@@ -53,6 +53,9 @@ project, through the `.loci` link):
 
 - A whole-string annotation such as `"Optional[Foo]"` is not followed. `Optional["Foo"]` is
   (fork item 31, section 11.1).
+- The Python grammar is `tree-sitter-python` 0.23.5. The pack repairs PEP 758 `except A, B, C:`,
+  PEP 750 `t"..."`, and PEP 696 type parameter defaults (`repaired-syntax`). A default is blanked, so
+  the names inside it get no occurrence. A later grammar needs tree-sitter 0.25 in the fork.
 - `a.b.c` chains need a type for the receiver. Pack rules follow written annotations only (ADR-009).
 - The owner class differs from `scip-python` at 3,041 positions on mypy. The rebind convention
   differs at 5,028 positions.

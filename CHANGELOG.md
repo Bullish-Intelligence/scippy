@@ -5,7 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The Python pack repairs three constructs of Python 3.14 that `tree-sitter-python` 0.23.5 rejects, and gives the warning `repaired-syntax` instead of `syntax-error`: PEP 758 `except A, B, C:` and `except* A, B:` (the commas become `|`), PEP 750 `t"..."` (the prefix becomes `f`), and PEP 696 type parameter defaults (the default is blanked, so the names inside it get no occurrence). On `semantic-views`, 17 files that Scippy skipped now index.
+
 ### Changed
+
+- The message of the `repaired-syntax` diagnostic says that a name in blanked text gets no occurrence.
 
 - The fork pin moves to `3240d66`. The fork contracts the graph of each file, and a call of an annotated function follows the return annotation only. On mypy, the bounded references fall from 330 to 0, the raw recall rises from 94.11% to 94.19%, the wall time falls from 1,515 s to 533 s, and the peak memory falls from 5.45 GB to 4.22 GB. There are no wrong targets.
 - `metalayer show` no longer prints `parent`; facts schema 10.
