@@ -25,6 +25,9 @@ pub fn binding_rules() -> BindingRules {
             .collect(),
         // The Python rules need it. The fork sets the same flag in its language configuration.
         shadow_aware_similar_paths: true,
+        // Depth 1 cuts the search for a name that has no binding. On the evaluation corpora
+        // it keeps the results of the unbounded search and lowers the time of a run.
+        max_scope_depth: Some(1),
         prebuilt_assets: None,
     }
 }

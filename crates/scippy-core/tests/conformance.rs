@@ -157,6 +157,7 @@ impl Analysis for BadRules {
             builtins: None,
             assets: Vec::new(),
             shadow_aware_similar_paths: false,
+            max_scope_depth: None,
             prebuilt_assets: None,
         }
     }

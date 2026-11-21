@@ -829,6 +829,11 @@ mod tests {
     }
 
     #[test]
+    fn the_python_rules_cap_the_scope_depth_at_one() {
+        assert_eq!(PythonPack.binding_rules().max_scope_depth, Some(1));
+    }
+
+    #[test]
     fn accepts_python_sources_only() {
         assert!(PythonPack.accepts(Path::new("src/app.py")));
         assert!(!PythonPack.accepts(Path::new("src/app.pyc")));

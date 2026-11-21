@@ -319,6 +319,8 @@ pub(crate) struct BindingEngine {
     external: HashSet<String>,
     /// The pack asks for shadow aware similar path detection in every stitcher.
     shadow_aware: bool,
+    /// The pack asks for a cap on the scope depth in the resolve step.
+    max_scope_depth: Option<usize>,
     cache: Option<GraphCache>,
     /// The run-wide cache state. A cache failure turns the cache off for all shards.
     gate: Arc<CacheGate>,
@@ -366,6 +368,7 @@ impl BindingEngine {
             files: Vec::new(),
             external: HashSet::new(),
             shadow_aware: rules.shadow_aware_similar_paths,
+            max_scope_depth: rules.max_scope_depth,
             cache: if cache_enabled { gate.open() } else { None },
             gate: Arc::clone(gate),
             cache_hits: 0,
@@ -651,7 +654,8 @@ impl BindingEngine {
                 max_queue_len: Some(limits.max_queue_len),
                 max_arena_cells: Some(limits.max_arena_cells),
                 max_path_length: None,
-            });
+            })
+            .with_max_scope_depth(self.max_scope_depth);
         let files = std::mem::take(&mut self.files);
         let external = &self.external;
         for (file, path) in &files {
@@ -814,6 +818,7 @@ global ROOT_NODE
                 globals: Vec::new(),
             }],
             shadow_aware_similar_paths: true,
+            max_scope_depth: None,
             prebuilt_assets: prebuilt,
         }
     }
@@ -884,6 +889,7 @@ global ROOT_NODE
             files: Vec::new(),
             external: HashSet::new(),
             shadow_aware: true,
+            max_scope_depth: None,
             cache: None,
             gate: Arc::new(CacheGate::new(
                 None,

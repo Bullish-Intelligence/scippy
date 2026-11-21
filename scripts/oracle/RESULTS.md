@@ -690,3 +690,68 @@ scip-python confirms. One cost: 3 locations go from resolved to ambiguous (`serv
 lines 1129, 1135, and 1137). A guard with a tuple of classes gives both classes.
 
 Known gaps: `collections.abc` annotations, and `isinstance(x, TUPLE_CONSTANT)`.
+
+## Run 2026-11-21: fork pin 27e2435 and the scope depth cap
+
+Fork commit 27e2435 on 930f3e2; Scippy lane `pin-27e2435` on main e11c4b8. Baseline is the pin
+930f3e2. Scored against scip-python 0.6.8, graph cache off, `-j 8`, `--trace`. The machine was
+shared with other work (load average 2 to 10), so the times are indicative.
+
+The fork changes three things:
+
+- 37ef2f3: a vendored `tree-sitter-graph` with the syntax node id widened to `usize`. It fixes a
+  flaky "Duplicate variable" failure under load.
+- ac941ed: a `collections.abc` stub, and `isinstance` narrowing through a name bound to a tuple of
+  classes.
+- 27e2435: a method joins the class `member_attrs` only if its body can store an attribute of its
+  first parameter. New stitcher option `with_max_scope_depth`, off by default.
+
+Scippy sets the option for the Python pack only: `Some(1)` in `languages/python/src/rules.rs`, read
+into the resolve step. The indexing step and the TypeScript pack are unchanged.
+
+| Corpus | rich | mypy | stdlib |
+|---|---|---|---|
+| Raw recall | 96.80% to 96.82% | 94.24% to 94.24% | 97.72% to 97.73% |
+| Recall with plausible targets | 97.72% to 97.74% | 98.58% to 98.62% | 98.29% to 98.30% |
+| Precision (raw) | 99.06%, unchanged | 95.60% to 95.56% | 99.20%, unchanged |
+| Wrong targets | 0 to 0 | 0 to 0 | 131 to 131 |
+| Bounded references | 0 to 0 | 0 to 0 | 26 to 8 |
+| Wall time, paired, `-j 8` | 24.4 s to 16.0 s | 290 s to 168 s | 170 s to 120 s |
+| Peak memory | 0.57 GB to 0.57 GB | 4.16 GB to 4.26 GB | 1.58 GB to 1.61 GB |
+
+The wall times come from paired runs of both binaries in one session. The older runs of the
+baseline (22.9 s, 401.6 s, 789.5 s) ran under a different load and do not compare with the new
+runs.
+
+Changed locations, by transition (counts of locations; scip-python agreement in brackets):
+
+| Transition | rich | mypy | stdlib |
+|---|---|---|---|
+| Changed locations | 6 of 27,046 | 687 of 188,825 | 62 of 88,831 |
+| Unresolved to resolved | 2 (1 external agrees, 1 no target) | 616 (529 agree with the new answer, 77 have no scip-python target, 10 agree with neither) | 2 (neither) |
+| Ambiguous to resolved | 4 (scip-python agrees with the new answer) | 57 (none agree) | 3 (agree with the new answer) |
+| Bounded to resolved or other | 0 | 0 | 25 (13 resolved, 7 still bounded by work, 5 unresolved) |
+| Resolved to ambiguous | 0 | 4 (scip-python agrees with the old answer, external) | 0 |
+| Resolved to unresolved | 0 | 2 (scip-python agrees with neither) | 0 |
+| Other | 0 | 8 | 32 (label change only: no-path to no-declaration) |
+
+The 2 locations of mypy that go from resolved to unresolved are `semanal_newtype.py:139:27` and
+`semanal_typeddict.py:492:17` (`x.line = ...`). The old answer was the three `line` members of
+`Context`; scip-python gives the class `Context`. The 4 resolved-to-ambiguous locations are
+`stubdoc.py:472`, `:475`, `:477`, and `:514`: a `list` method now also finds a `typing` stub, and
+scip-python agrees with the old answer. This is the literal-versus-annotation ambiguity. The
+unresolved-to-resolved locations of mypy are mostly `collections.abc` imports and annotations
+(`Iterator`, `Sequence`).
+
+The depth cap alone (the same pin without it, paired): no change in the final output on rich,
+mypy, or stdlib. On stdlib, bounded references go from 10 to 8: 2 end as not targetable, and 6
+change from the queue limit to the work limit. The earlier scratch measurement gave 2 bounded
+with depth 1. The lane build does not reproduce that: the 6 references in `email/message.py` still
+hit the work limit. The depth cap does not lower the wall time (stdlib 110 s without it, 120 s with
+it; mypy 169 s and 168 s).
+
+Known gaps: 8 bounded references on the standard library at the default limits (10 without the
+depth cap). Cross-file `TypeVar`s. Literal-versus-annotation ambiguity in 7 mypy locations
+(`server/update.py:1129`, `1135`, `1137`, and `stubdoc.py:472`, `475`, `477`, `514`).
+
+The gate (`projectman verify`, full) is green on the lane. No TypeScript golden file changed.

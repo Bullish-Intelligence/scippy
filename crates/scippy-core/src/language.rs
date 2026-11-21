@@ -318,6 +318,10 @@ pub struct BindingRules {
     /// it, as the Python rules do. The resolver sets it for the indexing step and for the
     /// resolution step. Without it, a name can lose a binding.
     pub shadow_aware_similar_paths: bool,
+    /// Cap the depth of the scope stack in the resolve step, as the stitcher option
+    /// `with_max_scope_depth` does. `None` sets no cap. The cap cuts the search for a name
+    /// that has no binding, so a run finishes sooner. It does not change the indexing step.
+    pub max_scope_depth: Option<usize>,
     /// The graphs of the external assets, built ahead of time by [`prebuild_assets`]. A pack
     /// that builds them in a build script sets this to the bytes of the result. The engine
     /// loads them instead of building them. It checks that they match the rules above, and it
