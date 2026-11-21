@@ -657,3 +657,36 @@ separate investigation looks into it.
 Contraction applies to every language of the fork, so the TypeScript pack builds smaller graphs
 too. Its golden and digest tests pass with no change to the golden files. The gate (`testee verify`,
 full) is green on the commit of the bump.
+
+## Run 2026-11-21: isinstance guards and the shadowing fix
+
+Fork commit 930f3e2 (on 861db99, after the pin 3240d66); Scippy on main 6b42895. Baseline is the
+pin 3240d66. Scored against scip-python.
+
+The fork changes three things:
+
+- It narrows more `isinstance` guards: `assert` with `and` (both operands), a parenthesized `if` or
+  `elif` condition with `and`, a conditional expression, and `not isinstance(...) or ...` as the
+  right operand and as an early-exit `if`.
+- A string annotation that holds one plain name follows the annotation only. A string that holds
+  more, such as `"Foo | None"`, keeps the body. The gate for annotations without a class accepts a
+  name that ends in `TypeAlias`, such as `_TypeAlias`.
+- The stitcher keeps one more similar path for the reference at an attribute store (syntax type
+  `store`), when the known path is shadowable and the bucket holds fewer than 2 paths. This fixes
+  the shadowing that caused the 9 losses of the previous run.
+
+| Corpus | rich | mypy |
+|---|---|---|
+| Raw recall | 96.78% to 96.80% | 94.19% to 94.24% |
+| Recall with plausible targets | 97.70% to 97.72% | 98.48% to 98.58% |
+| Precision | 99.06%, unchanged | |
+| Wrong targets | 0 | 0 |
+| Bounded references | 4 to 0 | 0 |
+| Changed locations | 5, no losses | 198, 0 resolved to unresolved |
+| Engine work | 17% lower | |
+
+On mypy, 21 of the 27 locations that 3240d66 lost resolve again. This includes all 9 that
+scip-python confirms. One cost: 3 locations go from resolved to ambiguous (`server/update.py`
+lines 1129, 1135, and 1137). A guard with a tuple of classes gives both classes.
+
+Known gaps: `collections.abc` annotations, and `isinstance(x, TUPLE_CONSTANT)`.

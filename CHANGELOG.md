@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The fork pin moves to `930f3e2`. The fork narrows more `isinstance` guards, follows the return annotation of a string that holds one plain name, and keeps one more similar path at an attribute store. This restores most members that the pin `3240d66` lost. On mypy, the raw recall rises from 94.19% to 94.24%, and 21 of the 27 locations that `3240d66` lost resolve again. On rich, the raw recall rises from 96.78% to 96.80%, and the bounded references fall from 4 to 0. There are no wrong targets. On mypy, 3 locations go from resolved to ambiguous.
 - The message of the `repaired-syntax` diagnostic says that a name in blanked text gets no occurrence.
 
 - The fork pin moves to `3240d66`. The fork contracts the graph of each file, and a call of an annotated function follows the return annotation only. On mypy, the bounded references fall from 330 to 0, the raw recall rises from 94.11% to 94.19%, the wall time falls from 1,515 s to 533 s, and the peak memory falls from 5.45 GB to 4.22 GB. There are no wrong targets.

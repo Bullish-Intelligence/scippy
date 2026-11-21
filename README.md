@@ -406,7 +406,8 @@ with type arguments in its base class.
 A call of a function with a return annotation follows the annotation only. The `return`
 statements of the body add nothing. The body stays visible when the annotation names no class:
 `Self`, `Any`, `Type[...]`, a `TypeVar`, `ParamSpec`, or type alias that the same file binds, a type
-parameter of a `def` or `class`, and a string annotation.
+parameter of a `def` or `class`, and a string annotation that holds more than a plain name,
+such as `"Foo | None"`. A string with one plain name follows the annotation only.
 
 ## Input limits
 
