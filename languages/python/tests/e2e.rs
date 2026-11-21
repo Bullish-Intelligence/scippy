@@ -1941,3 +1941,39 @@ fn scip_snapshot_matches_the_golden_files() {
         }
     }
 }
+
+// ---- the search explosion of an annotated factory chain ----
+
+/// The number of uses in `annotated_chain/tests/probe.py`.
+const CHAIN_USES: usize = 20;
+
+#[test]
+#[ignore = "perf: runs in opt:slow"]
+fn an_annotated_factory_chain_bounds_no_reference_and_each_member_resolves() {
+    // The call of a function with `-> T` has one route for its value: the annotation.
+    // Before the fork pin 3240d66, it had two: the annotation and each returned expression.
+    // A chain of six factories then made each member reference run to the search limit.
+    // The old pin gives 20 arena-bounded references here, and the run takes about 30 s.
+    // The count of bounded references is deterministic. This test does not read the clock.
+    let indexed = index("annotated_chain");
+    assert_eq!(indexed.report.files_skipped, 0);
+    assert_eq!(indexed.report.references_bounded, 0);
+    assert_eq!(indexed.report.bounded_by_kind.queue_length, 0);
+    assert_eq!(indexed.report.bounded_by_kind.arena_cells, 0);
+    assert_eq!(indexed.report.bounded_by_kind.work, 0);
+    assert_eq!(indexed.report.references_unresolved, 0);
+
+    let probe = "tests/probe.py";
+    for use_ in 0..CHAIN_USES {
+        let context = format!("def use{use_}(d):\n    return wrap().resolve(d).node");
+        for (word, target) in [
+            ("wrap", "tests/probe/wrap()."),
+            ("resolve", "src/pkg/_core/Address#resolve()."),
+            ("node", "src/pkg/_core/Resolution#node."),
+        ] {
+            let found = indexed.find(probe, &context, word);
+            assert_eq!(found.len(), 1, "use{use_}: {word}");
+            assert_eq!(found[0].symbol, global(target), "use{use_}: {word}");
+        }
+    }
+}

@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - The Python pack repairs three constructs of Python 3.14 that `tree-sitter-python` 0.23.5 rejects, and gives the warning `repaired-syntax` instead of `syntax-error`: PEP 758 `except A, B, C:` and `except* A, B:` (the commas become `|`), PEP 750 `t"..."` (the prefix becomes `f`), and PEP 696 type parameter defaults (the default is blanked, so the names inside it get no occurrence). On `semantic-views`, 17 files that Scippy skipped now index.
+- A test in `opt:slow` guards the search of an annotated factory chain. The fixture `annotated_chain` has a chain of six factories with `-> Address` and 20 member chains. It asserts 0 bounded references and the target of each use. With the fork pin `cda555a` it fails with 20 bounded references.
 
 ### Changed
 

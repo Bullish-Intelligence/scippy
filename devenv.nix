@@ -173,7 +173,7 @@ in
 
       # The slow set: end-to-end tests that call the scip CLI, and the cache tests.
       # It also holds the performance and load-sensitive tests. Nextest runs every ignored test.
-      # `--run-ignored only` runs the 27 tests that carry `#[ignore]`. Doctests have none.
+      # `--run-ignored only` runs the 28 tests that carry `#[ignore]`. Doctests have none.
       # It runs only on explicit request. No lane verify step runs it.
       "opt:slow" = {
         exec = ''
