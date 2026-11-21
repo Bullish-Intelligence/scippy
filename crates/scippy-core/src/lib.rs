@@ -51,7 +51,7 @@ pub use language::{
 pub use pipeline::discover_files;
 pub use project::{InputLimits, ProjectRelativePath};
 pub use report::{
-    BoundedCounts, Diagnostic, IndexReport, LostFile, MultiTargetStats, Severity, Stage,
+    BoundedCounts, Diagnostic, IndexReport, LostFile, MultiTargetStats, SearchWork, Severity, Stage,
 };
 #[doc(hidden)]
 pub use source::ReadHook;

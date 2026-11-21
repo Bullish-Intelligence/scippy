@@ -234,6 +234,19 @@ Keep both databases outside the project and its roots.
 and `metalayer`. A failed run prints an error envelope (`incomplete` for `--strict`). The
 diagnostics also go to stderr. The text summary comes from the `Display` of `IndexReport`.
 
+The `references` block holds `search_work`, the cost of the searches that resolve the references.
+It has no time, so a test or a user can read the cost of a run on a loaded machine. The values
+are the same for each run of the same input and limits, with any `--jobs`. A run with no
+reference has zeros. The text summary does not show it.
+
+| Field | Meaning |
+|---|---|
+| `searches` | The number of searches that returned counters. One search runs for each reference node, so it can exceed the number of reference locations. A failed search gives no counters and is not counted. |
+| `work_total` | The work of all searches, added. One unit is one path that a search extends, or one candidate that it tries. |
+| `work_max` | The work of the largest search. The `--max-work` limit stops a search soon after it reaches it, so this value can pass the limit by a few units. |
+| `queue_length_max` | The longest queue of paths that waited for extension in one search. |
+| `arena_cells_max` | The most cells that one search added to the path arenas. |
+
 Exit codes of `index`, with or without `--json`:
 
 | Code | Meaning |

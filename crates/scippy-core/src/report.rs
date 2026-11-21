@@ -111,6 +111,46 @@ pub struct BoundedCounts {
     pub failed: usize,
 }
 
+/// The cost of the searches of one run, from the counters of the stitcher.
+///
+/// The counts hold no time. They are the same for each run of the same input and the same
+/// limits, with any number of jobs: sums and maxima do not depend on the order of the searches.
+/// A search that failed or panicked gives no counters, so it is not in these counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchWork {
+    /// The number of searches that returned counters. One search runs for each reference node.
+    pub searches: usize,
+    /// The work of all searches, added. One unit is one path that a search extends or one
+    /// candidate that it tries.
+    pub work_total: usize,
+    /// The work of the largest search.
+    pub work_max: usize,
+    /// The longest queue of paths that waited for extension in one search.
+    pub queue_length_max: usize,
+    /// The most cells that one search added to the path arenas.
+    pub arena_cells_max: usize,
+}
+
+impl SearchWork {
+    /// Count one search with its counters.
+    pub fn record(&mut self, work: usize, queue_length: usize, arena_cells: usize) {
+        self.searches += 1;
+        self.work_total += work;
+        self.work_max = self.work_max.max(work);
+        self.queue_length_max = self.queue_length_max.max(queue_length);
+        self.arena_cells_max = self.arena_cells_max.max(arena_cells);
+    }
+
+    /// Add the counts of another set of searches: sum the totals, take the maxima.
+    pub fn merge(&mut self, other: &SearchWork) {
+        self.searches += other.searches;
+        self.work_total += other.work_total;
+        self.work_max = self.work_max.max(other.work_max);
+        self.queue_length_max = self.queue_length_max.max(other.queue_length_max);
+        self.arena_cells_max = self.arena_cells_max.max(other.arena_cells_max);
+    }
+}
+
 /// Counts and diagnostics from one indexing run.
 ///
 /// The reference counts are per unique location in a document.
@@ -150,6 +190,8 @@ pub struct IndexReport {
     pub references_bounded: usize,
     /// The bounded references by kind of bound. The counts add up to `references_bounded`.
     pub bounded_by_kind: BoundedCounts,
+    /// The cost of the searches that resolved the references.
+    pub search_work: SearchWork,
     /// Why the unresolved references have no target, by stable reason code.
     pub unresolved_reasons: BTreeMap<&'static str, usize>,
     /// The `syntax_type` of the resolver ends that joined no declaration, with counts.
@@ -220,6 +262,53 @@ impl fmt::Display for IndexReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_search_gives_zero_counts() {
+        let work = SearchWork::default();
+        assert_eq!(work.searches, 0);
+        assert_eq!(work.work_total, 0);
+        assert_eq!(work.work_max, 0);
+        assert_eq!(work.queue_length_max, 0);
+        assert_eq!(work.arena_cells_max, 0);
+        let mut empty = SearchWork::default();
+        empty.merge(&SearchWork::default());
+        assert_eq!(empty, SearchWork::default());
+    }
+
+    #[test]
+    fn record_sums_the_work_and_keeps_the_maxima() {
+        let mut work = SearchWork::default();
+        work.record(10, 3, 100);
+        work.record(40, 2, 50);
+        work.record(5, 9, 70);
+        assert_eq!(work.searches, 3);
+        assert_eq!(work.work_total, 55);
+        assert_eq!(work.work_max, 40);
+        assert_eq!(work.queue_length_max, 9);
+        assert_eq!(work.arena_cells_max, 100);
+        assert!(work.work_max <= work.work_total);
+    }
+
+    #[test]
+    fn merge_is_the_same_as_recording_every_search_in_any_order() {
+        let searches = [(10, 3, 100), (40, 2, 50), (5, 9, 70), (0, 0, 0)];
+        let part = |items: &[(usize, usize, usize)]| {
+            let mut work = SearchWork::default();
+            for &(w, q, a) in items {
+                work.record(w, q, a);
+            }
+            work
+        };
+        let all = part(&searches);
+        let (first, second) = (part(&searches[..1]), part(&searches[1..]));
+        let mut forward = first;
+        forward.merge(&second);
+        let mut backward = second;
+        backward.merge(&first);
+        assert_eq!(forward, all);
+        assert_eq!(backward, all);
+    }
 
     #[test]
     fn display_prints_the_summary_lines() {

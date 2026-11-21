@@ -218,6 +218,7 @@ fn merge_shard_outputs(
         report.lost_files.extend(out.report.lost_files);
         report.graph_cache_hits += out.report.graph_cache_hits;
         report.graph_cache_misses += out.report.graph_cache_misses;
+        report.search_work.merge(&out.report.search_work);
         report.diagnostics.extend(out.report.diagnostics);
         docs.extend(out.docs);
         for binding in out.bindings {
@@ -411,7 +412,8 @@ pub(super) fn index_shard(
     }
     report.graph_cache_hits = engine.cache_hits;
     report.graph_cache_misses = engine.cache_misses;
-    let bindings = engine.resolve(cx.request.resolve_limits);
+    let (bindings, search_work) = engine.resolve(cx.request.resolve_limits);
+    report.search_work = search_work;
     Ok(ShardOutput {
         docs,
         bindings,

@@ -7,8 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `scippy index --json` reports the cost of the searches in `value.references.search_work`: `searches`, `work_total`, `work_max`, `queue_length_max`, and `arena_cells_max`. The stitcher already counted this work and Scippy dropped it. The values hold no time. They are the same for each run and each `--jobs`. The change is additive: `format_version` stays 1, and the JSON Schema needs no change because it allows additional properties. The golden files of `index` hold the new block.
 - The Python pack repairs three constructs of Python 3.14 that `tree-sitter-python` 0.23.5 rejects, and gives the warning `repaired-syntax` instead of `syntax-error`: PEP 758 `except A, B, C:` and `except* A, B:` (the commas become `|`), PEP 750 `t"..."` (the prefix becomes `f`), and PEP 696 type parameter defaults (the default is blanked, so the names inside it get no occurrence). On `semantic-views`, 17 files that Scippy skipped now index.
-- A test in `opt:slow` guards the search of an annotated factory chain. The fixture `annotated_chain` has a chain of six factories with `-> Address` and 20 member chains. It asserts 0 bounded references and the target of each use. With the fork pin `cda555a` it fails with 20 bounded references.
+- A test in `opt:slow` guards the search of an annotated factory chain. The fixture `annotated_chain` has a chain of six factories with `-> Address` and 20 member chains. It asserts 0 bounded references and the target of each use. With the fork pin `cda555a` it fails with 20 bounded references. It also bounds the search work (total 135,000 and largest search 2,800; measured 106,270 and 2,259). With `cda555a` the total is 18,091,672, so the bound fails on its own.
 
 ### Changed
 

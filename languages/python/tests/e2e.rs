@@ -1942,6 +1942,58 @@ fn scip_snapshot_matches_the_golden_files() {
     }
 }
 
+// ---- the work counts of the searches ----
+
+fn search_work_of(name: &str, jobs: usize) -> scippy_core::SearchWork {
+    let mut request = IndexRequest::new(fixture(name), "");
+    request.jobs = jobs;
+    index_with(request).report.search_work
+}
+
+#[test]
+fn the_search_work_counts_are_present_consistent_and_the_same_for_each_run_and_job_count() {
+    // The `packages` fixture has several shards, so `--jobs` changes the order of the searches.
+    let one = search_work_of("packages", 1);
+    let again = search_work_of("packages", 1);
+    let four = search_work_of("packages", 4);
+    assert_eq!(one, again, "two runs differ");
+    assert_eq!(one, four, "the job count changes the counts");
+    assert!(one.searches > 0);
+    assert!(one.work_total > 0);
+    assert!(one.work_max > 0);
+    assert!(one.queue_length_max > 0);
+    assert!(one.arena_cells_max > 0);
+    assert!(one.work_max <= one.work_total);
+    // The searches add up: the largest search is at least the mean.
+    assert!(one.work_max * one.searches >= one.work_total);
+    // One search runs for each reference node, and a location holds one or more nodes.
+    let report = index("packages").report;
+    let locations = report.references_resolved
+        + report.references_unresolved
+        + report.references_ambiguous
+        + report.references_bounded;
+    assert!(one.searches >= locations, "{} < {locations}", one.searches);
+}
+
+#[test]
+fn a_project_with_no_reference_has_zero_search_work() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.py"), "x = 1\n").unwrap();
+    let work = index_at(dir.path()).report.search_work;
+    assert_eq!(work, scippy_core::SearchWork::default());
+}
+
+#[test]
+fn a_smaller_work_limit_gives_smaller_search_work_counts() {
+    let free = search_work_of("alias", 1);
+    let mut request = IndexRequest::new(fixture("alias"), "");
+    request.resolve_limits.max_work = 1;
+    let capped = index_with(request).report.search_work;
+    assert_eq!(capped.searches, free.searches);
+    assert!(capped.work_total < free.work_total, "{capped:?} {free:?}");
+    assert!(capped.work_max < free.work_max, "{capped:?} {free:?}");
+}
+
 // ---- the search explosion of an annotated factory chain ----
 
 /// The number of uses in `annotated_chain/tests/probe.py`.
@@ -1962,6 +2014,21 @@ fn an_annotated_factory_chain_bounds_no_reference_and_each_member_resolves() {
     assert_eq!(indexed.report.bounded_by_kind.arena_cells, 0);
     assert_eq!(indexed.report.bounded_by_kind.work, 0);
     assert_eq!(indexed.report.references_unresolved, 0);
+    // The search work counts hold no time, so they bound the cost without a clock.
+    // Measured with the fork pin 27e2435: 133 searches, total work 106,270, largest search
+    // 2,259. The bounds leave about 25% of room for a small change of the rules. The old pin
+    // cda555a gives total work 18,091,672 and a largest search of 663,650, so both bounds fail.
+    let work = indexed.report.search_work;
+    assert!(
+        work.work_total <= 135_000,
+        "total search work {} is over 135,000 (measured 106,270)",
+        work.work_total
+    );
+    assert!(
+        work.work_max <= 2_800,
+        "the largest search work {} is over 2,800 (measured 2,259)",
+        work.work_max
+    );
 
     let probe = "tests/probe.py";
     for use_ in 0..CHAIN_USES {

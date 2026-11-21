@@ -26,6 +26,7 @@ use crate::error::ScippyError;
 use crate::extract::SourceAnchor;
 use crate::language::{Analysis, BindingRules, SupportFile};
 use crate::project::ProjectRelativePath;
+use crate::report::SearchWork;
 
 /// The name that the rules use for the builtins file.
 pub(crate) const BUILTINS_NAME: &str = "<builtins>";
@@ -645,8 +646,11 @@ impl BindingEngine {
     /// Resolve every reference node of every file that built.
     ///
     /// The result lists the files in the order of `add_file`, and the nodes of a file in graph order.
-    pub fn resolve(&mut self, limits: ResolveLimits) -> Vec<RawBinding> {
+    ///
+    /// It also returns the cost of the searches, from the counters of the stitcher.
+    pub fn resolve(&mut self, limits: ResolveLimits) -> (Vec<RawBinding>, SearchWork) {
         let mut out = Vec::new();
+        let mut cost = SearchWork::default();
         let config = StitcherConfig::default()
             .with_shadow_aware_similar_paths(self.shadow_aware)
             .with_limits(StitcherLimits {
@@ -693,14 +697,17 @@ impl BindingEngine {
                     )
                 }));
                 let bound = match searched {
-                    Ok(Ok(stats)) => stats.bounded.map(|b| match b {
-                        StitchBound::Work => Bound::Work,
-                        StitchBound::QueueLength => Bound::QueueLength,
-                        StitchBound::ArenaCells => Bound::ArenaCells,
-                        // The search dropped a long path and went on. It has no path-length
-                        // limit here, so this value does not occur. Treat it as a failure.
-                        StitchBound::PathLength => Bound::Failed,
-                    }),
+                    Ok(Ok(stats)) => {
+                        cost.record(stats.work, stats.peak_queue_len, stats.arena_cells_added);
+                        stats.bounded.map(|b| match b {
+                            StitchBound::Work => Bound::Work,
+                            StitchBound::QueueLength => Bound::QueueLength,
+                            StitchBound::ArenaCells => Bound::ArenaCells,
+                            // The search dropped a long path and went on. It has no path-length
+                            // limit here, so this value does not occur. Treat it as a failure.
+                            StitchBound::PathLength => Bound::Failed,
+                        })
+                    }
                     Ok(Err(_)) | Err(_) => Some(Bound::Failed),
                 };
                 let ends: BTreeSet<RawEnd> = kept.into_iter().map(|(_, end)| end).collect();
@@ -714,7 +721,7 @@ impl BindingEngine {
             }
         }
         self.files = files;
-        out
+        (out, cost)
     }
 
     fn anchor(&self, node: Handle<Node>, path: &ProjectRelativePath) -> Option<SourceAnchor> {

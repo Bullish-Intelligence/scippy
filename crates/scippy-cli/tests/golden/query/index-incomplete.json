@@ -33,6 +33,13 @@
         "arena_cells": 0,
         "failed": 0
       },
+      "search_work": {
+        "searches": 19,
+        "work_total": 2585,
+        "work_max": 540,
+        "queue_length_max": 5,
+        "arena_cells_max": 2155
+      },
       "unresolved_reasons": {
         "no-declaration": 1,
         "no-path": 4

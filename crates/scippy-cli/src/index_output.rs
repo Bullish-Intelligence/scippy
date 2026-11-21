@@ -94,6 +94,7 @@ impl RunOutput {
         });
         let m = &r.multi_target;
         let b = &r.bounded_by_kind;
+        let w = &r.search_work;
         let value = json!({
             "output": {
                 "scip": self.output.to_string_lossy(),
@@ -118,6 +119,13 @@ impl RunOutput {
                     "queue_length": b.queue_length,
                     "arena_cells": b.arena_cells,
                     "failed": b.failed,
+                },
+                "search_work": {
+                    "searches": w.searches,
+                    "work_total": w.work_total,
+                    "work_max": w.work_max,
+                    "queue_length_max": w.queue_length_max,
+                    "arena_cells_max": w.arena_cells_max,
                 },
                 "unresolved_reasons": r.unresolved_reasons,
                 "unjoined_end_kinds": r.unjoined_end_kinds,
