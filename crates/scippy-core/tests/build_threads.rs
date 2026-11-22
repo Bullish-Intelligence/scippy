@@ -364,3 +364,28 @@ fn a_slow_head_file_and_more_files_than_the_window_give_the_serial_output() {
     assert_eq!(warm.outcome, serial.outcome, "a warm cache");
     assert_eq!(warm.report.graph_cache_hits, serial.report.files_indexed);
 }
+
+/// More files than the hit window of the lookup (`HIT_WINDOW`, 256). The window of the lookup
+/// ahead of the merge is `4 * threads` files. It is larger than 256 files only above 64 build
+/// threads, so the hit window is the one that binds. A warm cache gives a hit for each good file.
+/// The lookup stops at 256 held hits, goes on after each merge, and gives the serial output.
+#[test]
+fn more_files_than_the_hit_window_give_the_serial_output() {
+    let (_dir, root, work) = project(300);
+    let cache = work.join("graphs.sqlite");
+    let serial = run(&root, &work, "serial", Some(1), None);
+    assert!(serial.report.references_resolved > 300, "{}", serial.report);
+    // The hits are more than the hit window, so the window binds on a warm cache.
+    assert!(serial.report.files_indexed > 256, "{}", serial.report);
+    // 100 threads run ahead 400 files. A cold cache misses on all files.
+    let cold = run(&root, &work, "cold", Some(100), Some(&cache));
+    assert_eq!(cold.outcome, serial.outcome, "a cold cache");
+    assert_eq!(cold.report.graph_cache_hits, 0);
+    let warm = run(&root, &work, "warm", Some(100), Some(&cache));
+    assert_eq!(warm.outcome, serial.outcome, "a warm cache");
+    assert_eq!(warm.report.graph_cache_hits, serial.report.files_indexed);
+    // A thread count under the window gives the same output on the same cache.
+    let few = run(&root, &work, "few", Some(3), Some(&cache));
+    assert_eq!(few.outcome, serial.outcome, "3 build threads");
+    assert_eq!(few.report.graph_cache_hits, serial.report.files_indexed);
+}
