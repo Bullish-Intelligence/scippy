@@ -1014,3 +1014,58 @@ Changed locations against the baseline (`difftool.py`), sorted:
   the allowlist with this reason.
 - Bounded by work, known (rules2): celery `celery/app/builtins.py:92:25`. Stdlib `logging/config.py`
   606 and 619 go from not targetable to bounded.
+
+## Run 2026-11-22: object after all bases (fork `32b5325`)
+
+Scippy lane `objlast` on main `f1e60474`. Fork pin `32b5325` (before: `e945e1d`). Label
+`objlast-32b5325` in `classes.csv`. Reference run: `integrate-ebfc6892`. Graph cache off, `--trace`, all six
+corpora in parallel. Correctness only: no timing was taken. The two celery locations of "Open" are in the allowlist.
+
+Changes of the fork (`f8757f5`, `32b5325`):
+
+- A base named `object` is no edge of the super scope. The path through the first base had the higher
+  precedence, so `object.__init__` came before the second base. Every class now reaches `object` from its
+  self scope, with a precedence below its base classes. A base class adds no `object` of its own.
+- The call of `super()` follows a generic base class, `class B(A[T])`, in the order of the bases.
+  Before, it fell back to `object.__init__`. A lookup of a member still does not follow a generic base.
+- Tests: `test/object_last.py` (the argparse shape, a generic base, a diamond, a single base) and five
+  tests in `rust/builtins.rs`. They fail on the old rules. The pin of `e945e1d` shows the first problem
+  in `argparse.py:1887:48`.
+
+Named numbers, `integrate-ebfc6892` to `objlast-32b5325`:
+
+| corpus | both | scippy_missing | real wrong | owner-class coarse | same-name other class | strict recall | strict precision |
+|---|---|---|---|---|---|---|---|
+| mypy | 151916 to 151918 | 2100 to 2098 | 0 to 0 | 4724 to 4724 | 206 to 206 | 94.2590 to 94.2603 | 95.5620 to 95.5621 |
+| rich | 20009 to 20009 | 402 to 402 | 0 to 0 | 79 to 79 | 0 to 0 | 97.1094 to 97.1094 | 99.0604 to 99.0604 |
+| stdlib | 59188 to 59189 | 772 to 771 | 9 to 9 | 364 to 364 | 28 to 28 | 98.0304 to 98.0320 | 99.3090 to 99.3090 |
+| scrapy | 17290 to 17290 | 84 to 84 | 0 to 0 | 13 to 13 | 0 to 0 | 96.8113 to 96.8113 | 97.2817 to 97.2817 |
+| celery | 32906 to 32906 | 214 to 214 | 2 to 2 | 120 to 120 | 6 to 6 | 97.8231 to 97.8231 | 98.4592 to 98.4592 |
+| pydantic-ai | 155651 to 155961 | 4957 to 4647 | 44 to 44 | 8 to 8 | 211 to 211 | 96.0400 to 96.2331 | 99.0986 to 99.1004 |
+
+Ambiguous references: celery 24 to 26, all others equal. Bounded references: no change.
+
+Changed locations against the integrate run (`difftool.py`):
+
+- `argparse.py:1887:48` is `_ActionsContainer.__init__` again (scip-python agrees). It leaves the allowlist.
+- 34 `super().__init__()` locations change to a project target where scip-python agrees with the new
+  target (`sp=cand_only`): pydantic-ai 31, mypy 2 (`mypy/typeops.py:1123:16`, `mypy/types.py:4030:16`), stdlib 1
+  (argparse). They are single or first generic bases (`Model[AsyncClient]`). The other 5 changes are
+  external on both sides.
+- Gained locations (the integrate run had no target): pydantic-ai 420 (the keyword names and the
+  arguments of the `super().__init__()` calls, and members of `object`), stdlib 164, celery 40, and
+  fewer in the other corpora. The members of `object` (`self.__dict__`) resolve for every class now. The
+  `builtins.different` numbers rise because scip-python writes the symbol of such a member in another
+  form (`__dict__#` against `object#__dict__.`).
+- No new real wrong target on any corpus.
+
+Open: two locations of celery change from resolved to ambiguous against the integrate run:
+`celery/canvas.py:1352:35` and `:1354:23`, `super().__new__` in `chain(_chain)` with `Signature(dict)`.
+The targets are now `dict.__new__` and `object.__new__`. Scip-python gives an external symbol. Cause: a
+method of a base class that stores `self.x` leads back to the self scope of that base through the member
+attributes, and a classmethod that stores `cls.x` leads to the members. Two different routes, so the
+route to `object` is not shadowed by the route to `dict`. The gate fails on these two locations. They
+are in the allowlist (R4) and the lane is landed. They have the same structure as kind D: a self or
+cls store route re-enters the class self scope, so routes that diverge early cannot shadow each other.
+The engine design spike on precedence over whole paths will cover it.
+
