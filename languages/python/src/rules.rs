@@ -25,8 +25,6 @@ pub fn binding_rules() -> BindingRules {
             .collect(),
         // The Python rules need it. The fork sets the same flag in its language configuration.
         shadow_aware_similar_paths: true,
-        // No cap. A cap of 1 changed no result on the evaluation corpora and saved no time.
-        max_scope_depth: None,
         prebuilt_assets: None,
     }
 }

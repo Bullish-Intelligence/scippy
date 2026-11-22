@@ -66,6 +66,21 @@ pub(super) fn innermost_container(
         .min_by_key(|&j| facts[j].extent.1 - facts[j].extent.0)
 }
 
+/// The innermost class that holds declaration `i`, when there is one.
+fn innermost_class(facts: &[DeclarationFact], containers: &[usize], i: usize) -> Option<usize> {
+    let fact = &facts[i];
+    containers
+        .iter()
+        .copied()
+        .filter(|&j| {
+            j != i
+                && facts[j].kind == DeclKind::Class
+                && facts[j].extent.0 <= fact.extent.0
+                && fact.extent.1 <= facts[j].extent.1
+        })
+        .min_by_key(|&j| facts[j].extent.1 - facts[j].extent.0)
+}
+
 /// The enclosing declarations of declaration `i`, from the outermost to the innermost.
 pub(super) fn scope_chain(facts: &[DeclarationFact], containers: &[usize], i: usize) -> Vec<Scope> {
     let fact = &facts[i];
@@ -149,7 +164,19 @@ pub(super) fn assign_identities(
             kind: fact.kind,
             name: fact.name.clone(),
         };
-        let siblings: Vec<Scope> = held[&holders[i]]
+        // A field belongs to its class. Its siblings are the members of the class, so that a
+        // field can share the symbol of a method or a property of the same name.
+        let holder = if fact.kind == DeclKind::Field {
+            innermost_class(facts, &containers, i)
+                .map(|j| Some(facts[j].extent))
+                .unwrap_or(holders[i])
+        } else {
+            holders[i]
+        };
+        let siblings: Vec<Scope> = held
+            .get(&holder)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
             .iter()
             .filter(|s| **s != declaration)
             .cloned()

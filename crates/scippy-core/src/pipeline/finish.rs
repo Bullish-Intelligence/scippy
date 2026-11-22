@@ -278,7 +278,7 @@ pub(super) fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]
             symbol: d.symbol.clone(),
             role: Role::Definition,
         });
-        symbols
+        let info = symbols
             .entry(d.symbol.clone())
             .or_insert_with(|| SymbolInfo {
                 symbol: d.symbol.clone(),
@@ -288,6 +288,13 @@ pub(super) fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]
                 references: Vec::new(),
                 decl: d.decl.clone(),
             });
+        // A variable can share the symbol of a class or a function and come first. The facts
+        // of the class or the function replace the facts of the variable, which has no digests.
+        if let (Some(have), Some(new)) = (info.decl.as_mut(), d.decl.as_ref()) {
+            if have.sig_digest.is_none() && new.sig_digest.is_some() {
+                *have = new.clone();
+            }
+        }
     }
     // A second name of the module refers to the module.
     let module_symbol = doc

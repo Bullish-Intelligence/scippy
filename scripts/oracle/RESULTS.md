@@ -950,3 +950,67 @@ A control run with the cap restored (`Some(1)`) gives the exact trace of `df9cec
 (SHA-256 prefix `2eea08994d584eaf`), so the scope depth cap is the only cause.
 
 On stdlib, removing the cap changes 242 trace lines and moves 2 references (`logging/config.py:606` and `:619`) from not-targetable to bounded. Bounded references rise from 8 to 10 (3 by work and 7 by queue length, against 7 by work and 1 by queue length before). The `.scip` file is identical.
+
+## Run 2026-11-22: fork rules, kind A identity merge, function rule
+
+Scippy lane `integrate` on main fb122d80. Fork pin `e945e1d` (baseline `df9cecaa`: `4e20bf8`). Label
+`integrate-ebfc6892` in `classes.csv`. Baseline `df9cecaa-2026-11-22`. Graph cache off, `--trace`, all six
+corpora in parallel. Correctness only: no timing was taken.
+
+Changes in this run:
+
+- The fork rules of the A1 to A6 bundle (rules2) and of the base class order, `super()`, and the
+  guard of an attribute (rules3, `325bf62`, `11fc107`).
+- Kind A: a variable or a field that rebinds a class, a function, or a property of its own container
+  shares its symbol (`Future = _asyncio.Future` after `class Future`; `self.plain = v` next to a
+  property `plain`). The symbol keeps the kind of the class or the function.
+- Kind F: for a plain reference, the candidate that a function holds (its scope chain is a prefix of
+  the enclosing scopes of the reference and ends in a function) wins over the candidates of an outer
+  container. The fork rules cannot hoist the binding (`e945e1d`, `test/hoisting.py.skip`).
+- `max_scope_depth` is gone, and `anchor_from_info` takes the source info by reference.
+
+Named numbers, before (`df9cecaa`) and after:
+
+| corpus | both | scippy_missing | real wrong | owner-class coarse | same-name other class | strict recall | strict precision |
+|---|---|---|---|---|---|---|---|
+| mypy | 151891 to 151916 | 2125 to 2100 | 0 to 0 | 4724 to 4724 | 206 to 206 | 94.2428 to 94.2590 | 95.5613 to 95.5620 |
+| rich | 19950 to 20009 | 461 to 402 | 0 to 0 | 79 to 79 | 0 to 0 | 96.8203 to 97.1094 | 99.0576 to 99.0604 |
+| stdlib | 59072 to 59188 | 888 to 772 | 10 to 9 | 364 to 364 | 30 to 28 | 97.7285 to 98.0304 | 99.1976 to 99.3090 |
+| scrapy | 17261 to 17290 | 113 to 84 | 0 to 0 | 13 to 13 | 0 to 0 | 96.6387 to 96.8113 | 97.2713 to 97.2817 |
+| celery | 32823 to 32906 | 297 to 214 | 17 to 2 | 118 to 120 | 7 to 6 | 97.5302 to 97.8231 | 98.4127 to 98.4592 |
+| pydantic-ai | 155564 to 155651 | 5044 to 4957 | 44 to 44 | 8 to 8 | 211 to 211 | 95.9859 to 96.0400 | 99.0981 to 99.0986 |
+
+Ambiguous references (`--trace` status `ambiguous`), and bounded references:
+
+| corpus | ambiguous before | ambiguous after | bounded before | bounded after |
+|---|---|---|---|---|
+| mypy | 339 | 313 | 0 | 0 |
+| rich | 18 | 1 | 0 | 0 |
+| stdlib | 155 | 88 | 8 | 10 |
+| scrapy | 12 | 5 | 0 | 0 |
+| celery | 58 | 24 | 17 | 18 |
+| pydantic-ai | 175 | 149 | 0 | 0 |
+
+Changed locations against the baseline (`difftool.py`), sorted:
+
+- Gained locations (the baseline had no target): rich 50, mypy 30, stdlib 146, scrapy 37, celery 89,
+  pydantic-ai 113. Of these, 177 were ambiguous in the baseline (rich 17, mypy 26, stdlib 67, scrapy 7,
+  celery 34, pydantic-ai 26). Three gained locations
+  differ from scip-python (`asyncio/proactor_events.py:621:16`, `celery/worker/request.py:170:13` and
+  `:41`); the Scippy target (the field of the class) is the right one in each.
+- Intended gain or neutral, kind A (a target that widens to the definition sites of the merged
+  symbol): rich 55, stdlib 101, scrapy 1, celery 11, pydantic-ai 16. Scip-python agrees with the new
+  target or with both in all positions that it resolves in the project.
+- Neutral, `super().__init__()` (rules3 `325bf62`): the old target was the builtin class `super`,
+  the new one is `object.__init__`. Both are external, and neither is the `__init__` of the base
+  class that scip-python gives where the base is generic or from the standard library. Count: rich 5,
+  mypy 9, stdlib 13, scrapy 15, celery 21, pydantic-ai 59 (all in the allowlist).
+- Allowed from the bundle (rules2): the `X = X` locations of celery and `asyncio/tasks.py:840`.
+- Known regression, fix in progress (`object` after all explicit bases). One location: `argparse.py:1887:48`, `super(ArgumentParser, self).__init__` with the
+  bases `(_AttributeHolder, _ActionsContainer)`. The baseline target was
+  `_ActionsContainer.__init__` (scip-python agrees). Now it is `object.__init__`: the search of the
+  base classes is depth first from the left, and the implicit `object` of `_AttributeHolder` comes
+  before the second base. The cause is `325bf62` of the fork (not the C3 order of Python). It is in
+  the allowlist with this reason.
+- Bounded by work, known (rules2): celery `celery/app/builtins.py:92:25`. Stdlib `logging/config.py`
+  606 and 619 go from not targetable to bounded.

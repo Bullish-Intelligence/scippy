@@ -507,3 +507,482 @@ df9cecaa-2026-11-22,2026-11-22,pydantic-ai,class,"scippy_missing / C_self_in_tup
 df9cecaa-2026-11-22,2026-11-22,pydantic-ai,class,scippy_missing / C_synth_init_field: keyword names a dataclass or NamedTuple field (synthesized __init__),65
 df9cecaa-2026-11-22,2026-11-22,pydantic-ai,class,scippy_wrong / W3_member_other,44
 df9cecaa-2026-11-22,2026-11-22,pydantic-ai,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",31
+integrate-ebfc6892,2026-11-22,scrapy,named,both,17290
+integrate-ebfc6892,2026-11-22,scrapy,named,function_type_parameter,0
+integrate-ebfc6892,2026-11-22,scrapy,named,function_type_parameter_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,scrapy,named,import_prefix,457
+integrate-ebfc6892,2026-11-22,scrapy,named,import_prefix_pct_of_both,2.6431
+integrate-ebfc6892,2026-11-22,scrapy,named,match_through_alias_follow,0
+integrate-ebfc6892,2026-11-22,scrapy,named,overlap_precision_pct,97.2817
+integrate-ebfc6892,2026-11-22,scrapy,named,overlap_recall_pct,96.8113
+integrate-ebfc6892,2026-11-22,scrapy,named,owner_class_coarse,13
+integrate-ebfc6892,2026-11-22,scrapy,named,owner_class_coarse_pct_of_both,0.0752
+integrate-ebfc6892,2026-11-22,scrapy,named,real_wrong,0
+integrate-ebfc6892,2026-11-22,scrapy,named,real_wrong_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,scrapy,named,same_name_other_class,0
+integrate-ebfc6892,2026-11-22,scrapy,named,same_name_other_class_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,scrapy,named,sc_inproj,18114
+integrate-ebfc6892,2026-11-22,scrapy,named,scippy_missing,84
+integrate-ebfc6892,2026-11-22,scrapy,named,sp_builtin_type_attr,2
+integrate-ebfc6892,2026-11-22,scrapy,named,sp_first_binding,0
+integrate-ebfc6892,2026-11-22,scrapy,named,sp_first_binding_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,scrapy,named,sp_inproj,17374
+integrate-ebfc6892,2026-11-22,scrapy,named,strict_precision_pct,97.2817
+integrate-ebfc6892,2026-11-22,scrapy,named,strict_recall_pct,96.8113
+integrate-ebfc6892,2026-11-22,scrapy,legacy,builtins.both,1439
+integrate-ebfc6892,2026-11-22,scrapy,legacy,builtins.different,19
+integrate-ebfc6892,2026-11-22,scrapy,legacy,builtins.same_name,1420
+integrate-ebfc6892,2026-11-22,scrapy,legacy,builtins.scippy_only,561
+integrate-ebfc6892,2026-11-22,scrapy,legacy,builtins.scippy_only_sp_has_other_ref,537
+integrate-ebfc6892,2026-11-22,scrapy,legacy,builtins.sp_only,169
+integrate-ebfc6892,2026-11-22,scrapy,legacy,coverage_sp_external,67
+integrate-ebfc6892,2026-11-22,scrapy,legacy,coverage_sp_nothing,757
+integrate-ebfc6892,2026-11-22,scrapy,legacy,design_gap_missing,6
+integrate-ebfc6892,2026-11-22,scrapy,legacy,precision_overlap_pct,97.2817
+integrate-ebfc6892,2026-11-22,scrapy,legacy,precision_plausible_blended_pct,100.0
+integrate-ebfc6892,2026-11-22,scrapy,legacy,rebind_credit,482
+integrate-ebfc6892,2026-11-22,scrapy,legacy,recall_overlap_pct,96.8113
+integrate-ebfc6892,2026-11-22,scrapy,legacy,recall_plausible_blended_pct,99.5165
+integrate-ebfc6892,2026-11-22,scrapy,legacy,recall_without_design_gaps_pct,99.5509
+integrate-ebfc6892,2026-11-22,scrapy,legacy,star_keyword,0
+integrate-ebfc6892,2026-11-22,scrapy,legacy,wrong_legacy,0
+integrate-ebfc6892,2026-11-22,scrapy,class,"both_plausible / import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule",457
+integrate-ebfc6892,2026-11-22,scrapy,class,"both_plausible / sp_points_at_owner_class, Scippy at the member",13
+integrate-ebfc6892,2026-11-22,scrapy,class,import_prefix_artifact / scip-python has no occurrence for a module-name component in an import statement,748
+integrate-ebfc6892,2026-11-22,scrapy,class,scip_python_missing_or_wrong / no scip-python occurrence,9
+integrate-ebfc6892,2026-11-22,scrapy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `other`,61
+integrate-ebfc6892,2026-11-22,scrapy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `type`,4
+integrate-ebfc6892,2026-11-22,scrapy,class,"scippy_missing / C2_annotation_name (forward ref, enclosing class, string): no_reference_node",5
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C3_decorated_method_self_or_cls (tsg `method definition` pattern skips decorated_definition),1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: assign_attr,2
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: assign_call,6
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: assign_other,1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: assign_subscript,2
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: except_target,1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: for_target,3
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: module_level,1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: not_in_func_scope(global/closure/comprehension),2
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4_attribute_on_local_receiver: param_unannotated,14
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_optional_ann),1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_string_ann),1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4c_receiver_type_sp_coarse: scip-python points at the owner class,13
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C4k_receiver_type_keyword_method_param: keyword names a parameter of a method,1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C5_attribute_chain (a.b.c): receiver type needs annotation or value flow,4
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C5s_receiver_type_attribute_store_target: `obj.attr = v` has no target,1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C6_self_attribute_not_found (plain method): ambiguous,3
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C_module_ref: reference to a module (no occurrence by design),9
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C_name_other (class): no-path,2
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C_name_other (func/method): no-path,1
+integrate-ebfc6892,2026-11-22,scrapy,class,scippy_missing / C_name_other (local): no-path,4
+integrate-ebfc6892,2026-11-22,scrapy,class,"scippy_missing / C_rebind: Scippy emits a definition, scip-python a reference (role difference)",6
+integrate-ebfc6892,2026-11-22,scrapy,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",2
+integrate-ebfc6892,2026-11-22,rich,named,both,20009
+integrate-ebfc6892,2026-11-22,rich,named,function_type_parameter,0
+integrate-ebfc6892,2026-11-22,rich,named,function_type_parameter_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,rich,named,import_prefix,109
+integrate-ebfc6892,2026-11-22,rich,named,import_prefix_pct_of_both,0.5448
+integrate-ebfc6892,2026-11-22,rich,named,match_through_alias_follow,0
+integrate-ebfc6892,2026-11-22,rich,named,overlap_precision_pct,99.0604
+integrate-ebfc6892,2026-11-22,rich,named,overlap_recall_pct,97.1094
+integrate-ebfc6892,2026-11-22,rich,named,owner_class_coarse,79
+integrate-ebfc6892,2026-11-22,rich,named,owner_class_coarse_pct_of_both,0.3948
+integrate-ebfc6892,2026-11-22,rich,named,real_wrong,0
+integrate-ebfc6892,2026-11-22,rich,named,real_wrong_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,rich,named,same_name_other_class,0
+integrate-ebfc6892,2026-11-22,rich,named,same_name_other_class_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,rich,named,sc_inproj,20611
+integrate-ebfc6892,2026-11-22,rich,named,scippy_missing,402
+integrate-ebfc6892,2026-11-22,rich,named,sp_builtin_type_attr,11
+integrate-ebfc6892,2026-11-22,rich,named,sp_first_binding,0
+integrate-ebfc6892,2026-11-22,rich,named,sp_first_binding_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,rich,named,sp_inproj,20411
+integrate-ebfc6892,2026-11-22,rich,named,strict_precision_pct,99.0604
+integrate-ebfc6892,2026-11-22,rich,named,strict_recall_pct,97.1094
+integrate-ebfc6892,2026-11-22,rich,legacy,builtins.both,3179
+integrate-ebfc6892,2026-11-22,rich,legacy,builtins.different,6
+integrate-ebfc6892,2026-11-22,rich,legacy,builtins.same_name,3173
+integrate-ebfc6892,2026-11-22,rich,legacy,builtins.scippy_only,369
+integrate-ebfc6892,2026-11-22,rich,legacy,builtins.scippy_only_sp_has_other_ref,367
+integrate-ebfc6892,2026-11-22,rich,legacy,builtins.sp_only,185
+integrate-ebfc6892,2026-11-22,rich,legacy,coverage_sp_external,144
+integrate-ebfc6892,2026-11-22,rich,legacy,coverage_sp_nothing,458
+integrate-ebfc6892,2026-11-22,rich,legacy,design_gap_missing,28
+integrate-ebfc6892,2026-11-22,rich,legacy,precision_overlap_pct,99.0604
+integrate-ebfc6892,2026-11-22,rich,legacy,precision_plausible_blended_pct,100.0
+integrate-ebfc6892,2026-11-22,rich,legacy,rebind_credit,780
+integrate-ebfc6892,2026-11-22,rich,legacy,recall_overlap_pct,97.1094
+integrate-ebfc6892,2026-11-22,rich,legacy,recall_plausible_blended_pct,98.0305
+integrate-ebfc6892,2026-11-22,rich,legacy,recall_without_design_gaps_pct,98.1651
+integrate-ebfc6892,2026-11-22,rich,legacy,star_keyword,0
+integrate-ebfc6892,2026-11-22,rich,legacy,wrong_legacy,0
+integrate-ebfc6892,2026-11-22,rich,class,"both_plausible / import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule",109
+integrate-ebfc6892,2026-11-22,rich,class,"both_plausible / sp_points_at_owner_class, Scippy at the member",79
+integrate-ebfc6892,2026-11-22,rich,class,import_prefix_artifact / scip-python has no occurrence for a module-name component in an import statement,442
+integrate-ebfc6892,2026-11-22,rich,class,scip_python_missing_or_wrong / no scip-python occurrence,16
+integrate-ebfc6892,2026-11-22,rich,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `other`,130
+integrate-ebfc6892,2026-11-22,rich,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `type`,3
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C1_keyword_argument_name: `f(name=v)` has no reference node,7
+integrate-ebfc6892,2026-11-22,rich,class,"scippy_missing / C2_annotation_name (forward ref, enclosing class, string): no-path",1
+integrate-ebfc6892,2026-11-22,rich,class,"scippy_missing / C2_annotation_name (forward ref, enclosing class, string): no_reference_node",65
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C3_decorated_method_self_or_cls (tsg `method definition` pattern skips decorated_definition),3
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: assign_attr,3
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: assign_call,20
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: assign_other,53
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: assign_subscript,4
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: for_target,44
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: module_level,9
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: not_in_func_scope(global/closure/comprehension),19
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: tuple_unpack,3
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4_attribute_on_local_receiver: with_target,1
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4a_receiver_param_declared_type_differs_from_member_owner (isinstance narrowing or subclass member),1
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_string_ann),14
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4c_receiver_type_sp_coarse: scip-python points at the owner class,12
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C4k_receiver_type_keyword_method_param: keyword names a parameter of a method,23
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C5_attribute_chain (a.b.c): receiver type needs annotation or value flow,42
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C5_attribute_on_call_or_subscript_result,12
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C5s_receiver_type_attribute_store_target: `obj.attr = v` has no target,18
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C_name_other (class): no_reference_node,1
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C_name_other (func/method): no-path,9
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C_name_other (local): no-path,5
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C_name_other (local): no_reference_node,2
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C_name_other (param): no_reference_node,5
+integrate-ebfc6892,2026-11-22,rich,class,scippy_missing / C_name_other (var/attr): no_reference_node,5
+integrate-ebfc6892,2026-11-22,rich,class,"scippy_missing / C_rebind: Scippy emits a definition, scip-python a reference (role difference)",21
+integrate-ebfc6892,2026-11-22,rich,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",11
+integrate-ebfc6892,2026-11-22,celery,named,both,32906
+integrate-ebfc6892,2026-11-22,celery,named,function_type_parameter,0
+integrate-ebfc6892,2026-11-22,celery,named,function_type_parameter_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,celery,named,import_prefix,379
+integrate-ebfc6892,2026-11-22,celery,named,import_prefix_pct_of_both,1.1518
+integrate-ebfc6892,2026-11-22,celery,named,match_through_alias_follow,0
+integrate-ebfc6892,2026-11-22,celery,named,overlap_precision_pct,98.4592
+integrate-ebfc6892,2026-11-22,celery,named,overlap_recall_pct,97.8231
+integrate-ebfc6892,2026-11-22,celery,named,owner_class_coarse,120
+integrate-ebfc6892,2026-11-22,celery,named,owner_class_coarse_pct_of_both,0.3647
+integrate-ebfc6892,2026-11-22,celery,named,real_wrong,2
+integrate-ebfc6892,2026-11-22,celery,named,real_wrong_pct_of_both,0.0061
+integrate-ebfc6892,2026-11-22,celery,named,same_name_other_class,6
+integrate-ebfc6892,2026-11-22,celery,named,same_name_other_class_pct_of_both,0.0182
+integrate-ebfc6892,2026-11-22,celery,named,sc_inproj,34017
+integrate-ebfc6892,2026-11-22,celery,named,scippy_missing,214
+integrate-ebfc6892,2026-11-22,celery,named,sp_builtin_type_attr,9
+integrate-ebfc6892,2026-11-22,celery,named,sp_first_binding,0
+integrate-ebfc6892,2026-11-22,celery,named,sp_first_binding_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,celery,named,sp_inproj,33120
+integrate-ebfc6892,2026-11-22,celery,named,strict_precision_pct,98.4592
+integrate-ebfc6892,2026-11-22,celery,named,strict_recall_pct,97.8231
+integrate-ebfc6892,2026-11-22,celery,legacy,builtins.both,2918
+integrate-ebfc6892,2026-11-22,celery,legacy,builtins.different,32
+integrate-ebfc6892,2026-11-22,celery,legacy,builtins.same_name,2886
+integrate-ebfc6892,2026-11-22,celery,legacy,builtins.scippy_only,834
+integrate-ebfc6892,2026-11-22,celery,legacy,builtins.scippy_only_sp_has_other_ref,814
+integrate-ebfc6892,2026-11-22,celery,legacy,builtins.sp_only,373
+integrate-ebfc6892,2026-11-22,celery,legacy,coverage_sp_external,333
+integrate-ebfc6892,2026-11-22,celery,legacy,coverage_sp_nothing,778
+integrate-ebfc6892,2026-11-22,celery,legacy,design_gap_missing,68
+integrate-ebfc6892,2026-11-22,celery,legacy,precision_overlap_pct,98.4592
+integrate-ebfc6892,2026-11-22,celery,legacy,precision_plausible_blended_pct,99.9939
+integrate-ebfc6892,2026-11-22,celery,legacy,rebind_credit,1449
+integrate-ebfc6892,2026-11-22,celery,legacy,recall_overlap_pct,97.8231
+integrate-ebfc6892,2026-11-22,celery,legacy,recall_plausible_blended_pct,99.3478
+integrate-ebfc6892,2026-11-22,celery,legacy,recall_without_design_gaps_pct,99.5522
+integrate-ebfc6892,2026-11-22,celery,legacy,star_keyword,0
+integrate-ebfc6892,2026-11-22,celery,legacy,wrong_legacy,2
+integrate-ebfc6892,2026-11-22,celery,class,"both_plausible / import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule",378
+integrate-ebfc6892,2026-11-22,celery,class,"both_plausible / import_prefix_at_usage_site: Scippy points the leading name (`mypy` of `mypy.nodes.X`) at the package, scip-python at a submodule",1
+integrate-ebfc6892,2026-11-22,celery,class,both_plausible / same_name_member_in_another_class (inheritance/override),6
+integrate-ebfc6892,2026-11-22,celery,class,"both_plausible / sp_points_at_owner_class, Scippy at the member",120
+integrate-ebfc6892,2026-11-22,celery,class,import_prefix_artifact / scip-python has no occurrence for a module-name component in an import statement,729
+integrate-ebfc6892,2026-11-22,celery,class,scip_python_missing_or_wrong / no scip-python occurrence,49
+integrate-ebfc6892,2026-11-22,celery,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `other`,322
+integrate-ebfc6892,2026-11-22,celery,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `type`,1
+integrate-ebfc6892,2026-11-22,celery,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `types`,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C1_keyword_argument_name: `f(name=v)` has no reference node,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C3_decorated_method_self_or_cls (tsg `method definition` pattern skips decorated_definition),1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: assign_attr,2
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: assign_call,8
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: assign_other,6
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: for_target,5
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: module_level,3
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: not_in_func_scope(global/closure/comprehension),18
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: param_unannotated,22
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4_attribute_on_local_receiver: tuple_unpack,2
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4c_receiver_type_sp_coarse: scip-python points at the owner class,24
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C4k_receiver_type_keyword_method_param: keyword names a parameter of a method,8
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C5_attribute_chain (a.b.c): receiver type needs annotation or value flow,11
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C5_attribute_on_call_or_subscript_result,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C5s_receiver_type_attribute_store_target: `obj.attr = v` has no target,5
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C6_self_attribute_not_found (plain method): ambiguous,7
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C7_starred_target_or_arg `*name`: no-path,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_other (class): no_reference_node,10
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_other (class): resolved,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_other (func/method): no-path,5
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_other (local): no-path,3
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_other (param): no-declaration,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_other (param): no_reference_node,1
+integrate-ebfc6892,2026-11-22,celery,class,scippy_missing / C_name_store_target: no-path,1
+integrate-ebfc6892,2026-11-22,celery,class,"scippy_missing / C_rebind: Scippy emits a definition, scip-python a reference (role difference)",67
+integrate-ebfc6892,2026-11-22,celery,class,scippy_wrong / W3_member_other,2
+integrate-ebfc6892,2026-11-22,celery,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",9
+integrate-ebfc6892,2026-11-22,stdlib,named,both,59188
+integrate-ebfc6892,2026-11-22,stdlib,named,function_type_parameter,6
+integrate-ebfc6892,2026-11-22,stdlib,named,function_type_parameter_pct_of_both,0.0101
+integrate-ebfc6892,2026-11-22,stdlib,named,import_prefix,2
+integrate-ebfc6892,2026-11-22,stdlib,named,import_prefix_pct_of_both,0.0034
+integrate-ebfc6892,2026-11-22,stdlib,named,match_through_alias_follow,0
+integrate-ebfc6892,2026-11-22,stdlib,named,overlap_precision_pct,99.309
+integrate-ebfc6892,2026-11-22,stdlib,named,overlap_recall_pct,98.0304
+integrate-ebfc6892,2026-11-22,stdlib,named,owner_class_coarse,364
+integrate-ebfc6892,2026-11-22,stdlib,named,owner_class_coarse_pct_of_both,0.615
+integrate-ebfc6892,2026-11-22,stdlib,named,real_wrong,9
+integrate-ebfc6892,2026-11-22,stdlib,named,real_wrong_pct_of_both,0.0152
+integrate-ebfc6892,2026-11-22,stdlib,named,same_name_other_class,28
+integrate-ebfc6892,2026-11-22,stdlib,named,same_name_other_class_pct_of_both,0.0473
+integrate-ebfc6892,2026-11-22,stdlib,named,sc_inproj,66982
+integrate-ebfc6892,2026-11-22,stdlib,named,scippy_missing,772
+integrate-ebfc6892,2026-11-22,stdlib,named,sp_builtin_type_attr,12
+integrate-ebfc6892,2026-11-22,stdlib,named,sp_first_binding,0
+integrate-ebfc6892,2026-11-22,stdlib,named,sp_first_binding_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,stdlib,named,sp_inproj,59960
+integrate-ebfc6892,2026-11-22,stdlib,named,strict_precision_pct,99.309
+integrate-ebfc6892,2026-11-22,stdlib,named,strict_recall_pct,98.0304
+integrate-ebfc6892,2026-11-22,stdlib,legacy,builtins.both,7003
+integrate-ebfc6892,2026-11-22,stdlib,legacy,builtins.different,144
+integrate-ebfc6892,2026-11-22,stdlib,legacy,builtins.same_name,6859
+integrate-ebfc6892,2026-11-22,stdlib,legacy,builtins.scippy_only,2064
+integrate-ebfc6892,2026-11-22,stdlib,legacy,builtins.scippy_only_sp_has_other_ref,1983
+integrate-ebfc6892,2026-11-22,stdlib,legacy,builtins.sp_only,1166
+integrate-ebfc6892,2026-11-22,stdlib,legacy,coverage_sp_external,7126
+integrate-ebfc6892,2026-11-22,stdlib,legacy,coverage_sp_nothing,668
+integrate-ebfc6892,2026-11-22,stdlib,legacy,design_gap_missing,195
+integrate-ebfc6892,2026-11-22,stdlib,legacy,precision_overlap_pct,99.309
+integrate-ebfc6892,2026-11-22,stdlib,legacy,precision_plausible_blended_pct,99.9848
+integrate-ebfc6892,2026-11-22,stdlib,legacy,rebind_credit,4000
+integrate-ebfc6892,2026-11-22,stdlib,legacy,recall_overlap_pct,98.0304
+integrate-ebfc6892,2026-11-22,stdlib,legacy,recall_plausible_blended_pct,98.6975
+integrate-ebfc6892,2026-11-22,stdlib,legacy,recall_without_design_gaps_pct,99.0195
+integrate-ebfc6892,2026-11-22,stdlib,legacy,star_keyword,0
+integrate-ebfc6892,2026-11-22,stdlib,legacy,wrong_legacy,9
+integrate-ebfc6892,2026-11-22,stdlib,class,"both_plausible / function_type_parameter: scip-python gives a type parameter of a function the symbol of the function, Scippy the type parameter",6
+integrate-ebfc6892,2026-11-22,stdlib,class,"both_plausible / import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule",2
+integrate-ebfc6892,2026-11-22,stdlib,class,both_plausible / same_name_member_in_another_class (inheritance/override),28
+integrate-ebfc6892,2026-11-22,stdlib,class,"both_plausible / sp_points_at_owner_class, Scippy at the member",364
+integrate-ebfc6892,2026-11-22,stdlib,class,import_prefix_artifact / scip-python has no occurrence for a module-name component in an import statement,254
+integrate-ebfc6892,2026-11-22,stdlib,class,scip_python_missing_or_wrong / no scip-python occurrence,414
+integrate-ebfc6892,2026-11-22,stdlib,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `function`,5
+integrate-ebfc6892,2026-11-22,stdlib,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `other`,7068
+integrate-ebfc6892,2026-11-22,stdlib,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `tuple`,2
+integrate-ebfc6892,2026-11-22,stdlib,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `type`,27
+integrate-ebfc6892,2026-11-22,stdlib,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `types`,12
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C3_decorated_method_self_or_cls (tsg `method definition` pattern skips decorated_definition),5
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: assign_attr,11
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: assign_call,15
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: assign_other,11
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: assign_subscript,3
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: except_target,5
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: for_target,2
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: module_level,12
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: not_in_func_scope(global/closure/comprehension),12
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: param_unannotated,11
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: walrus,1
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4_attribute_on_local_receiver: with_target,1
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4c_receiver_type_sp_coarse: scip-python points at the owner class,58
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C4k_receiver_type_keyword_method_param: keyword names a parameter of a method,12
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C5_attribute_chain (a.b.c): receiver type needs annotation or value flow,69
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C5_attribute_on_call_or_subscript_result,6
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C5s_receiver_type_attribute_store_target: `obj.attr = v` has no target,36
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C6_self_attribute_not_found (plain method): ambiguous,35
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C6_self_attribute_not_found (plain method): bounded,1
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C6_self_attribute_not_found (plain method): no-path,153
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_attribute_other: cls.name,2
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (class): no-path,8
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (class): not-targetable,1
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (func/method): no-declaration,13
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (func/method): no-path,38
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (local): no-path,43
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (local): no_reference_node,2
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (param): ambiguous,1
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (param): no_reference_node,4
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (var/attr): ambiguous,1
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (var/attr): no-path,2
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_missing / C_name_other (var/attr): not-targetable,3
+integrate-ebfc6892,2026-11-22,stdlib,class,"scippy_missing / C_rebind: Scippy emits a definition, scip-python a reference (role difference)",195
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_wrong / W1_attribute_resolved_to_a_local (value flow through assignment RHS),5
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_wrong / W2_name_resolved_to_other_local,3
+integrate-ebfc6892,2026-11-22,stdlib,class,scippy_wrong / W3_member_other,1
+integrate-ebfc6892,2026-11-22,stdlib,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",12
+integrate-ebfc6892,2026-11-22,mypy,named,both,151916
+integrate-ebfc6892,2026-11-22,mypy,named,function_type_parameter,0
+integrate-ebfc6892,2026-11-22,mypy,named,function_type_parameter_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,mypy,named,import_prefix,1812
+integrate-ebfc6892,2026-11-22,mypy,named,import_prefix_pct_of_both,1.1928
+integrate-ebfc6892,2026-11-22,mypy,named,match_through_alias_follow,0
+integrate-ebfc6892,2026-11-22,mypy,named,overlap_precision_pct,95.562
+integrate-ebfc6892,2026-11-22,mypy,named,overlap_recall_pct,94.259
+integrate-ebfc6892,2026-11-22,mypy,named,owner_class_coarse,4724
+integrate-ebfc6892,2026-11-22,mypy,named,owner_class_coarse_pct_of_both,3.1096
+integrate-ebfc6892,2026-11-22,mypy,named,real_wrong,0
+integrate-ebfc6892,2026-11-22,mypy,named,real_wrong_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,mypy,named,same_name_other_class,206
+integrate-ebfc6892,2026-11-22,mypy,named,same_name_other_class_pct_of_both,0.1356
+integrate-ebfc6892,2026-11-22,mypy,named,sc_inproj,156080
+integrate-ebfc6892,2026-11-22,mypy,named,scippy_missing,2100
+integrate-ebfc6892,2026-11-22,mypy,named,sp_builtin_type_attr,1327
+integrate-ebfc6892,2026-11-22,mypy,named,sp_first_binding,0
+integrate-ebfc6892,2026-11-22,mypy,named,sp_first_binding_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,mypy,named,sp_inproj,154016
+integrate-ebfc6892,2026-11-22,mypy,named,strict_precision_pct,95.562
+integrate-ebfc6892,2026-11-22,mypy,named,strict_recall_pct,94.259
+integrate-ebfc6892,2026-11-22,mypy,legacy,builtins.both,15550
+integrate-ebfc6892,2026-11-22,mypy,legacy,builtins.different,70
+integrate-ebfc6892,2026-11-22,mypy,legacy,builtins.same_name,15480
+integrate-ebfc6892,2026-11-22,mypy,legacy,builtins.scippy_only,5740
+integrate-ebfc6892,2026-11-22,mypy,legacy,builtins.scippy_only_sp_has_other_ref,5723
+integrate-ebfc6892,2026-11-22,mypy,legacy,builtins.sp_only,2666
+integrate-ebfc6892,2026-11-22,mypy,legacy,coverage_sp_external,2144
+integrate-ebfc6892,2026-11-22,mypy,legacy,coverage_sp_nothing,2020
+integrate-ebfc6892,2026-11-22,mypy,legacy,design_gap_missing,211
+integrate-ebfc6892,2026-11-22,mypy,legacy,precision_overlap_pct,95.562
+integrate-ebfc6892,2026-11-22,mypy,legacy,precision_plausible_blended_pct,100.0
+integrate-ebfc6892,2026-11-22,mypy,legacy,rebind_credit,4828
+integrate-ebfc6892,2026-11-22,mypy,legacy,recall_overlap_pct,94.259
+integrate-ebfc6892,2026-11-22,mypy,legacy,recall_plausible_blended_pct,98.6365
+integrate-ebfc6892,2026-11-22,mypy,legacy,recall_without_design_gaps_pct,98.7718
+integrate-ebfc6892,2026-11-22,mypy,legacy,star_keyword,0
+integrate-ebfc6892,2026-11-22,mypy,legacy,wrong_legacy,0
+integrate-ebfc6892,2026-11-22,mypy,class,"both_plausible / import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule",1030
+integrate-ebfc6892,2026-11-22,mypy,class,"both_plausible / import_prefix_at_usage_site: Scippy points the leading name (`mypy` of `mypy.nodes.X`) at the package, scip-python at a submodule",782
+integrate-ebfc6892,2026-11-22,mypy,class,both_plausible / same_name_member_in_another_class (inheritance/override),198
+integrate-ebfc6892,2026-11-22,mypy,class,"both_plausible / sp_points_at_a_class_that_is_not_the_owner, Scippy at a same-name member",8
+integrate-ebfc6892,2026-11-22,mypy,class,"both_plausible / sp_points_at_owner_class, Scippy at the member",4724
+integrate-ebfc6892,2026-11-22,mypy,class,import_prefix_artifact / scip-python has no occurrence for a module-name component in an import statement,1158
+integrate-ebfc6892,2026-11-22,mypy,class,scip_python_missing_or_wrong / no scip-python occurrence,862
+integrate-ebfc6892,2026-11-22,mypy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `function`,35
+integrate-ebfc6892,2026-11-22,mypy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `other`,503
+integrate-ebfc6892,2026-11-22,mypy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `tuple`,98
+integrate-ebfc6892,2026-11-22,mypy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `type`,48
+integrate-ebfc6892,2026-11-22,mypy,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `types`,133
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C1_keyword_argument_name: `f(name=v)` has no reference node,3
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C3_decorated_method_self_or_cls (tsg `method definition` pattern skips decorated_definition),1
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: assign_attr,46
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: assign_call,89
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: assign_other,31
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: assign_subscript,71
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: except_target,28
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: for_target,165
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: local_union_ann,5
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: module_level,2
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: not_in_func_scope(global/closure/comprehension),90
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: tuple_unpack,15
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4_attribute_on_local_receiver: walrus,9
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4a_receiver_param_declared_type_differs_from_member_owner (isinstance narrowing or subclass member),89
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_union_ann),51
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4c_receiver_type_sp_coarse: scip-python points at the owner class,766
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C4k_receiver_type_keyword_method_param: keyword names a parameter of a method,28
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C5_attribute_chain (a.b.c): receiver type needs annotation or value flow,204
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C5_attribute_on_call_or_subscript_result,134
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C5s_receiver_type_attribute_store_target: `obj.attr = v` has no target,30
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C6_self_attribute_not_found (plain method): ambiguous,14
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C6_self_attribute_not_found (plain method): no-path,2
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C7_starred_target_or_arg `*name`: no_reference_node,2
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C_attribute_other: cls.name,2
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C_name_other (class): no_reference_node,6
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C_name_other (func/method): no-path,4
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C_name_other (local): no-path,1
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C_name_other (param): no_reference_node,2
+integrate-ebfc6892,2026-11-22,mypy,class,scippy_missing / C_name_other (var/attr): no_reference_node,2
+integrate-ebfc6892,2026-11-22,mypy,class,"scippy_missing / C_rebind: Scippy emits a definition, scip-python a reference (role difference)",208
+integrate-ebfc6892,2026-11-22,mypy,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",1327
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,both,155651
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,function_type_parameter,0
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,function_type_parameter_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,import_prefix,1140
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,import_prefix_pct_of_both,0.7324
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,match_through_alias_follow,0
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,overlap_precision_pct,99.0986
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,overlap_recall_pct,96.04
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,owner_class_coarse,8
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,owner_class_coarse_pct_of_both,0.0051
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,real_wrong,44
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,real_wrong_pct_of_both,0.0283
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,same_name_other_class,211
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,same_name_other_class_pct_of_both,0.1356
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,sc_inproj,162655
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,scippy_missing,4957
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,sp_builtin_type_attr,31
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,sp_first_binding,0
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,sp_first_binding_pct_of_both,0.0
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,sp_inproj,160608
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,strict_precision_pct,99.0986
+integrate-ebfc6892,2026-11-22,pydantic-ai,named,strict_recall_pct,96.04
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,builtins.both,29418
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,builtins.different,160
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,builtins.same_name,29258
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,builtins.scippy_only,4607
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,builtins.scippy_only_sp_has_other_ref,4501
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,builtins.sp_only,1619
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,coverage_sp_external,3431
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,coverage_sp_nothing,3573
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,design_gap_missing,355
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,precision_overlap_pct,99.0986
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,precision_plausible_blended_pct,99.9717
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,rebind_credit,4918
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,recall_overlap_pct,96.04
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,recall_plausible_blended_pct,96.8862
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,recall_without_design_gaps_pct,97.1008
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,star_keyword,0
+integrate-ebfc6892,2026-11-22,pydantic-ai,legacy,wrong_legacy,44
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"both_plausible / import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule",1140
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,both_plausible / same_name_member_in_another_class (inheritance/override),211
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"both_plausible / sp_points_at_owner_class, Scippy at the member",8
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,import_prefix_artifact / scip-python has no occurrence for a module-name component in an import statement,3537
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scip_python_missing_or_wrong / no scip-python occurrence,36
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `function`,32
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `other`,3300
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `type`,64
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scip_python_missing_or_wrong / scip-python resolves to a builtin or stdlib symbol for an attribute or local named `types`,4
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C1_keyword_argument_name: `f(name=v)` has no reference node,6
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"scippy_missing / C2_annotation_name (forward ref, enclosing class, string): no-declaration",122
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"scippy_missing / C2_annotation_name (forward ref, enclosing class, string): no-path",19
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"scippy_missing / C2_annotation_name (forward ref, enclosing class, string): no_reference_node",2
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C3_decorated_method_self_or_cls (tsg `method definition` pattern skips decorated_definition),114
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: assign_attr,154
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: assign_call,363
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: assign_other,273
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: assign_subscript,48
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: except_target,49
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: for_target,440
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: local_generic_ann,2
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: local_union_ann,5
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: module_level,4
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: not_in_func_scope(global/closure/comprehension),226
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: tuple_unpack,48
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: walrus,83
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4_attribute_on_local_receiver: with_target,109
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4a_receiver_param_declared_type_differs_from_member_owner (isinstance narrowing or subclass member),510
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_class_ann),1
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_generic_ann),1
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4b_receiver_param_annotated_but_member_not_found (param_union_ann),68
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4c_receiver_type_sp_coarse: scip-python points at the owner class,13
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C4k_receiver_type_keyword_method_param: keyword names a parameter of a method,621
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C5_attribute_chain (a.b.c): receiver type needs annotation or value flow,192
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C5_attribute_on_call_or_subscript_result,294
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C5s_receiver_type_attribute_store_target: `obj.attr = v` has no target,137
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C6_self_attribute_not_found (plain method): ambiguous,14
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C6_self_attribute_not_found (plain method): no-path,523
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C7_starred_target_or_arg `*name`: no_reference_node,13
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_attribute_other: cls.name,2
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_module_ref: reference to a module (no occurrence by design),4
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (class): no-declaration,1
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (class): no-path,1
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (class): no_reference_node,27
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (func/method): ambiguous,3
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (func/method): no-path,10
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (local): no-path,9
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (local): not-targetable,3
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_name_other (var/attr): no_reference_node,19
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"scippy_missing / C_rebind: Scippy emits a definition, scip-python a reference (role difference)",349
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"scippy_missing / C_self_in_tuple_assignment_target `self.a, self.b = ...`: no_reference_node",10
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_missing / C_synth_init_field: keyword names a dataclass or NamedTuple field (synthesized __init__),65
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,scippy_wrong / W3_member_other,44
+integrate-ebfc6892,2026-11-22,pydantic-ai,class,"sp_builtin_type_attr / scip-python gives builtins/type# for an attribute named `type`, Scippy points at the member",31

@@ -392,6 +392,38 @@ pub(crate) fn reconcile(
                 (nearest, dropped)
             };
 
+            // A name that a function binds is local to that function. A path that bypasses the
+            // binding, as a `try` handler, a branch, or a loop does, can reach a binding of the same
+            // name outside the function. The read cannot name it. The innermost function that
+            // holds a candidate wins over the candidates that an outer container holds.
+            let kept = if kind == ReferenceKind::Plain && kept.len() > 1 {
+                let from = targeting.enclosing(reference.start_byte, reference.end_byte);
+                let depth = |e: &Entry| {
+                    (e.scopes
+                        .last()
+                        .is_some_and(|s| s.kind == DeclKind::Function)
+                        && from.starts_with(&e.scopes))
+                    .then_some(e.scopes.len())
+                };
+                let deepest = kept
+                    .iter()
+                    .filter_map(|(_, place, _)| declarations.entry(place).and_then(depth))
+                    .max();
+                match deepest {
+                    Some(d) => kept
+                        .into_iter()
+                        .filter(|(_, place, _)| {
+                            declarations
+                                .entry(place)
+                                .is_none_or(|e| e.scopes.len() >= d)
+                        })
+                        .collect(),
+                    None => kept,
+                }
+            } else {
+                kept
+            };
+
             // A definition in the project shadows a definition of an external asset.
             let in_project = kept.iter().any(|(_, place, _)| !place.external);
             let mut usable: BTreeSet<SymbolId> = BTreeSet::new();
@@ -1208,5 +1240,115 @@ mod tests {
         assert_eq!(names(45, 48), ["outer"]);
         assert_eq!(names(70, 73), ["outer", "other"]);
         assert!(names(150, 153).is_empty());
+    }
+
+    /// The declarations `a.py:0` (`sym(0)`, held by `holder`) and `a.py:10` (`sym(1)`, at module
+    /// level). The reference at `app.py:50` lies in the containers `containers`. The model
+    /// refuses nothing for the names used here.
+    fn function_outcome(
+        holder: Vec<Scope>,
+        containers: Vec<((u32, u32), Scope)>,
+        members: &HashSet<(u32, u32)>,
+    ) -> BindingOutcome {
+        let variable = Scope {
+            kind: DeclKind::Variable,
+            name: "x".to_string(),
+        };
+        let mut index = DeclarationIndex::default();
+        index.insert_scoped(anchor("a.py", 0), sym(0), holder, variable.clone());
+        index.insert_scoped(anchor("a.py", 10), sym(1), vec![], variable);
+        reconcile(
+            &index,
+            vec![binding(
+                anchor("app.py", 50),
+                vec![end("a.py", 0, None), end("a.py", 10, None)],
+                None,
+            )],
+            members,
+            &HashSet::new(),
+            &Targeting::new(&Refuser, containers),
+        )
+        .remove(0)
+        .outcome
+    }
+
+    fn container(kind: DeclKind, name: &str, extent: (u32, u32)) -> ((u32, u32), Scope) {
+        (
+            extent,
+            Scope {
+                kind,
+                name: name.to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn a_name_that_a_function_binds_wins_over_the_outer_name() {
+        let function = container(DeclKind::Function, "f", (0, 100));
+        let holder = vec![function.1.clone()];
+        // The path that bypasses the binding reaches the outer name. The read cannot name it.
+        assert_eq!(
+            function_outcome(holder.clone(), vec![function.clone()], &HashSet::new()),
+            BindingOutcome::Resolved(sym(0))
+        );
+        // The innermost function wins over an outer function.
+        let outer = container(DeclKind::Function, "g", (0, 200));
+        let inner_holder = vec![outer.1.clone(), function.1.clone()];
+        let mut index = DeclarationIndex::default();
+        let variable = Scope {
+            kind: DeclKind::Variable,
+            name: "x".to_string(),
+        };
+        index.insert_scoped(anchor("a.py", 0), sym(0), inner_holder, variable.clone());
+        index.insert_scoped(anchor("a.py", 10), sym(1), vec![outer.1.clone()], variable);
+        let found = reconcile(
+            &index,
+            vec![binding(
+                anchor("app.py", 50),
+                vec![end("a.py", 0, None), end("a.py", 10, None)],
+                None,
+            )],
+            &HashSet::new(),
+            &HashSet::new(),
+            &Targeting::new(&Refuser, vec![outer, function]),
+        )
+        .remove(0)
+        .outcome;
+        assert_eq!(found, BindingOutcome::Resolved(sym(0)));
+    }
+
+    #[test]
+    fn the_function_rule_leaves_other_references_alone() {
+        let function = container(DeclKind::Function, "f", (0, 100));
+        let both = BindingOutcome::Ambiguous(vec![sym(0), sym(1)]);
+        // A member reference keeps both ends.
+        assert_eq!(
+            function_outcome(
+                vec![function.1.clone()],
+                vec![function.clone()],
+                &HashSet::from([(50, 53)])
+            ),
+            both
+        );
+        // The function that holds the name does not enclose the reference.
+        let other = Scope {
+            kind: DeclKind::Function,
+            name: "other".to_string(),
+        };
+        assert_eq!(
+            function_outcome(vec![other], vec![function.clone()], &HashSet::new()),
+            both
+        );
+        // A class scope does not count. A class body is no scope for its methods.
+        let class = container(DeclKind::Class, "C", (0, 100));
+        assert_eq!(
+            function_outcome(vec![class.1.clone()], vec![class], &HashSet::new()),
+            both
+        );
+        // The name is at module level: no function holds a candidate.
+        assert_eq!(
+            function_outcome(vec![], vec![function], &HashSet::new()),
+            both
+        );
     }
 }

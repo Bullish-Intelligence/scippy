@@ -984,6 +984,78 @@ fn an_assignment_to_an_attribute_of_another_value_is_a_reference() {
     assert!(at("item.fresh = 8", "fresh").is_empty());
 }
 
+#[test]
+fn a_variable_or_a_field_that_rebinds_a_member_shares_its_symbol() {
+    use scip::types::symbol_information::Kind;
+    let text = "\
+class Future:
+    pass
+
+
+Future = Future
+
+
+class Box:
+    def plain(self):
+        return 1
+
+    def __init__(self, v):
+        self.plain = v
+
+
+def make():
+    return 1
+
+
+make = make
+";
+    let (_scratch, indexed) = index_files(&[("m.py", text)]);
+    let class = global("m/Future#");
+    let method = global("m/Box#plain().");
+    let function = global("m/make().");
+    // The variable and the class share one symbol, and the symbol keeps the kind of the class.
+    assert_eq!(
+        indexed.symbols_of("m.py", "Future = Future", "Future"),
+        [class.as_str()]
+    );
+    assert_eq!(
+        indexed.symbols_of("m.py", "class Future", "Future"),
+        [class.as_str()]
+    );
+    assert_eq!(
+        indexed.symbols_of("m.py", "make = make", "make"),
+        [function.as_str()]
+    );
+    // The field shares the symbol of the method of the same name.
+    assert_eq!(
+        indexed.symbols_of("m.py", "self.plain = v", "plain"),
+        [method.as_str()]
+    );
+    let kind = |symbol: &str| {
+        indexed
+            .document("m.py")
+            .unwrap()
+            .symbols
+            .iter()
+            .find(|s| s.symbol == symbol)
+            .unwrap_or_else(|| panic!("no information for {symbol}"))
+            .kind
+            .enum_value()
+            .unwrap()
+    };
+    assert_eq!(kind(&class), Kind::Class);
+    assert_eq!(kind(&method), Kind::Method);
+    assert_eq!(kind(&function), Kind::Function);
+    assert!(
+        !indexed
+            .document("m.py")
+            .unwrap()
+            .symbols
+            .iter()
+            .any(|s| s.symbol == global("m/Box#plain."))
+    );
+}
+
 // ---- rules of the fork: flow, classmethods, annotations, lambdas ----
 
 /// Index a project of the given files, in a new directory. Keep the directory while the test

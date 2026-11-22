@@ -723,18 +723,30 @@ fn describe(
     } else {
         declaration
     };
+    // A variable or a field that rebinds a class or a function of its own container is that
+    // class or function. `Future = _asyncio.Future` after `class Future`, and `self.plain = v`
+    // next to a property `plain`, name one entity. The entity keeps the kind of the class or of
+    // the function. For a field, `siblings` lists the members of the class.
+    let was_field = declaration.kind == DeclKind::Field;
+    let member = if matches!(declaration.kind, DeclKind::Variable | DeclKind::Field) {
+        siblings.iter().find(|s| {
+            matches!(s.kind, DeclKind::Class | DeclKind::Function) && s.name == declaration.name
+        })
+    } else {
+        None
+    };
+    let declaration = member.unwrap_or(declaration);
 
     // The part of the chain that names the owner of the declaration.
     // A `self.x` attribute belongs to the nearest enclosing class.
-    let owners: &[Scope] = if declaration.kind == DeclKind::Field {
+    let owners: &[Scope] = if was_field {
         let class = scopes.iter().rposition(|s| s.kind == DeclKind::Class);
         &scopes[..class.map_or(0, |i| i + 1)]
     } else {
         scopes
     };
     let inside_function = owners.iter().any(|s| s.kind == DeclKind::Function)
-        || (declaration.kind == DeclKind::Field
-            && !scopes.iter().any(|s| s.kind == DeclKind::Class));
+        || (was_field && !scopes.iter().any(|s| s.kind == DeclKind::Class));
 
     for owner in owners {
         descriptors.push(match owner.kind {
@@ -826,11 +838,6 @@ mod tests {
         list.iter()
             .map(|p| ProjectRelativePath::new(p).unwrap())
             .collect()
-    }
-
-    #[test]
-    fn the_python_rules_set_no_scope_depth_cap() {
-        assert_eq!(PythonPack.binding_rules().max_scope_depth, None);
     }
 
     #[test]
@@ -1122,6 +1129,56 @@ mod tests {
         let found = model.identity(&path, &class, &variable, &siblings);
         assert_eq!(found.reach, Reach::Global);
         assert_eq!(names(&found), ["m/", "C#", "x."]);
+    }
+
+    #[test]
+    fn a_variable_or_a_field_that_rebinds_a_member_is_the_member() {
+        let model = PythonModel::new(&[], &[]);
+        let path = ProjectRelativePath::new("m.py").unwrap();
+        let id = |scopes: &[Scope], decl: &Scope, siblings: &[Scope]| {
+            model.identity(&path, scopes, decl, siblings)
+        };
+        // A module variable that rebinds a class is the class, with the kind of the class.
+        let variable = scope(DeclKind::Variable, "Future");
+        let class_sibling = [scope(DeclKind::Class, "Future")];
+        let found = id(&[], &variable, &class_sibling);
+        assert_eq!(found.reach, Reach::Global);
+        assert_eq!(found.kind, SymbolKind::Class);
+        assert_eq!(names(&found), ["m/", "Future#"]);
+        // A module variable that rebinds a function is the function.
+        let function_sibling = [scope(DeclKind::Function, "Future")];
+        let found = id(&[], &variable, &function_sibling);
+        assert_eq!(found.kind, SymbolKind::Function);
+        assert_eq!(names(&found), ["m/", "Future()."]);
+        // In a class body, the function is a method.
+        let class = [scope(DeclKind::Class, "C")];
+        let found = id(&class, &variable, &function_sibling);
+        assert_eq!(found.kind, SymbolKind::Method);
+        assert_eq!(names(&found), ["m/", "C#", "Future()."]);
+        // A field next to a property of its class is the method.
+        let field = scope(DeclKind::Field, "Future");
+        let method = [scope(DeclKind::Class, "C"), scope(DeclKind::Function, "m")];
+        let found = id(&method, &field, &function_sibling);
+        assert_eq!(found.reach, Reach::Global);
+        assert_eq!(found.kind, SymbolKind::Method);
+        assert_eq!(names(&found), ["m/", "C#", "Future()."]);
+        // A name that no member has stays a variable or a field.
+        let other = [
+            scope(DeclKind::Class, "Other"),
+            scope(DeclKind::Variable, "Future"),
+        ];
+        let found = id(&[], &variable, &other[1..]);
+        assert_eq!(found.kind, SymbolKind::Variable);
+        let found = id(&method, &field, &other);
+        assert_eq!(found.kind, SymbolKind::Field);
+        assert_eq!(names(&found), ["m/", "C#", "Future."]);
+        // A member of another kind does not merge: a variable next to a variable.
+        let found = id(&[], &variable, &[scope(DeclKind::Variable, "Future")]);
+        assert_eq!(found.kind, SymbolKind::Variable);
+        // In a function, the merge stays local to the document.
+        let function = [scope(DeclKind::Function, "f")];
+        let found = id(&function, &variable, &class_sibling);
+        assert_eq!(found.reach, Reach::Document);
     }
 
     #[test]
