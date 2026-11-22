@@ -2,8 +2,8 @@
 
 use super::Doc;
 use super::finish::lose;
-use crate::bindings::BindingEngine;
-use crate::extract::Extractor;
+use crate::bindings::{BindingEngine, BuildFailure};
+use crate::extract::{Extractor, Facts};
 use crate::language::{Analysis, ProjectModel};
 use crate::project::FoundFile;
 use crate::report::{Diagnostic, IndexReport, Severity, Stage};
@@ -35,26 +35,61 @@ pub(super) fn read_source(
     }
 }
 
-/// Read, parse, and extract one file, and add its graph to the engine.
-/// Return `None` when the pipeline skips the file. A diagnostic then says why.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn load_file(
-    analysis: &dyn Analysis,
-    extractors: &[Extractor],
-    model: &dyn ProjectModel,
-    engine: &mut BindingEngine,
-    store: &SourceStore,
+/// What a file gives before its graph builds: the text, the facts, and the dialect.
+pub(super) struct Parsed {
+    source: Arc<str>,
+    /// The repaired text, when the pack repaired the syntax.
+    parsed_text: Option<Arc<str>>,
+    facts: Facts,
+    dialect: usize,
+}
+
+impl Parsed {
+    /// The text that the resolver reads.
+    pub fn text(&self) -> &str {
+        self.parsed_text.as_deref().unwrap_or(&self.source)
+    }
+
+    /// The same text, as a handle that a worker thread can keep.
+    pub fn shared_text(&self) -> Arc<str> {
+        Arc::clone(self.parsed_text.as_ref().unwrap_or(&self.source))
+    }
+
+    pub fn dialect(&self) -> usize {
+        self.dialect
+    }
+}
+
+fn diagnostic_for(
     file: &FoundFile,
-    report: &mut IndexReport,
-    resolve: bool,
-) -> Option<Doc> {
-    let diagnostic = |stage, severity, code, range, message: String| Diagnostic {
+    stage: Stage,
+    severity: Severity,
+    code: &'static str,
+    range: Option<(u32, u32)>,
+    message: String,
+) -> Diagnostic {
+    Diagnostic {
         severity,
         stage,
         file: Some(file.path.as_str().to_string()),
         range,
         code,
         message,
+    }
+}
+
+/// Read, parse, and extract one file. It never touches the engine, so workers can run it at once.
+/// Return `None` when the pipeline skips the file. A diagnostic then says why.
+pub(super) fn parse_file(
+    analysis: &dyn Analysis,
+    extractors: &[Extractor],
+    model: &dyn ProjectModel,
+    store: &SourceStore,
+    file: &FoundFile,
+    report: &mut IndexReport,
+) -> Option<Parsed> {
+    let diagnostic = |stage, severity, code, range, message: String| {
+        diagnostic_for(file, stage, severity, code, range, message)
     };
     if let Some(winner) = model.shadowed_by(&file.path) {
         report.files_shadowed += 1;
@@ -76,7 +111,7 @@ pub(super) fn load_file(
     let extractor = &extractors[dialect];
     // The text that the parser and the resolver read. It differs from `source` only when
     // the pack repaired a construct that its grammar rejects.
-    let mut parsed_text: Option<String> = None;
+    let mut parsed_text: Option<Arc<str>> = None;
     let first = extractor.parse(&source);
     let tree = match first {
         Ok(tree) => tree,
@@ -88,7 +123,7 @@ pub(super) fn load_file(
             });
             let tree = repaired.and_then(|fixed| {
                 let tree = extractor.parse(&fixed).ok()?;
-                parsed_text = Some(fixed);
+                parsed_text = Some(Arc::from(fixed));
                 Some(tree)
             });
             if let Some(tree) = tree {
@@ -118,16 +153,26 @@ pub(super) fn load_file(
     let text = parsed_text.as_deref().unwrap_or(&source);
     let facts = extractor.facts(&file.path, text, &tree);
     drop(tree);
-    if let Err(failure) = engine.add_file(
+    Some(Parsed {
+        source,
+        parsed_text,
+        facts,
         dialect,
-        &file.path,
-        text,
-        &model.resolver_globals(&file.path),
-        resolve,
-    ) {
+    })
+}
+
+/// Finish a file after its graph went into the engine, or failed to.
+pub(super) fn finish_file(
+    file: &FoundFile,
+    parsed: Parsed,
+    added: Result<(), BuildFailure>,
+    report: &mut IndexReport,
+) -> Option<Doc> {
+    if let Err(failure) = added {
         report.files_skipped += 1;
         lose(report, &file.path, "bind-error");
-        report.diagnostics.push(diagnostic(
+        report.diagnostics.push(diagnostic_for(
+            file,
             Stage::Bind,
             Severity::Warning,
             "bind-error",
@@ -136,8 +181,9 @@ pub(super) fn load_file(
         ));
         return None;
     }
-    for &(start, end) in &facts.conflicts {
-        report.diagnostics.push(diagnostic(
+    for &(start, end) in &parsed.facts.conflicts {
+        report.diagnostics.push(diagnostic_for(
+            file,
             Stage::Extract,
             Severity::Warning,
             "declaration-conflict",
@@ -148,8 +194,32 @@ pub(super) fn load_file(
     }
     Some(Doc {
         path: file.path.clone(),
-        source,
-        facts,
+        source: parsed.source,
+        facts: parsed.facts,
         declared: Vec::new(),
     })
+}
+
+/// Read, parse, and extract one file, and add its graph to the engine.
+/// Return `None` when the pipeline skips the file. A diagnostic then says why.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn load_file(
+    analysis: &dyn Analysis,
+    extractors: &[Extractor],
+    model: &dyn ProjectModel,
+    engine: &mut BindingEngine,
+    store: &SourceStore,
+    file: &FoundFile,
+    report: &mut IndexReport,
+    resolve: bool,
+) -> Option<Doc> {
+    let parsed = parse_file(analysis, extractors, model, store, file, report)?;
+    let added = engine.add_file(
+        parsed.dialect,
+        &file.path,
+        parsed.text(),
+        &model.resolver_globals(&file.path),
+        resolve,
+    );
+    finish_file(file, parsed, added, report)
 }

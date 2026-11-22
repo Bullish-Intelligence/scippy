@@ -81,6 +81,10 @@ pub struct IndexRequest {
     /// shards that run at once, at least 1. Then the shard threads times the resolve threads do
     /// not exceed `jobs`.
     pub resolve_threads: Option<usize>,
+    /// The number of threads that build the graphs of the files of one shard. The output does
+    /// not depend on it, with the graph cache on or off. `None` uses the rule of
+    /// `resolve_threads`. More threads raise the peak memory of a shard.
+    pub build_threads: Option<usize>,
     /// The shards run together only while the sum of their memory estimates stays under this
     /// many bytes. A shard over the budget runs alone.
     pub memory_budget: u64,
@@ -111,6 +115,7 @@ impl IndexRequest {
             trace: None,
             jobs: schedule::default_jobs(),
             resolve_threads: None,
+            build_threads: None,
             memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
             graph_cache: None,
             graph_cache_max_bytes: cache::DEFAULT_MAX_BYTES,

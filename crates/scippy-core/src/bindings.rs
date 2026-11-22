@@ -4,13 +4,12 @@
 //! in one database, and resolves each reference node with bounded work.
 //! It returns plain anchors. No fork type leaves this module.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -152,7 +151,7 @@ struct DialectRules {
     grammar: tree_sitter::Language,
     path: &'static str,
     source: &'static str,
-    compiled: OnceCell<Result<StackGraphLanguage, String>>,
+    compiled: OnceLock<Result<StackGraphLanguage, String>>,
 }
 
 impl DialectRules {
@@ -161,7 +160,7 @@ impl DialectRules {
             grammar,
             path,
             source,
-            compiled: OnceCell::new(),
+            compiled: OnceLock::new(),
         }
     }
 
@@ -199,7 +198,7 @@ impl DialectRules {
 #[derive(Clone)]
 pub(crate) struct CompiledRules {
     /// The first rule set is the primary dialect.
-    dialects: Rc<Vec<DialectRules>>,
+    dialects: Arc<Vec<DialectRules>>,
 }
 
 thread_local! {
@@ -241,7 +240,7 @@ impl CompiledRules {
             });
         }
         let compiled = Self {
-            dialects: Rc::new(dialects),
+            dialects: Arc::new(dialects),
         };
         COMPILED.with(|cache| cache.borrow_mut().insert(key, compiled.clone()));
         Ok(compiled)
@@ -281,7 +280,7 @@ pub fn prebuild_assets(
     let dialects = vec![DialectRules::new(grammar, rules.tsg_path, rules.tsg_source)];
     dialects[0].language().map_err(str::to_owned)?;
     let compiled = CompiledRules {
-        dialects: Rc::new(dialects),
+        dialects: Arc::new(dialects),
     };
     let gate = Arc::new(CacheGate::new(
         None,
@@ -308,11 +307,114 @@ pub fn prebuild_assets(
     Ok(blob)
 }
 
+/// The graph of one file and its minimal partial paths, built apart from the engine.
+pub(crate) struct BuiltFile {
+    graph: CachedGraph,
+    /// False when the search for the minimal partial paths failed. The graph then has no paths,
+    /// as in a serial build, and the graph cache never stores it.
+    cacheable: bool,
+}
+
+/// The state that a cache lookup gives for one file.
+pub(crate) enum Lookup {
+    /// The cache has the graph of the file.
+    Hit(CachedGraph),
+    /// The file needs a build. `key` holds the cache key and owner when the build can be stored.
+    Miss { key: Option<(String, String)> },
+}
+
+/// Builds files without a binding engine. The rules are shared, so the builder is `Sync`: all
+/// worker threads of a shard use one builder. A build never touches another file, so the files
+/// of a shard can build at once.
+pub(crate) struct FileBuilder {
+    languages: Arc<Vec<DialectRules>>,
+    shadow_aware: bool,
+}
+
+impl FileBuilder {
+    pub fn new(analysis: &dyn Analysis, compiled: &CompiledRules) -> Self {
+        Self {
+            languages: Arc::clone(&compiled.dialects),
+            shadow_aware: analysis.binding_rules().shadow_aware_similar_paths,
+        }
+    }
+
+    /// Build the graph of one file in a fresh stack graph and find its minimal partial paths.
+    /// The result matches the entry that the graph cache stores for the file. A failure has the
+    /// message that `BindingEngine::add_file` gives.
+    pub fn build(
+        &self,
+        dialect: usize,
+        path: &ProjectRelativePath,
+        source: &str,
+        globals: &[(String, String)],
+    ) -> Result<BuiltFile, BuildFailure> {
+        let fail = |message: String| BuildFailure { message };
+        let mut graph = StackGraph::new();
+        let mut partials = PartialPaths::new();
+        let file = graph.get_or_create_file(path.as_str());
+        let mut variables = Variables::new();
+        variables
+            .add("FILE_PATH".into(), path.as_str().into())
+            .map_err(|e| fail(e.to_string()))?;
+        for (name, value) in globals {
+            variables
+                .add(name.as_str().into(), value.as_str().into())
+                .map_err(|e| fail(e.to_string()))?;
+        }
+        let language = self.languages[dialect]
+            .language()
+            .map_err(|e| fail(e.to_owned()))?;
+        let built = catch_unwind(AssertUnwindSafe(|| {
+            language.build_stack_graph_into(&mut graph, file, source, &variables, &NoCancellation)
+        }));
+        match built {
+            Ok(Ok(())) => {}
+            Ok(Err(BuildError::ParseErrors(_) | BuildError::ParseError)) => {
+                return Err(fail("the source has syntax errors".into()));
+            }
+            Ok(Err(error)) => return Err(fail(error.to_string())),
+            Err(_) => return Err(fail("the rules panicked".into())),
+        }
+        let mut paths: Vec<PartialPath> = Vec::new();
+        let result = ForwardPartialPathStitcher::find_minimal_partial_path_set_in_file(
+            &graph,
+            &mut partials,
+            file,
+            StitcherConfig::default().with_shadow_aware_similar_paths(self.shadow_aware),
+            &stack_graphs::NoCancellation,
+            |_, _, path| paths.push(path.clone()),
+        );
+        let cacheable = result.is_ok();
+        if !cacheable {
+            paths.clear();
+        }
+        let serial_graph =
+            stack_graphs::serde::StackGraph::from_graph_filter(&graph, &|_: &StackGraph,
+                                                                         candidate: &Handle<
+                File,
+            >| {
+                *candidate == file
+            });
+        let serial_paths = paths
+            .iter()
+            .map(|p| stack_graphs::serde::PartialPath::from_partial_path(&graph, &mut partials, p))
+            .collect();
+        Ok(BuiltFile {
+            graph: CachedGraph {
+                graph: serial_graph,
+                paths: serial_paths,
+            },
+            cacheable,
+        })
+    }
+}
+
 pub(crate) struct BindingEngine {
     pack: &'static str,
     cache_key: Option<String>,
     /// The compiled rules. The shards share them.
-    languages: Rc<Vec<DialectRules>>,
+    languages: Arc<Vec<DialectRules>>,
     graph: StackGraph,
     partials: PartialPaths,
     database: Database,
@@ -363,7 +465,7 @@ impl BindingEngine {
         let mut engine = Self {
             pack,
             cache_key,
-            languages: Rc::clone(&compiled.dialects),
+            languages: Arc::clone(&compiled.dialects),
             graph: StackGraph::new(),
             partials: PartialPaths::new(),
             database: Database::new(),
@@ -459,19 +561,17 @@ impl BindingEngine {
         Ok(all)
     }
 
-    /// Build the graph of one file and store its partial paths.
+    /// Look up the graph of a file in the graph cache.
     ///
-    /// The engine resolves the references of the file only when `resolve` is true. A file of a
-    /// dependency only gives definitions. On failure the engine never resolves a reference of
-    /// the file.
-    pub fn add_file(
+    /// A miss counts in `cache_misses`. A cache failure turns the cache off for the run, and the
+    /// answer is a miss with no key, so the file builds and the engine stores nothing.
+    pub fn lookup(
         &mut self,
         dialect: usize,
         path: &ProjectRelativePath,
         source: &str,
         globals: &[(String, String)],
-        resolve: bool,
-    ) -> Result<(), BuildFailure> {
+    ) -> Lookup {
         // Another shard may have turned the cache off.
         if !self.gate.is_on() {
             self.cache = None;
@@ -498,27 +598,7 @@ impl BindingEngine {
         }
         if let (Some(cache), Some((key, _))) = (&self.cache, &cache_key) {
             match cache.get(key) {
-                Ok(Some(cached)) => {
-                    let loaded = self.load_cached(&cached);
-                    // A failed load can leave part of the file in the graph. The engine cannot
-                    // rebuild the file, so it reports the file as failed.
-                    if let Err(error) = loaded {
-                        self.gate.fail(&error);
-                        self.cache = None;
-                        return Err(BuildFailure { message: error });
-                    }
-                    let Some(file) = self.graph.get_file(path.as_str()) else {
-                        let error = format!("cached graph has no file {}", path.as_str());
-                        self.gate.fail(&error);
-                        self.cache = None;
-                        return Err(BuildFailure { message: error });
-                    };
-                    if resolve {
-                        self.files.push((file, path.clone()));
-                    }
-                    self.cache_hits += 1;
-                    return Ok(());
-                }
+                Ok(Some(cached)) => return Lookup::Hit(cached),
                 Ok(None) => self.cache_misses += 1,
                 Err(error) => {
                     self.gate.fail(&error);
@@ -527,57 +607,87 @@ impl BindingEngine {
                 }
             }
         }
-        let file = self.graph.get_or_create_file(path.as_str());
-        let mut variables = Variables::new();
+        Lookup::Miss { key: cache_key }
+    }
+
+    /// Add a file whose graph came from the cache.
+    pub fn add_cached(
+        &mut self,
+        path: &ProjectRelativePath,
+        cached: &CachedGraph,
+        resolve: bool,
+    ) -> Result<(), BuildFailure> {
+        let loaded = self.load_cached(cached);
+        // A failed load can leave part of the file in the graph. The engine cannot rebuild the
+        // file, so it reports the file as failed.
+        if let Err(error) = loaded {
+            self.gate.fail(&error);
+            self.cache = None;
+            return Err(BuildFailure { message: error });
+        }
+        let Some(file) = self.graph.get_file(path.as_str()) else {
+            let error = format!("cached graph has no file {}", path.as_str());
+            self.gate.fail(&error);
+            self.cache = None;
+            return Err(BuildFailure { message: error });
+        };
+        if resolve {
+            self.files.push((file, path.clone()));
+        }
+        self.cache_hits += 1;
+        Ok(())
+    }
+
+    /// Add the graph of one file and its partial paths, from the cache or from a build.
+    ///
+    /// The engine resolves the references of the file only when `resolve` is true. A file of a
+    /// dependency only gives definitions. On failure the engine never resolves a reference of
+    /// the file.
+    pub fn add_file(
+        &mut self,
+        dialect: usize,
+        path: &ProjectRelativePath,
+        source: &str,
+        globals: &[(String, String)],
+        resolve: bool,
+    ) -> Result<(), BuildFailure> {
+        let cache_key = match self.lookup(dialect, path, source, globals) {
+            Lookup::Hit(cached) => return self.add_cached(path, &cached, resolve),
+            Lookup::Miss { key } => key,
+        };
+        // The file builds in a stack graph of its own, and the engine then loads the result, as it
+        // loads a graph from the cache. A build on a worker thread does the same, so the engine
+        // ends up the same for every number of threads, and for a cold and a warm cache.
+        let builder = FileBuilder {
+            languages: Arc::clone(&self.languages),
+            shadow_aware: self.shadow_aware,
+        };
+        let built = builder.build(dialect, path, source, globals)?;
+        self.add_built(path, &built, cache_key.as_ref(), resolve)
+    }
+
+    /// Add a file that a [`FileBuilder`] built, after `lookup` gave a miss with `key`. It does
+    /// what `add_file` does after a build: it stores the graph in the cache and adds the file.
+    /// The caller adds the files in the same order as a serial load, so the engine ends up the
+    /// same.
+    pub fn add_built(
+        &mut self,
+        path: &ProjectRelativePath,
+        built: &BuiltFile,
+        key: Option<&(String, String)>,
+        resolve: bool,
+    ) -> Result<(), BuildFailure> {
         let fail = |message: String| BuildFailure { message };
-        variables
-            .add("FILE_PATH".into(), path.as_str().into())
-            .map_err(|e| fail(e.to_string()))?;
-        for (name, value) in globals {
-            variables
-                .add(name.as_str().into(), value.as_str().into())
-                .map_err(|e| fail(e.to_string()))?;
-        }
-        let language = self.languages[dialect]
-            .language()
-            .map_err(|e| fail(e.to_owned()))?;
-        let built = catch_unwind(AssertUnwindSafe(|| {
-            language.build_stack_graph_into(
-                &mut self.graph,
-                file,
-                source,
-                &variables,
-                &NoCancellation,
-            )
-        }));
-        match built {
-            Ok(Ok(())) => {}
-            Ok(Err(BuildError::ParseErrors(_) | BuildError::ParseError)) => {
-                return Err(fail("the source has syntax errors".into()));
-            }
-            Ok(Err(error)) => return Err(fail(error.to_string())),
-            Err(_) => return Err(fail("the rules panicked".into())),
-        }
-        let paths = self.add_partial_paths(file);
-        if let (Some(cache), Some((key, owner)), Some(paths)) = (&self.cache, &cache_key, paths) {
-            let graph = stack_graphs::serde::StackGraph::from_graph_filter(
-                &self.graph,
-                &|_: &StackGraph, candidate: &Handle<File>| *candidate == file,
-            );
-            let paths = paths
-                .iter()
-                .map(|p| {
-                    stack_graphs::serde::PartialPath::from_partial_path(
-                        &self.graph,
-                        &mut self.partials,
-                        p,
-                    )
-                })
-                .collect();
-            if let Err(error) = cache.put(key, owner, &CachedGraph { graph, paths }) {
-                self.gate.fail(&error);
-                self.cache = None;
-            }
+        self.load_cached(&built.graph).map_err(fail)?;
+        let Some(file) = self.graph.get_file(path.as_str()) else {
+            return Err(fail(format!("built graph has no file {}", path.as_str())));
+        };
+        if built.cacheable
+            && let (Some(cache), Some((key, owner))) = (&self.cache, key)
+            && let Err(error) = cache.put(key, owner, &built.graph)
+        {
+            self.gate.fail(&error);
+            self.cache = None;
         }
         if resolve {
             self.files.push((file, path.clone()));
@@ -942,7 +1052,7 @@ global ROOT_NODE
             rules.tsg_source,
         )];
         let compiled = CompiledRules {
-            dialects: Rc::new(dialects),
+            dialects: Arc::new(dialects),
         };
         let gate = Arc::new(CacheGate::new(
             None,
@@ -992,7 +1102,7 @@ global ROOT_NODE
         BindingEngine {
             pack: "test",
             cache_key: None,
-            languages: Rc::new(Vec::new()),
+            languages: Arc::new(Vec::new()),
             graph: StackGraph::new(),
             partials: PartialPaths::new(),
             database: Database::new(),

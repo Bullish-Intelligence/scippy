@@ -16,11 +16,13 @@ pub(crate) fn default_jobs() -> usize {
     thread::available_parallelism().map_or(1, |n| n.get())
 }
 
-/// The number of threads that resolve the references of one shard when the caller gives none.
+/// The number of threads that build the graphs of one shard, and the number that resolve its
+/// references, when the caller gives none.
 ///
 /// At most `min(jobs, shards)` shards run at once. Each of them gets the same share of `jobs`,
-/// so the shard threads times the resolve threads stay at or under `jobs`. A share is at least 1.
-pub(crate) fn default_resolve_threads(jobs: usize, shards: usize) -> usize {
+/// so the shard threads times the threads of one step stay at or under `jobs`. A share is at
+/// least 1. The two steps run one after the other, so they use the same share.
+pub(crate) fn default_shard_threads(jobs: usize, shards: usize) -> usize {
     let at_once = jobs.max(1).min(shards.max(1));
     (jobs / at_once).max(1)
 }
@@ -140,21 +142,21 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
-    fn the_resolve_threads_share_the_jobs_between_the_shards() {
+    fn the_shard_threads_share_the_jobs_between_the_shards() {
         // One shard gets every job.
-        assert_eq!(default_resolve_threads(16, 1), 16);
+        assert_eq!(default_shard_threads(16, 1), 16);
         // Fewer shards than jobs: the share rounds down.
-        assert_eq!(default_resolve_threads(16, 3), 5);
-        assert_eq!(default_resolve_threads(16, 4), 4);
+        assert_eq!(default_shard_threads(16, 3), 5);
+        assert_eq!(default_shard_threads(16, 4), 4);
         // At least as many shards as jobs: one thread for each shard.
-        assert_eq!(default_resolve_threads(16, 16), 1);
-        assert_eq!(default_resolve_threads(16, 100), 1);
-        assert_eq!(default_resolve_threads(1, 5), 1);
-        // The shard threads times the resolve threads never exceed the jobs.
+        assert_eq!(default_shard_threads(16, 16), 1);
+        assert_eq!(default_shard_threads(16, 100), 1);
+        assert_eq!(default_shard_threads(1, 5), 1);
+        // The shard threads times the threads of one step never exceed the jobs.
         for jobs in 1..40 {
             for shards in 0..60 {
                 let at_once = jobs.min(shards.max(1));
-                assert!(at_once * default_resolve_threads(jobs, shards) <= jobs);
+                assert!(at_once * default_shard_threads(jobs, shards) <= jobs);
             }
         }
     }

@@ -38,7 +38,7 @@
         "work_total": 2585,
         "work_max": 540,
         "queue_length_max": 5,
-        "arena_cells_max": 2155
+        "arena_cells_max": 2156
       },
       "unresolved_reasons": {
         "no-declaration": 1,

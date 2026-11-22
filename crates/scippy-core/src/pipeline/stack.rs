@@ -5,6 +5,7 @@ use super::identities::{anonymous_scope, assign_identities, declare_external, id
 use super::inputs::read_manifests;
 use super::load::load_file;
 use super::memory::{MemoryMeter, shard_estimate};
+use super::parallel::load_parallel;
 use super::shard::{dependency_closure, shard_groups, shard_of};
 use super::{Doc, PackIndex, PackRun};
 use crate::IndexRequest;
@@ -86,7 +87,10 @@ pub(super) fn index_pack(
         cache,
         resolve_threads: request
             .resolve_threads
-            .unwrap_or_else(|| schedule::default_resolve_threads(request.jobs, groups.len())),
+            .unwrap_or_else(|| schedule::default_shard_threads(request.jobs, groups.len())),
+        build_threads: request
+            .build_threads
+            .unwrap_or_else(|| schedule::default_shard_threads(request.jobs, groups.len())),
     };
     let jobs: Vec<(u64, usize)> = groups
         .iter()
@@ -317,13 +321,13 @@ pub(super) struct ShardOutput {
 /// What every shard reads. It is shared by all workers.
 pub(super) struct ShardContext<'a> {
     pack: &'a dyn LanguagePack,
-    analysis: &'a dyn Analysis,
-    extractors: &'a [Extractor],
-    model: &'a dyn ProjectModel,
+    pub(super) analysis: &'a dyn Analysis,
+    pub(super) extractors: &'a [Extractor],
+    pub(super) model: &'a dyn ProjectModel,
     root: &'a Path,
     /// The content of every file. A shard never reads a file from disk.
-    store: &'a SourceStore,
-    files: &'a [&'a FoundFile],
+    pub(super) store: &'a SourceStore,
+    pub(super) files: &'a [&'a FoundFile],
     paths: &'a [ProjectRelativePath],
     shards: &'a [ProjectRelativePath],
     members: &'a HashMap<&'a str, &'a [usize]>,
@@ -332,6 +336,8 @@ pub(super) struct ShardContext<'a> {
     cache: &'a Arc<CacheGate>,
     /// The number of threads that resolve the references of one shard.
     resolve_threads: usize,
+    /// The number of threads that build the graphs of the files of one shard.
+    build_threads: usize,
 }
 
 impl ShardContext<'_> {
@@ -341,14 +347,17 @@ impl ShardContext<'_> {
                 .map_or(0, |m| m.len().min(self.request.limits.max_file_bytes))
         };
         let mut bytes: u64 = group.iter().map(|&at| size(at)).sum();
+        let mut loaded = group.len();
         for dependency in dependency_closure(self.model, shard.unwrap_or_default(), self.members) {
             for &at in self.members[dependency.as_str()] {
                 if self.model.provides(&self.files[at].path) {
                     bytes += size(at);
+                    loaded += 1;
                 }
             }
         }
-        shard_estimate(bytes)
+        // The shard builds with no more threads than it has files.
+        shard_estimate(bytes, self.build_threads.min(loaded))
     }
 }
 
@@ -361,42 +370,29 @@ pub(super) fn index_shard(
 ) -> Result<ShardOutput, ScippyError> {
     let mut report = IndexReport::default();
     let mut engine = BindingEngine::new(cx.pack.id(), cx.analysis, compiled, cx.cache)?;
-    let mut docs: Vec<(usize, Doc)> = Vec::new();
-    for &at in group {
-        let file = cx.files[at];
-        if let Some(doc) = load_file(
-            cx.analysis,
-            cx.extractors,
-            cx.model,
-            &mut engine,
-            cx.store,
-            file,
-            &mut report,
-            true,
-        ) {
-            docs.push((at, doc));
-        }
-    }
-    // The code that the shard imports from other shards. The engine reads it to resolve
-    // the references of the shard. The shard that owns the code indexes it.
+    // The files of the shard come first, then the code that the shard imports from other shards.
+    // The engine reads that code to resolve the references of the shard. The shard that owns
+    // the code indexes it.
+    let mut jobs: Vec<(usize, bool)> = group.iter().map(|&at| (at, true)).collect();
     for dependency in dependency_closure(cx.model, shard.unwrap_or_default(), cx.members) {
         for &at in cx.members[dependency.as_str()] {
-            let file = cx.files[at];
-            if cx.model.provides(&file.path) {
-                let mut scratch = IndexReport::default();
-                load_file(
-                    cx.analysis,
-                    cx.extractors,
-                    cx.model,
-                    &mut engine,
-                    cx.store,
-                    file,
-                    &mut scratch,
-                    false,
-                );
+            if cx.model.provides(&cx.files[at].path) {
+                jobs.push((at, false));
             }
         }
     }
+    let docs = if cx.build_threads > 1 && jobs.len() > 1 {
+        load_parallel(
+            cx,
+            compiled,
+            &mut engine,
+            &jobs,
+            cx.build_threads,
+            &mut report,
+        )
+    } else {
+        load_serial(cx, &mut engine, &jobs, &mut report)
+    };
     // The support files of the shard, such as `tsconfig.json`. An analyzer is not `Send`,
     // so the worker makes its own.
     let sources: Vec<ProjectRelativePath> = docs.iter().map(|(_, d)| d.path.clone()).collect();
@@ -424,4 +420,32 @@ pub(super) fn index_shard(
         bindings,
         report,
     })
+}
+
+/// Load the files one after the other on this thread.
+fn load_serial(
+    cx: &ShardContext,
+    engine: &mut BindingEngine,
+    jobs: &[(usize, bool)],
+    report: &mut IndexReport,
+) -> Vec<(usize, Doc)> {
+    let mut docs = Vec::new();
+    for &(at, resolve) in jobs {
+        let mut scratch = IndexReport::default();
+        let target = if resolve { &mut *report } else { &mut scratch };
+        if let Some(doc) = load_file(
+            cx.analysis,
+            cx.extractors,
+            cx.model,
+            engine,
+            cx.store,
+            cx.files[at],
+            target,
+            resolve,
+        ) && resolve
+        {
+            docs.push((at, doc));
+        }
+    }
+    docs
 }

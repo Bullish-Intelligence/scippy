@@ -796,3 +796,55 @@ The speed-up is 1.2x on rich (10 s of work), 1.9x on stdlib, and 2.0x on mypy. T
 rises by 0.75 GB. The cause is not measured. The likely cause is that eight searches run at once,
 and each one holds its own arena cells. The unit test
 `resolving_on_threads_gives_the_bindings_of_one_thread` checks 1, 2, 4, and 7 threads on 40 files.
+
+## Run 2026-11-21: build threads
+
+Scippy lane `parbuild` on main f124952 (fork pin dc75eb5, no fork change). The baseline is the
+release build of f124952. Graph cache off unless it is named, default `--jobs` (8 logical cores),
+`--trace`. The machine was shared with other work (load average 5 to 10), so the times are
+indicative. One run for each cell.
+
+`--build-threads N` builds the graphs of the files of one shard on `N` threads. A file builds
+without any other file. Workers parse the files and build each graph in a stack graph of its own.
+The main thread looks the files up in the graph cache, adds the graphs to the engine in file
+order, and stores the new graphs in file order. The default is the rule of `--resolve-threads`,
+so each corpus below (one shard) builds on 8 threads. The compiled TSG rules are shared:
+`StackGraphLanguage` is `Send` and `Sync`, so no fork change was needed.
+
+| Corpus | rich | stdlib | mypy |
+|---|---|---|---|
+| Wall time, baseline | 10.9 s | 57.4 s | 94.3 s |
+| Wall time, default (8 build threads) | 5.1 s | 37.6 s | 43.1 s |
+| Wall time, `--build-threads 1` | 11.4 s | 61.6 s | 101.2 s |
+| Peak memory, baseline | 0.55 GB | 2.20 GB | 4.01 GB |
+| Peak memory, default | 1.25 GB | 3.35 GB | 7.67 GB |
+| Peak memory, `--build-threads 1` | 0.52 GB | 2.23 GB | 3.91 GB |
+| `index.scip`, default and `--build-threads 1`, against the baseline | identical | identical | identical |
+| `--trace`, default and `--build-threads 1`, against the baseline | identical | identical | identical |
+
+The SHA-256 prefixes of the files are `73da72b5357a1443` (rich `.scip`), `470020b42fff4add`
+(stdlib `.scip`), and `ec5574352ad506bd` (mypy `.scip`). The stdlib run exits with 3 (incomplete
+input) in the baseline and in the new build alike.
+
+Graph cache on mypy, default threads, one run each: cold 52.3 s and 8.02 GB (187 files built),
+warm 38.5 s and 5.18 GB (187 files from the cache). The `.scip` and `--trace` files of both runs
+are identical to the baseline files. With the cache on, the main thread holds at most 256 graphs
+from the cache before it adds them.
+
+Earlier measurements of the prototype, with the graph cache off and 8 resolve threads on mypy:
+4 build threads 49 s and 6.7 GiB, 8 build threads 45 s and 7.8 GiB, against 94 s and 4.0 GiB for
+a serial build. The memory estimate of a shard (`shard_estimate`) rises for the build threads:
+the growing part is 1.25, 1.75, and 2.0 times for 2, 4, and 8 threads or more. The measured ratios
+of the peak are 1.21, 1.68, and 1.95.
+
+The engine now builds each file in a stack graph of its own and loads the result, also with one
+thread. The loaded arena differs from the arena of a direct build, so the search cost
+`arena_cells_max` rises by one cell in two golden fixtures. The `.scip` and `--trace` files do not
+change. The serial build takes 5% to 8% longer (one run each, under load). The cause is the copy of each graph.
+
+Tests (`crates/scippy-core/tests/build_threads.rs`, `crates/scippy-cli/tests/build_threads.rs`):
+identical output and report at 1, 2, 3, 8, 64 threads and the default; cold, warm, mixed, and
+serial-after-parallel cache runs equal a run without the cache; five files that fail to build
+(a rule error, a second dialect whose rules do not compile, a syntax error) give the same
+diagnostics and the same output at 1 and 8 threads; a panic in a worker ends the run and writes
+no file.

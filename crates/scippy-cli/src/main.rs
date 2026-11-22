@@ -77,6 +77,12 @@ struct IndexArgs {
     /// every value.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     resolve_threads: Option<u64>,
+    /// Build the graphs of the files of one shard on this many threads. The default is the value
+    /// of `--jobs` divided by the number of shards that run at once, at least 1, as for
+    /// `--resolve-threads`. More threads raise the peak memory. The output is the same for
+    /// every value, with the graph cache on or off.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    build_threads: Option<u64>,
     /// Start a shard only while the memory estimates of the running shards stay under this
     /// size, such as `8G` or `512M`. A shard over the budget runs alone. The default is 50G.
     #[arg(long, value_parser = parse_size)]
@@ -265,6 +271,7 @@ fn main() -> ExitCode {
                 trace,
                 jobs,
                 resolve_threads,
+                build_threads,
                 memory_budget,
                 graph_cache: _,
                 no_graph_cache: _,
@@ -302,6 +309,7 @@ fn main() -> ExitCode {
             }
             request.resolve_threads =
                 resolve_threads.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+            request.build_threads = build_threads.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
             let to_usize = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
             if let Some(n) = max_work {
                 request.resolve_limits.max_work = to_usize(n);

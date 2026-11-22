@@ -593,6 +593,18 @@ depend on the number of workers.
   result to a slot of its reference. The merge reads the slots in order, so the `.scip` file and
   the `--trace` file do not depend on `--resolve-threads`. The overlays add little memory: the
   peak resident memory of mypy stays at 4.2 GB.
+- `--build-threads N` sets the number of threads that build the graphs of the files of one shard.
+  The default follows the rule of `--resolve-threads`: `--jobs` divided by the number of shards
+  that run at once, at least 1. A file builds without any other file. Workers parse the files and
+  build the graphs of the files that the graph cache lacks, each in a stack graph of its own. The
+  main thread looks each file up in the cache first, adds the graphs to the engine in file order,
+  and stores the new graphs in the cache in file order. The workers share the compiled rules.
+  A file that fails to build gives the same `bind-error` diagnostic at every thread count. The
+  `.scip` file and the `--trace` file do not depend on `--build-threads`, with the graph cache off
+  or on. More threads raise the peak memory: the finished graphs wait for the merge, and each
+  worker holds a graph. The peak of mypy rises from 4.0 GB to 7.7 GB with 8 threads. The memory
+  estimate of a shard rises with the threads, up to 2 times for its growing part. Use
+  `--build-threads 1` to keep the memory of a serial build.
 
 Set `SCIPPY_SHARD_LOG=1` to print the estimate, the start resident memory, and the peak resident
 memory of each shard. A sampling thread reads `VmRSS` every 10 ms, so the log does not change the

@@ -1,7 +1,7 @@
 //! The indexing pipeline: discover, parse, extract, bind, reconcile, identify, emit.
 //!
 //! - `run`: the orchestration of one run.
-//! - `stack`, `shard`, `load`, `memory`: the stack-graphs pack path.
+//! - `stack`, `shard`, `load`, `parallel`, `memory`: the stack-graphs pack path.
 //! - `native`: the native pack path.
 //! - `identities`, `finish`: the stages that both paths share.
 //! - `inputs`: the manifests and the support files.
@@ -12,6 +12,7 @@ mod inputs;
 mod load;
 mod memory;
 mod native;
+mod parallel;
 mod run;
 mod shard;
 mod stack;
