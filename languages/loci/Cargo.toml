@@ -18,6 +18,7 @@ percent-encoding.workspace = true
 regex.workspace = true
 sha2 = "0.10"
 serde_json.workspace = true
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 scippy-python = { path = "../python" }

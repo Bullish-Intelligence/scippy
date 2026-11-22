@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "scippy-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "jsonschema",
@@ -1533,13 +1533,14 @@ dependencies = [
  "scippy-metalayer",
  "scippy-python",
  "scippy-typescript",
+ "serde",
  "serde_json",
  "tempfile",
 ]
 
 [[package]]
 name = "scippy-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bincode",
  "protobuf",
@@ -1559,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "scippy-loci"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "caseless",
  "percent-encoding",
@@ -1571,6 +1572,7 @@ dependencies = [
  "scippy-core",
  "scippy-metalayer",
  "scippy-python",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
@@ -1581,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "scippy-metalayer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "scippy-core",
@@ -1593,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "scippy-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "protobuf",
  "scip",
@@ -1607,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "scippy-typescript"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "protobuf",
  "regex",

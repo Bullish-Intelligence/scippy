@@ -16,6 +16,7 @@ use registry::registry;
 mod cache_choice;
 mod index_output;
 mod metalayer;
+mod notes;
 mod registry;
 
 #[derive(Parser)]
@@ -38,6 +39,8 @@ enum Command {
     Index(Box<IndexArgs>),
     /// List the built-in language packs.
     Languages,
+    /// Resolve versioned note facts over JSON lines on standard input and output.
+    Notes,
     /// Query a metalayer database.
     Metalayer(metalayer::MetalayerArgs),
 }
@@ -250,6 +253,7 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Command::Notes => notes::run(),
         Command::Metalayer(args) => metalayer::run(args),
         Command::Index(args) => {
             let choice =

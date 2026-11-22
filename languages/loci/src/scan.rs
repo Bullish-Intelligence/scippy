@@ -4,12 +4,14 @@
 //! Every span is a half-open range of UTF-8 bytes in the original file.
 //! The port keeps the exact rules of the original, including its limits and its edge cases.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::text::{category_in, is_py_space, py_strip, unquote};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     Wikilink,
     Embed,
@@ -37,7 +39,7 @@ impl Kind {
 }
 
 /// A link that the walk found.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Relation {
     pub kind: Kind,
     /// The target. For a Markdown link it is the path with the percent escapes decoded.
@@ -55,13 +57,14 @@ pub struct Relation {
     pub embed: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TagOrigin {
     Body,
     Frontmatter,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TagOccurrence {
     pub tag: String,
     pub span: (usize, usize),
@@ -69,7 +72,8 @@ pub struct TagOccurrence {
     pub prop: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AnchorKind {
     Heading,
     Block,
@@ -79,7 +83,7 @@ pub enum AnchorKind {
     Html,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Anchor {
     pub kind: AnchorKind,
     /// The heading text, the block id without its caret, or the id of a footnote or an element.

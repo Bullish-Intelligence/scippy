@@ -6,9 +6,11 @@ use crate::scan::{
     Anchor, AnchorKind, ExtractOptions, Relation, TagOccurrence, TagOrigin, analyze_body,
     scan_property_links,
 };
+use serde::{Deserialize, Serialize};
 
 /// Everything that the resolver and the index need to know about one note.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct Note {
     /// The note has an invalid owned region. loci-core keeps no fact of such a note.
     pub degraded: bool,

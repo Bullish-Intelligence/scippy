@@ -72,6 +72,7 @@
 //! A tag is a reference to a symbol of the tag package.
 
 mod config;
+pub mod facts;
 mod front;
 mod ident;
 mod note;
@@ -98,7 +99,7 @@ pub use note::{Note, analyze_note};
 pub use policy::{IdTemplate, IgnoreList};
 pub use resolve::{Classified, Record, Resolution, State, Vault, classify};
 pub use roots::{Listing, RootSpec};
-pub use scan::{AnchorKind, Kind, TagOrigin};
+pub use scan::{Anchor, AnchorKind, Kind, Relation, TagOccurrence, TagOrigin};
 
 use resolve::Excluder;
 use text::casefold;

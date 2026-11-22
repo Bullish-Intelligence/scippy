@@ -3,7 +3,22 @@
 //! Resolution is a pure function of the file lists and the anchors. A tie is `ambiguous`, with
 //! sorted candidates. Nothing picks a winner.
 
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::collections::{BTreeMap, HashMap, HashSet};
+
+macro_rules! lookup {
+    ($vault:expr, $field:ident, $key:expr) => {{
+        let key = $key;
+        if let Some(trace) = $vault.dependencies.borrow_mut().as_mut() {
+            trace.insert((
+                stringify!($field).to_string(),
+                serde_json::to_string(key).unwrap(),
+            ));
+        }
+        $vault.$field.get(key)
+    }};
+}
 
 use crate::config::{GlobSet, Settings};
 use crate::note::Note;
@@ -118,6 +133,7 @@ struct AnchorIndex {
 
 /// The files of a vault, classified, with the maps that resolution needs.
 pub struct Vault {
+    dependencies: RefCell<Option<BTreeSet<(String, String)>>>,
     pub settings: Settings,
     case_sensitive: bool,
     by_path: HashMap<String, Vec<String>>,
@@ -264,6 +280,7 @@ impl Vault {
     ) -> Self {
         let case_sensitive = settings.case_sensitive;
         let mut vault = Self {
+            dependencies: RefCell::new(None),
             settings: settings.clone(),
             case_sensitive,
             by_path: HashMap::new(),
@@ -285,66 +302,8 @@ impl Vault {
         // the path of an indexed note does.
         let skipped = classified.skipped.iter().map(|(p, _, _)| p);
         for path in classified.sources.iter().chain(skipped) {
-            let npath = vault.norm(path);
-            let stem = vault.norm(stem_of(path));
-            vault.by_path.entry(npath).or_default().push(path.clone());
-            let visible = match vault.root_of(path) {
-                Some(root) => {
-                    vault
-                        .by_root_stem
-                        .entry((root.to_string(), stem.clone()))
-                        .or_default()
-                        .push(path.clone());
-                    vault.roots[root]
-                }
-                None => true,
-            };
-            if visible {
-                vault.by_stem.entry(stem).or_default().push(path.clone());
-            }
-            let Some(note) = notes.get(path) else {
-                continue;
-            };
-            let mut seen: Vec<&str> = Vec::new();
-            // A root with `stem_visible = false` keeps its aliases out of bare lookups too.
-            let alias_visible = vault.root_of(path).is_none_or(|r| vault.roots[r]);
-            for (alias, _, _) in &note.aliases {
-                if !alias_visible {
-                    break;
-                }
-                if seen.contains(&alias.as_str()) {
-                    continue;
-                }
-                seen.push(alias);
-                let key = vault.norm(alias);
-                vault.by_alias.entry(key).or_default().push(path.clone());
-            }
-            let mut index = AnchorIndex::default();
-            for anchor in &note.anchors {
-                match anchor.kind {
-                    AnchorKind::Heading => {
-                        index
-                            .headings
-                            .push((anchor.text.clone(), anchor.level, anchor.span));
-                        let key = vault.norm(&anchor.text);
-                        index.heading_first.entry(key).or_insert(anchor.span);
-                    }
-                    AnchorKind::Block => {
-                        let key = vault.norm(&anchor.text);
-                        index.block_first.entry(key).or_insert(anchor.span);
-                    }
-                    AnchorKind::Footnote => {
-                        let key = vault.norm(&anchor.text);
-                        index.footnotes.entry(key).or_insert(anchor.span);
-                    }
-                    AnchorKind::Html => {
-                        let key = vault.norm(&anchor.text);
-                        index.html.entry(key).or_insert(anchor.span);
-                    }
-                }
-            }
-            index.page = note.page;
-            vault.anchors.insert(path.clone(), index);
+            let empty = Note::default();
+            vault.update_note(path, None, notes.get(path).or(Some(&empty)));
         }
         for path in &classified.link_targets {
             let npath = vault.norm(path);
@@ -376,8 +335,178 @@ impl Vault {
         vault
     }
 
+    pub(crate) fn take_dependencies(&self) -> BTreeSet<(String, String)> {
+        self.dependencies
+            .borrow_mut()
+            .replace(BTreeSet::new())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn update_note(
+        &mut self,
+        path: &str,
+        old: Option<&Note>,
+        new: Option<&Note>,
+    ) -> BTreeSet<(String, String)> {
+        type Key = (String, String);
+        let root = self.root_of(path).map(str::to_owned);
+        let visible = root.as_ref().is_none_or(|r| self.roots[r]);
+        let normalized = self.norm(path);
+        let stem = self.norm(stem_of(path));
+        let mut keys = BTreeSet::<Key>::new();
+        let mut add = |domain: &str, value: String| {
+            keys.insert((domain.into(), value));
+        };
+        add("by_path", serde_json::to_string(&normalized).unwrap());
+        if visible {
+            add("by_stem", serde_json::to_string(&stem).unwrap());
+        }
+        if let Some(root) = &root {
+            add(
+                "by_root_stem",
+                serde_json::to_string(&(root, &stem)).unwrap(),
+            );
+        }
+        add("anchors", serde_json::to_string(path).unwrap());
+        if visible {
+            for note in [old, new].into_iter().flatten() {
+                for (alias, _, _) in &note.aliases {
+                    add(
+                        "by_alias",
+                        serde_json::to_string(&self.norm(alias)).unwrap(),
+                    );
+                }
+            }
+        }
+        let tracking = self.dependencies.borrow().is_some();
+        let before: BTreeMap<Key, Option<String>> = keys
+            .iter()
+            .filter(|_| tracking)
+            .map(|k| (k.clone(), self.dependency_value(k)))
+            .collect();
+        fn remove<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Vec<String>>, key: &K, path: &str) {
+            if let Some(values) = map.get_mut(key) {
+                values.retain(|p| p != path);
+                if values.is_empty() {
+                    map.remove(key);
+                }
+            }
+        }
+        remove(&mut self.by_path, &normalized, path);
+        if visible {
+            remove(&mut self.by_stem, &stem, path);
+        }
+        if let Some(root) = &root {
+            remove(&mut self.by_root_stem, &(root.clone(), stem.clone()), path);
+        }
+        if visible {
+            if let Some(note) = old {
+                for (alias, _, _) in &note.aliases {
+                    let alias = self.norm(alias);
+                    remove(&mut self.by_alias, &alias, path);
+                }
+            }
+        }
+        self.anchors.remove(path);
+        if new.is_some() || self.skipped.contains(path) {
+            self.by_path
+                .entry(normalized)
+                .or_default()
+                .push(path.into());
+            if visible {
+                self.by_stem
+                    .entry(stem.clone())
+                    .or_default()
+                    .push(path.into());
+            }
+            if let Some(root) = &root {
+                self.by_root_stem
+                    .entry((root.clone(), stem))
+                    .or_default()
+                    .push(path.into());
+            }
+            if let Some(note) = new {
+                if visible {
+                    let mut seen = HashSet::new();
+                    for (alias, _, _) in &note.aliases {
+                        if seen.insert(alias) {
+                            let alias = self.norm(alias);
+                            self.by_alias.entry(alias).or_default().push(path.into());
+                        }
+                    }
+                }
+                let mut index = AnchorIndex::default();
+                for anchor in &note.anchors {
+                    let key = self.norm(&anchor.text);
+                    match anchor.kind {
+                        AnchorKind::Heading => {
+                            index
+                                .headings
+                                .push((anchor.text.clone(), anchor.level, anchor.span));
+                            index.heading_first.entry(key).or_insert(anchor.span);
+                        }
+                        AnchorKind::Block => {
+                            index.block_first.entry(key).or_insert(anchor.span);
+                        }
+                        AnchorKind::Footnote => {
+                            index.footnotes.entry(key).or_insert(anchor.span);
+                        }
+                        AnchorKind::Html => {
+                            index.html.entry(key).or_insert(anchor.span);
+                        }
+                    }
+                }
+                index.page = note.page;
+                self.anchors.insert(path.into(), index);
+            }
+        }
+        keys.into_iter()
+            .filter(|_| tracking)
+            .filter(|k| before[k] != self.dependency_value(k))
+            .collect()
+    }
+
+    fn dependency_value(&self, key: &(String, String)) -> Option<String> {
+        let string = || serde_json::from_str::<String>(&key.1).unwrap();
+        let tuple = || serde_json::from_str::<(String, String)>(&key.1).unwrap();
+        let list = |items: Option<&Vec<String>>| {
+            items.map(|v| {
+                let mut v = v.clone();
+                v.sort();
+                format!("{v:?}")
+            })
+        };
+        match key.0.as_str() {
+            "by_path" => list(self.by_path.get(&string())),
+            "by_stem" => list(self.by_stem.get(&string())),
+            "by_alias" => list(self.by_alias.get(&string())),
+            "by_root_stem" => list(self.by_root_stem.get(&tuple())),
+            "anchors" => self.anchors.get(&string()).map(|index| {
+                let heading_first: BTreeMap<_, _> = index.heading_first.iter().collect();
+                let block_first: BTreeMap<_, _> = index.block_first.iter().collect();
+                let footnotes: BTreeMap<_, _> = index.footnotes.iter().collect();
+                let html: BTreeMap<_, _> = index.html.iter().collect();
+                format!(
+                    "{:?}",
+                    (
+                        &index.headings,
+                        heading_first,
+                        block_first,
+                        footnotes,
+                        html,
+                        index.page
+                    )
+                )
+            }),
+            _ => None,
+        }
+    }
+
     /// True when the path is a skipped note.
     pub fn is_skipped(&self, path: &str) -> bool {
+        if let Some(trace) = self.dependencies.borrow_mut().as_mut() {
+            trace.insert(("skipped".into(), serde_json::to_string(path).unwrap()));
+        }
         self.skipped.contains(path)
     }
 
@@ -395,14 +524,14 @@ impl Vault {
             format!("{t}.md")
         };
         for candidate in [t, alternative.as_str()] {
-            if let Some(found) = self.by_path.get(candidate) {
+            if let Some(found) = lookup!(self, by_path, candidate) {
                 return Some(match found.len() {
                     1 => Resolution::resolved(&found[0], true),
                     _ => Resolution::ambiguous(found.clone(), true),
                 });
             }
         }
-        let found = self.link_targets.get(t)?;
+        let found = lookup!(self, link_targets, t)?;
         Some(match found.len() {
             1 => Resolution::resolved(&found[0], false),
             _ => Resolution::ambiguous(found.clone(), false),
@@ -437,27 +566,27 @@ impl Vault {
             let stem = self.norm(stem_of(target));
             if let Some(root) = root {
                 let key = (root.to_string(), stem.clone());
-                if let Some(hit) = Self::from_list(self.by_root_stem.get(&key), true) {
+                if let Some(hit) = Self::from_list(lookup!(self, by_root_stem, &key), true) {
                     return hit;
                 }
             }
-            if let Some(hit) = Self::from_list(self.by_stem.get(&stem), true) {
+            if let Some(hit) = Self::from_list(lookup!(self, by_stem, &stem), true) {
                 return hit;
             }
         }
         if self.settings.alias_resolution {
-            if let Some(hit) = Self::from_list(self.by_alias.get(&t), true) {
+            if let Some(hit) = Self::from_list(lookup!(self, by_alias, &t), true) {
                 return hit;
             }
         }
         let key = self.norm(stem_of(target));
         if let Some(root) = root {
             let scoped = (root.to_string(), key.clone());
-            if let Some(hit) = Self::from_list(self.by_root_basename.get(&scoped), false) {
+            if let Some(hit) = Self::from_list(lookup!(self, by_root_basename, &scoped), false) {
                 return hit;
             }
         }
-        if let Some(hit) = Self::from_list(self.link_by_basename.get(&key), false) {
+        if let Some(hit) = Self::from_list(lookup!(self, link_by_basename, &key), false) {
             return hit;
         }
         Resolution::missing()
@@ -504,7 +633,7 @@ impl Vault {
         let (State::Resolved, Some(path)) = (resolution.state, resolution.path.as_deref()) else {
             return ("none", None, None);
         };
-        let index = self.anchors.get(path);
+        let index = lookup!(self, anchors, path);
         if let Some(block) = block {
             let wanted = block.strip_prefix('^').unwrap_or(block);
             let key = self.norm(wanted);
