@@ -328,3 +328,39 @@ fn a_cache_with_some_stale_rows_gives_the_same_output() {
     // Only the four files that fail to build miss: the cache never stores them.
     assert_eq!(again.report.graph_cache_misses, 4);
 }
+
+/// A project with more files than the window of the lookup, and a head file that is slower to
+/// build than all the others. The workers finish the later files first, and the merge waits for
+/// the head file. The lookup must stop at the window, and it must still reach the head file.
+fn write_slow_head_project(root: &Path, files: usize) {
+    write_project(root, files);
+    let mut head = String::new();
+    for n in 0..1500 {
+        head.push_str(&format!("def h{n}():\n    return d0()\n\nh{n}()\n"));
+    }
+    // A name that sorts before every other file, so this file is the first job.
+    fs::write(root.join("0head.tpy"), head).unwrap();
+}
+
+#[test]
+fn a_slow_head_file_and_more_files_than_the_window_give_the_serial_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    // 100 files are more than the window of 2 threads (16 files) and of 8 threads (32 files).
+    write_slow_head_project(&root, 100);
+    let work = dir.path().join("work");
+    fs::create_dir_all(&work).unwrap();
+    let cache = work.join("graphs.sqlite");
+    let serial = run(&root, &work, "serial", Some(1), None);
+    assert!(serial.report.references_resolved > 100, "{}", serial.report);
+    for threads in [2, 8] {
+        let many = run(&root, &work, &format!("t{threads}"), Some(threads), None);
+        assert_eq!(many.outcome, serial.outcome, "{threads} build threads");
+    }
+    // A cold cache and then a warm cache, where the lookup meets hits behind the window.
+    let cold = run(&root, &work, "cold", Some(3), Some(&cache));
+    assert_eq!(cold.outcome, serial.outcome, "a cold cache");
+    let warm = run(&root, &work, "warm", Some(3), Some(&cache));
+    assert_eq!(warm.outcome, serial.outcome, "a warm cache");
+    assert_eq!(warm.report.graph_cache_hits, serial.report.files_indexed);
+}

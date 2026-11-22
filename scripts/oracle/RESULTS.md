@@ -816,9 +816,9 @@ so each corpus below (one shard) builds on 8 threads. The compiled TSG rules are
 | Wall time, baseline | 10.9 s | 57.4 s | 94.3 s |
 | Wall time, default (8 build threads) | 5.1 s | 37.6 s | 43.1 s |
 | Wall time, `--build-threads 1` | 11.4 s | 61.6 s | 101.2 s |
-| Peak memory, baseline | 0.55 GB | 2.20 GB | 4.01 GB |
-| Peak memory, default | 1.25 GB | 3.35 GB | 7.67 GB |
-| Peak memory, `--build-threads 1` | 0.52 GB | 2.23 GB | 3.91 GB |
+| Peak memory, baseline | 0.55 GiB | 2.20 GiB | 4.01 GiB |
+| Peak memory, default | 1.25 GiB | 3.35 GiB | 7.67 GiB |
+| Peak memory, `--build-threads 1` | 0.52 GiB | 2.23 GiB | 3.91 GiB |
 | `index.scip`, default and `--build-threads 1`, against the baseline | identical | identical | identical |
 | `--trace`, default and `--build-threads 1`, against the baseline | identical | identical | identical |
 
@@ -826,15 +826,15 @@ The SHA-256 prefixes of the files are `73da72b5357a1443` (rich `.scip`), `470020
 (stdlib `.scip`), and `ec5574352ad506bd` (mypy `.scip`). The stdlib run exits with 3 (incomplete
 input) in the baseline and in the new build alike.
 
-Graph cache on mypy, default threads, one run each: cold 52.3 s and 8.02 GB (187 files built),
-warm 38.5 s and 5.18 GB (187 files from the cache). The `.scip` and `--trace` files of both runs
+Graph cache on mypy, default threads, one run each: cold 52.3 s and 8.02 GiB (187 files built),
+warm 38.5 s and 5.18 GiB (187 files from the cache). The `.scip` and `--trace` files of both runs
 are identical to the baseline files. With the cache on, the main thread holds at most 256 graphs
 from the cache before it adds them.
 
 Earlier measurements of the prototype, with the graph cache off and 8 resolve threads on mypy:
 4 build threads 49 s and 6.7 GiB, 8 build threads 45 s and 7.8 GiB, against 94 s and 4.0 GiB for
 a serial build. The memory estimate of a shard (`shard_estimate`) rises for the build threads:
-the growing part is 1.25, 1.75, and 2.0 times for 2, 4, and 8 threads or more. The measured ratios
+the growing part was 1.25, 1.75, and 2.0 times for 2, 4, and 8 threads or more (see the next section for the current values). The measured ratios
 of the peak are 1.21, 1.68, and 1.95.
 
 The engine now builds each file in a stack graph of its own and loads the result, also with one
@@ -919,3 +919,34 @@ numbers, except that the `type` attribute positions now have their own class (my
 1,374 positions of scip-python that point at `builtins/type#`; the other 47 are names named `type`).
 Scrapy's one wrong target was `deco = deco(use_instead)`: it is now `sp_first_binding`. The 17 wrong
 targets of celery are the `X = X` pattern (`Timer = Timer` in a class body). They stay real wrong.
+
+## Run 2026-11-22: build window, no scope depth cap
+
+Scippy lane `bundle` on main 9485b036 (fork pin dc75eb5). Graph cache off, default `--jobs` (8
+logical cores), `--trace`, GNU time. One run for each cell. The machine was shared (load average 4
+to 20 before each run), so the wall times are not comparable. The peak memory does not depend much
+on the load.
+
+Changes: the lookup of the build threads runs at most `max(16, 4 * threads)` files ahead of the
+merge, and the Python rules set no scope depth cap (`max_scope_depth: None`; it was `Some(1)`).
+
+| Peak memory | rich | stdlib | mypy |
+|---|---|---|---|
+| `--build-threads 1` (`df9cecaa`) | 0.52 GiB | 2.23 GiB | 3.91 GiB |
+| 2 build threads | | | 4.36 GiB |
+| 4 build threads | | | 4.70 GiB |
+| default (8 build threads), before | 1.25 GiB | 3.35 GiB | 7.67 GiB |
+| default (8 build threads), now | 1.03 GiB | 2.81 GiB | 5.47 GiB |
+
+The ratio of mypy to its 1-thread peak is 1.12, 1.20, and 1.40 for 2, 4, and 8 threads. The
+estimate of a shard now rises up to 1.5 times (before: 2 times).
+
+Output against `df9cecaa` (the saved files of the run 2026-11-21): the `.scip` files of the three
+corpora differ in one byte only, the version text `0.2.0` against `0.1.0` in the tool info. The
+`--trace` files of rich and mypy are identical. The `--trace` file of stdlib differs in 242 of
+88,832 lines: 234 resolved references and 6 bounded references with the same targets and other
+counts of `ends` and `shadowed`, and 2 references that move from `not-targetable` to `bounded`.
+A control run with the cap restored (`Some(1)`) gives the exact trace of `df9cecaa` on stdlib
+(SHA-256 prefix `2eea08994d584eaf`), so the scope depth cap is the only cause.
+
+On stdlib, removing the cap changes 242 trace lines and moves 2 references (`logging/config.py:606` and `:619`) from not-targetable to bounded. Bounded references rise from 8 to 10 (3 by work and 7 by queue length, against 7 by work and 1 by queue length before). The `.scip` file is identical.

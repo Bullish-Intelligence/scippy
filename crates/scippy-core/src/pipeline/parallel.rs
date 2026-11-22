@@ -23,6 +23,18 @@ use std::thread;
 /// The most graphs that this thread holds from the cache, before the engine adds them.
 const HIT_WINDOW: usize = 256;
 
+/// The least number of files that the lookup runs ahead of the merge.
+const AHEAD_MIN: usize = 16;
+
+/// The number of files that the lookup runs ahead of the merge, for `threads` build threads.
+/// The files in this window are queued, built, or finished. A finished graph waits for the
+/// merge. Without a window, up to all files wait at once, and each graph takes 20 MiB or more.
+/// A window of four files for each thread keeps the workers busy. The window is never empty, so
+/// the file that the merge needs is always in it.
+fn ahead(threads: usize) -> usize {
+    threads.saturating_mul(4).max(AHEAD_MIN)
+}
+
 /// What the parse of a file gives: the report lines, and the parsed file when it did not skip.
 struct Front {
     report: IndexReport,
@@ -195,9 +207,11 @@ pub(super) fn load_parallel(
         let mut looked_up = 0;
         let mut held = 0;
         let mut merged = 0;
+        let ahead = ahead(threads);
         while merged < jobs.len() {
-            // Look up more files. The window bounds the graphs that this thread holds.
-            while looked_up < jobs.len() && held < HIT_WINDOW {
+            // Look up more files. Two windows bound the graphs that wait for the merge: the hits
+            // that this thread holds, and the files between the merge and the lookup.
+            while looked_up < jobs.len() && held < HIT_WINDOW && looked_up - merged < ahead {
                 let n = looked_up;
                 looked_up += 1;
                 let (at, _) = jobs[n];
@@ -302,4 +316,21 @@ fn place(slots: &mut [Slot], n: usize, built: Built) {
         unreachable!("a worker built a file that no one queued");
     };
     slots[n] = Slot::Built(key, built);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AHEAD_MIN, ahead};
+
+    #[test]
+    fn the_window_is_four_files_for_each_thread_and_at_least_the_minimum() {
+        assert_eq!(ahead(1), AHEAD_MIN);
+        assert_eq!(ahead(4), AHEAD_MIN);
+        assert_eq!(ahead(5), 20);
+        assert_eq!(ahead(8), 32);
+        assert_eq!(ahead(64), 256);
+        assert_eq!(ahead(usize::MAX), usize::MAX);
+        // The merge needs the file at the head, so the window cannot be empty.
+        assert!(ahead(0) >= 1);
+    }
 }

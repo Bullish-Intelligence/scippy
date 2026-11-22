@@ -15,13 +15,16 @@ pub(super) const SHARD_GRAPH_CEILING_BYTES: u64 = 10 << 30;
 
 /// The growing part rises with the build threads of the shard. Each build worker holds the graph
 /// of a file in a stack graph of its own, and the finished graphs wait for the merge in file
-/// order. The peak memory of mypy (one shard, `--resolve-threads 8`) was 4.0 GiB with one build
-/// thread, 4.8 GiB with 2, 6.7 GiB with 4, and 7.8 GiB with 8. The growing part, in permille,
-/// is 1000 + 250 for each build thread after the first, up to 2000. This gives 1.25, 1.75, and
-/// 2.0 times for 2, 4, and 8 threads, and the measured ratios are 1.21, 1.68, and 1.95.
+/// order. The lookup runs at most 4 files for each thread (at least 16) ahead of the merge, so
+/// the waiting graphs are few. The peak memory of mypy (one shard, `--resolve-threads 8`) was
+/// 3.91 GiB with one build thread, 4.36 GiB with 2, 4.70 GiB with 4, and 5.47 GiB with 8. The
+/// ratios are 1.12, 1.20, and 1.40 (one run each). The growing part, in permille, is
+/// 1000 + 250 for each build thread after the first, up to 1500. This gives 1.25 times for 2
+/// threads and 1.5 times for 3 threads or more, above each measured ratio. Without the window,
+/// the ratios were 1.21, 1.68, and 1.95, and the cap was 2000.
 pub(super) const BUILD_THREAD_PERMILLE: u64 = 250;
 
-pub(super) const BUILD_THREAD_MAX_PERMILLE: u64 = 2000;
+pub(super) const BUILD_THREAD_MAX_PERMILLE: u64 = 1500;
 
 /// The estimate of the peak memory of a shard that loads `source_bytes` of source and builds its
 /// graphs on `build_threads` threads.
@@ -103,18 +106,19 @@ mod tests {
     }
 
     #[test]
-    fn build_threads_raise_the_growing_part_up_to_twice() {
+    fn build_threads_raise_the_growing_part_up_to_one_and_a_half_times() {
         let growing = |threads| shard_estimate(1_000_000, threads) - SHARD_BASE_BYTES;
         assert_eq!(growing(0), 3_000_000_000);
         assert_eq!(growing(1), 3_000_000_000);
         assert_eq!(growing(2), 3_750_000_000);
-        assert_eq!(growing(4), 5_250_000_000);
-        assert_eq!(growing(8), 6_000_000_000);
-        assert_eq!(growing(1000), 6_000_000_000);
+        assert_eq!(growing(3), 4_500_000_000);
+        assert_eq!(growing(4), 4_500_000_000);
+        assert_eq!(growing(8), 4_500_000_000);
+        assert_eq!(growing(1000), 4_500_000_000);
         // The ceiling rises with the threads too, and it never overflows.
         assert_eq!(
             shard_estimate(u64::MAX, 8),
-            SHARD_BASE_BYTES + 2 * SHARD_GRAPH_CEILING_BYTES
+            SHARD_BASE_BYTES + SHARD_GRAPH_CEILING_BYTES * 3 / 2
         );
         assert!(shard_estimate(u64::MAX, usize::MAX) > 0);
     }

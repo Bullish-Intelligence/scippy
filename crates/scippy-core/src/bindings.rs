@@ -811,42 +811,46 @@ impl BindingEngine {
         const CHUNK: usize = 16;
         let next = AtomicUsize::new(0);
         let jobs = &jobs;
+        let shared = &frozen;
+        let work = || {
+            let mut partials = shared.overlay();
+            let mut mine = Vec::new();
+            loop {
+                let start = next.fetch_add(CHUNK, Ordering::Relaxed);
+                if start >= jobs.len() {
+                    break;
+                }
+                for (i, (node, reference)) in jobs.iter().enumerate().skip(start).take(CHUNK) {
+                    let one = resolve_one(
+                        graph,
+                        &mut partials,
+                        database,
+                        external,
+                        config,
+                        *node,
+                        reference.clone(),
+                    );
+                    mine.push((i, one));
+                }
+            }
+            mine
+        };
         let parts: Vec<Vec<(usize, ResolvedOne)>> = std::thread::scope(|scope| {
-            let workers: Vec<_> = (0..threads)
-                .map(|_| {
-                    let frozen = &frozen;
-                    let next = &next;
-                    // A resolve thread needs the stack of a shard worker.
-                    let builder =
-                        std::thread::Builder::new().stack_size(crate::schedule::WORKER_STACK_BYTES);
-                    let spawned = builder.spawn_scoped(scope, move || {
-                        let mut partials = frozen.overlay();
-                        let mut mine = Vec::new();
-                        loop {
-                            let start = next.fetch_add(CHUNK, Ordering::Relaxed);
-                            if start >= jobs.len() {
-                                break;
-                            }
-                            for (i, (node, reference)) in
-                                jobs.iter().enumerate().skip(start).take(CHUNK)
-                            {
-                                let one = resolve_one(
-                                    graph,
-                                    &mut partials,
-                                    database,
-                                    external,
-                                    config,
-                                    *node,
-                                    reference.clone(),
-                                );
-                                mine.push((i, one));
-                            }
-                        }
-                        mine
-                    });
-                    spawned.expect("spawn a resolve thread")
-                })
-                .collect();
+            let mut workers = Vec::new();
+            for _ in 0..threads {
+                // A resolve thread needs the stack of a shard worker.
+                let builder =
+                    std::thread::Builder::new().stack_size(crate::schedule::WORKER_STACK_BYTES);
+                match builder.spawn_scoped(scope, work) {
+                    Ok(worker) => workers.push(worker),
+                    // A thread that cannot start leaves its references to the others.
+                    Err(_) => break,
+                }
+            }
+            // No thread started: this thread resolves the references.
+            if workers.is_empty() {
+                return vec![work()];
+            }
             workers
                 .into_iter()
                 .map(|w| w.join().expect("a resolve thread panicked"))

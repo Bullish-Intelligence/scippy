@@ -118,12 +118,14 @@ fn scip_file_is_compared_with_the_revision() {
     golden_db("scip-missing", &copy.db, &["check", "--scip", scip], 3);
 }
 
-fn check_with_root_flag(flag: &str) -> Run {
-    let copy = indexed_copy("check-root");
+fn check_with_root_flag(flag: &str, name: &str, with_golden: bool) -> Run {
+    let copy = indexed_copy(name);
     let other = copy.root.with_file_name("moved");
     let _ = fs::remove_dir_all(&other);
     fs::rename(&copy.root, &other).unwrap();
-    golden_db("root-missing", &copy.db, &["check"], 3);
+    if with_golden {
+        golden_db("root-missing", &copy.db, &["check"], 3);
+    }
     run(&[
         "check",
         "--db",
@@ -135,13 +137,13 @@ fn check_with_root_flag(flag: &str) -> Run {
 
 #[test]
 fn project_root_option_replaces_the_stored_root() {
-    let out = check_with_root_flag("--project-root");
+    let out = check_with_root_flag("--project-root", "check-root", true);
     assert_eq!(out.status, 0, "{}{}", out.stdout, out.stderr);
 }
 
 #[test]
 fn old_root_option_still_replaces_the_stored_root() {
-    let out = check_with_root_flag("--root");
+    let out = check_with_root_flag("--root", "check-root-old", false);
     assert_eq!(out.status, 0, "{}{}", out.stdout, out.stderr);
 }
 

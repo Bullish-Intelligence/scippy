@@ -602,8 +602,10 @@ depend on the number of workers.
   A file that fails to build gives the same `bind-error` diagnostic at every thread count. The
   `.scip` file and the `--trace` file do not depend on `--build-threads`, with the graph cache off
   or on. More threads raise the peak memory: the finished graphs wait for the merge, and each
-  worker holds a graph. The peak of mypy rises from 4.0 GB to 7.7 GB with 8 threads. The memory
-  estimate of a shard rises with the threads, up to 2 times for its growing part. Use
+  worker holds a graph. The lookup runs at most 4 files for each thread, and at least 16 files,
+  ahead of the merge, so few graphs wait. The peak of mypy rises from 3.9 GiB with 1 thread to
+  5.5 GiB with 8 threads. The memory estimate of a shard rises with the threads, up to 1.5 times
+  for its growing part. Use
   `--build-threads 1` to keep the memory of a serial build.
 
 Set `SCIPPY_SHARD_LOG=1` to print the estimate, the start resident memory, and the peak resident

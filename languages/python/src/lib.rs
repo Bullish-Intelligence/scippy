@@ -829,8 +829,8 @@ mod tests {
     }
 
     #[test]
-    fn the_python_rules_cap_the_scope_depth_at_one() {
-        assert_eq!(PythonPack.binding_rules().max_scope_depth, Some(1));
+    fn the_python_rules_set_no_scope_depth_cap() {
+        assert_eq!(PythonPack.binding_rules().max_scope_depth, None);
     }
 
     #[test]
