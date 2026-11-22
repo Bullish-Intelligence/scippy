@@ -848,3 +848,74 @@ serial-after-parallel cache runs equal a run without the cache; five files that 
 (a rule error, a second dialect whose rules do not compile, a syntax error) give the same
 diagnostics and the same output at 1 and 8 threads; a panic in a worker ends the run and writes
 no file.
+
+## Run 2026-11-22: new baseline with named numbers
+
+Date: 2026-11-22. Scippy `df9cecaa` (fork pin `dc75eb5`), scip-python 0.6.8. No indexer ran. The
+scorer (`score.py`, `analyze.py`, `metrics.py`) read stored indexes:
+
+- mypy, rich, stdlib: Scippy index and trace of `~/.local/state/scippy/pin-27e2435/runs/`
+  (byte-identical to the output of `df9cecaa`); scip-python index of the earlier score runs.
+- scrapy, celery, pydantic-ai: Scippy index and trace of the `corpora` run of 2026-11-21
+  (Scippy `df9cecaa`, default limits). The pydantic-ai reference index is the one of 2026-11-15,
+  made with the pydantic environment.
+- Corpora: mypy 1.19.1, rich `3a109cc`, stdlib (CPython 3.14.7, 160 files), scrapy 2.6.3,
+  celery 5.3.6, pydantic-ai `ca52326`. The layout and the fetch steps are in `README.md`.
+  The baseline run is `df9cecaa-2026-11-22` in `classes.csv`.
+
+Scorer changes in this run:
+
+1. `sp_class_path` reads a top-level module without backticks (`dataclasses/Field#`). Before, the
+   owner-class rule missed these symbols, and the positions counted as wrong.
+2. New class `sp_first_binding`: scip-python takes the first of two declarations of a name in one
+   scope, and Scippy a later live one.
+3. New class `sp_builtin_type_attr`: scip-python gives `builtins/type#` for an attribute named
+   `type`. It counts on its own. Earlier it sat in `scip_python_missing_or_wrong`.
+4. `metrics.py` reports named numbers, with the old raw numbers next to them (see `README.md`).
+
+Named numbers (counts are positions that both tools resolve in the project, except the last two rows):
+
+| Number | mypy | rich | stdlib | scrapy | celery | pydantic-ai |
+|---|---|---|---|---|---|---|
+| positions of scip-python (`sp`) | 154,016 | 20,411 | 59,960 | 17,374 | 33,120 | 160,608 |
+| positions of both (`both`) | 151,891 | 19,950 | 59,072 | 17,261 | 32,823 | 155,564 |
+| strict recall | 94.24% | 96.82% | 97.73% | 96.64% | 97.53% | 95.99% |
+| strict precision | 95.56% | 99.06% | 99.20% | 97.27% | 98.41% | 99.10% |
+| owner-class coarse | 4,724 | 79 | 364 | 13 | 118 | 8 |
+| import-prefix convention | 1,812 | 109 | 2 | 457 | 379 | 1,140 |
+| same-name other class | 206 | 0 | 30 | 0 | 7 | 211 |
+| function type parameter | 0 | 0 | 6 | 0 | 0 | 0 |
+| `sp_first_binding` | 0 | 0 | 62 | 1 | 0 | 0 |
+| real wrong | 0 | 0 | 10 | 0 | 17 | 44 |
+| `sp_builtin_type_attr` (Scippy has a target, scip-python a builtin) | 1,327 | 11 | 12 | 2 | 9 | 31 |
+| Scippy missing (`sp` has a target, Scippy none) | 2,125 | 461 | 888 | 113 | 297 | 5,044 |
+
+Old raw numbers, for continuity. Overlap recall and precision equal the strict numbers on every
+corpus. The old "wrong" counted real wrong plus `sp_first_binding`.
+
+| Old number | mypy | rich | stdlib | scrapy | celery | pydantic-ai |
+|---|---|---|---|---|---|---|
+| raw recall | 94.24% | 96.82% | 97.73% | 96.64% | 97.53% | 95.99% |
+| raw precision | 95.56% | 99.06% | 99.20% | 97.27% | 98.41% | 99.10% |
+| wrong, old definition | 0 | 0 | 72 | 1 | 17 | 44 |
+| wrong, before this run (older scorer) | 0 | 0 | 131 | 1 | 17 | 44 |
+
+Stdlib wrong targets fall from 131 to 10. 59 positions were the regex bug (they are now owner-class
+or same-name positions). 62 are `sp_first_binding`: `enum.py` 59 (`Flag` 32, `Enum` 11, `ReprEnum` 6,
+`_not_given` 5, `_auto_null` 5), `asyncio/futures.py` 2, `functools.py` 1. The 10 that remain:
+
+- `asyncio/tasks.py:840`: a real Scippy error (a read after `nonlocal x; x += 1`);
+- `functools.py:213-221`, 5 positions: the attribute `obj` of a class that a function defines
+  (`cmp_to_key().K`); scip-python gives `K#`, Scippy gives the local `obj` (the review counted
+  these as "member of a function-local class", not as a Scippy bug);
+- `importlib/util.py:186, 189, 222`, 3 positions: `__class__` in a method; scip-python is wrong
+  (it picks the method, Scippy picks the local `__class__`);
+- `asyncio/events.py:797`: `from .unix_events import _DefaultEventLoopPolicy` in the `else` branch;
+  scip-python gives the `windows_events` target of the `if` branch. This is a first-binding error of
+  scip-python too, in an import in another file, which the rule does not cover.
+
+Other changes against the older numbers: rich, mypy, scrapy, celery, and pydantic-ai keep their
+numbers, except that the `type` attribute positions now have their own class (mypy 1,327 of the
+1,374 positions of scip-python that point at `builtins/type#`; the other 47 are names named `type`).
+Scrapy's one wrong target was `deco = deco(use_instead)`: it is now `sp_first_binding`. The 17 wrong
+targets of celery are the `X = X` pattern (`Timer = Timer` in a class body). They stay real wrong.

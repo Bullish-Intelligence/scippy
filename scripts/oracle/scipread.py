@@ -49,7 +49,8 @@ def _packed(b):
 
 def read_index(path):
     """Return dict: tool, documents: {path: {occs: [(range4, symbol, roles)], syms: {symbol: (kind, name)}}}."""
-    data = open(path, "rb").read()
+    with open(path, "rb") as f:
+        data = f.read()
     tool = None
     docs = {}
     for f, w, v in _fields(data):

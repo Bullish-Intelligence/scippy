@@ -1,0 +1,291 @@
+"""Unit tests of the oracle scripts. They use no corpus and no indexer.
+
+Run: python3 -I scripts/oracle/test_oracle.py
+"""
+import atexit
+import contextlib
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+# oraclelib reads ORACLE_DIR when it loads, so set a scratch dir first.
+_SCRATCH = tempfile.mkdtemp(prefix="oracle-test-")
+atexit.register(shutil.rmtree, _SCRATCH, True)
+os.environ["ORACLE_DIR"] = _SCRATCH
+os.environ["ORACLE_CSV"] = os.path.join(_SCRATCH, "classes.csv")
+
+import analyze  # noqa: E402
+import difftool  # noqa: E402
+import gate  # noqa: E402
+import metrics  # noqa: E402
+import oraclelib  # noqa: E402
+import track  # noqa: E402
+
+SP = "scip-python python python-stdlib 3.11 "
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def row(**kw):
+    r = {"kind": "different", "cat": "name", "doc": "m.py", "rng": [0, 0, 0, 1], "text": "x", "plaus": "", "star_kw": False,
+         "sc": [], "sp": [], "sc_def": [], "sp_def": []}
+    r.update(kw)
+    return r
+
+
+class SpClassPath(unittest.TestCase):
+    def test_plain_top_level_module(self):
+        self.assertEqual(analyze.sp_class_path(SP + "dataclasses/Field#"), "dataclasses/Field#")
+
+    def test_backtick_module_with_dots(self):
+        self.assertEqual(analyze.sp_class_path("scip-python python pkg 0.0.0 `importlib.util`/_LazyModule#a()."), "importlib/util/_LazyModule#a().")
+
+    def test_builtins(self):
+        self.assertEqual(analyze.sp_class_path(SP + "builtins/type#"), "builtins/type#")
+
+    def test_local_symbol_has_no_path(self):
+        self.assertIsNone(analyze.sp_class_path("local 3"))
+
+    def test_owner_class_without_backticks_is_plausible(self):
+        # The old regex needed backticks, so this row counted as a wrong target.
+        r = row(cat="attribute", text="default", sp=[[SP + "dataclasses/Field#", [0, 0]]],
+                sc=[["scip-scippy python x 0.0.0 . dataclasses/Field#default.", [0, 0]]])
+        self.assertEqual(analyze.classify(r)[0:2], ("both_plausible", "sp_points_at_owner_class, Scippy at the member"))
+
+
+class FirstBinding(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="oracle-src-")
+        analyze.root = self.dir
+        write(os.path.join(self.dir, "m.py"),
+              "Enum = Flag = None\n"      # line 1: first declaration of Flag, column 7
+              "class Flag:\n"             # line 2: later declaration, column 6
+              "    pass\n"
+              "def use():\n"
+              "    return Flag\n"
+              "def inner():\n"
+              "    Flag = 1\n"            # line 7: a declaration in another scope
+              "    return Flag\n")
+
+    def case(self, sc_def, sp_def):
+        return row(text="Flag", sc=[["scip-scippy python p 0.0.0 . m/Flag#", [4, 11]]], sp=[[SP + "m/Flag.", [4, 11]]],
+                   sc_def=[["m.py", sc_def]], sp_def=[["m.py", sp_def]])
+
+    def test_first_of_two_declarations(self):
+        r = self.case([1, 6, 1, 10], [0, 7, 0, 11])
+        self.assertTrue(analyze.sp_first_binding(r))
+        self.assertEqual(analyze.classify(r)[0], "sp_first_binding")
+
+    def test_scip_python_declaration_is_later(self):
+        r = self.case([0, 7, 0, 11], [1, 6, 1, 10])
+        self.assertFalse(analyze.sp_first_binding(r))
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+    def test_other_scope_is_not_a_first_binding(self):
+        r = self.case([6, 4, 6, 8], [0, 7, 0, 11])
+        self.assertFalse(analyze.sp_first_binding(r))
+
+    def test_other_name_is_not_a_first_binding(self):
+        r = self.case([1, 6, 1, 10], [0, 0, 0, 4])  # `Enum` is not `Flag`
+        self.assertFalse(analyze.sp_first_binding(r))
+
+
+class BuiltinTypeAttr(unittest.TestCase):
+    def test_attribute_named_type(self):
+        r = row(kind="sp_missing_external", cat="attribute", text="type", sp=[[SP + "builtins/type#", [0, 0]]],
+                sc=[["scip-scippy python p 0.0.0 . m/C#type.", [0, 0]]])
+        self.assertTrue(analyze.sp_builtin_type_attr(r))
+        self.assertEqual(analyze.classify(r)[0], "sp_builtin_type_attr")
+
+    def test_other_attribute_stays_in_the_generic_bucket(self):
+        r = row(kind="sp_missing_external", cat="attribute", text="other", sp=[[SP + "builtins/type#", [0, 0]]])
+        self.assertFalse(analyze.sp_builtin_type_attr(r))
+        self.assertEqual(analyze.classify(r)[0], "scip_python_missing_or_wrong")
+
+    def test_name_is_not_an_attribute(self):
+        r = row(kind="sp_missing_external", cat="name", text="type", sp=[[SP + "builtins/type#", [0, 0]]])
+        self.assertFalse(analyze.sp_builtin_type_attr(r))
+
+
+class Metrics(unittest.TestCase):
+    def make(self):
+        d = tempfile.mkdtemp(prefix="oracle-cmp-")
+        stats = {"sp_inproj": 100, "sc_inproj": 110, "both": 90, "match_overlap": 80, "match_strict": 78}
+        write(os.path.join(d, "summary.json"), json.dumps({"stats": stats, "builtins": {}}))
+        bk = {
+            "both_plausible / sp_points_at_owner_class, Scippy at the member": 5,
+            "both_plausible / import_prefix: x": 2,
+            "both_plausible / import_prefix_at_usage_site: y": 1,
+            "both_plausible / same_name_member_in_another_class (inheritance/override)": 1,
+            "sp_first_binding / z": 1,
+            "scippy_wrong / W3_member_other": 0,
+            "sp_builtin_type_attr / t": 4,
+            "scippy_missing / C_rebind: r": 6,
+        }
+        write(os.path.join(d, "buckets.json"), json.dumps({k: {"count": v, "samples": []} for k, v in bk.items()}))
+        return d
+
+    def test_named_numbers(self):
+        n = metrics.compute(self.make())["named"]
+        self.assertAlmostEqual(n["strict_recall_pct"], 78.0)
+        self.assertAlmostEqual(n["strict_precision_pct"], 100.0 * 78 / 90, places=3)
+        self.assertEqual((n["owner_class_coarse"], n["import_prefix"], n["same_name_other_class"]), (5, 3, 1))
+        self.assertEqual((n["sp_first_binding"], n["real_wrong"], n["sp_builtin_type_attr"]), (1, 0, 4))
+        # 90 both = 80 overlap match + 10 different. Five classes hold 10 positions, so no alias-only match.
+        self.assertEqual(n["match_through_alias_follow"], 0)
+
+    def test_render_names_the_numbers(self):
+        text = metrics.render(metrics.compute(self.make()))
+        for word in ("strict recall", "owner-class coarse", "import-prefix", "same-name", "real wrong", "legacy"):
+            self.assertIn(word, text)
+
+
+class Track(unittest.TestCase):
+    def test_add_and_delta(self):
+        csv_path = os.path.join(tempfile.mkdtemp(), "c.csv")
+        a, b = Metrics().make(), Metrics().make()
+        bk = oraclelib.read_json(os.path.join(b, "buckets.json"))
+        bk["scippy_wrong / W3_member_other"]["count"] = 3
+        write(os.path.join(b, "buckets.json"), json.dumps(bk))
+        for d in (a, b):
+            write(os.path.join(d, "metrics.json"), json.dumps(metrics.compute(d)))
+        with contextlib.redirect_stdout(io.StringIO()):
+            track.add(csv_path, "base", {"mypy": a}, "2026-01-01")
+            track.add(csv_path, "next", {"mypy": b}, "2026-01-02")
+        with self.assertRaises(SystemExit):
+            track.add(csv_path, "base", {"mypy": a})
+        out = io.StringIO()
+        track.delta(csv_path, "next", "base", out=out)
+        text = out.getvalue()
+        self.assertIn("scippy_wrong / W3_member_other", text)
+        self.assertIn("real_wrong", text)
+        self.assertIn("+3", text)
+        self.assertNotIn("sp_builtin_type_attr / t", text)  # unchanged rows stay out
+
+
+# A minimal SCIP writer for the gate test.
+def varint(n):
+    out = b""
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out += bytes([b | (0x80 if n else 0)])
+        if not n:
+            return out
+
+
+def fld(no, wire, payload):
+    tag = varint(no << 3 | wire)
+    return tag + (varint(len(payload)) + payload if wire == 2 else payload)
+
+
+def scip(tool, occs):
+    """occs: [(line, col, end_col, symbol, roles)] in one document `m.py`."""
+    doc = fld(1, 2, b"m.py")
+    for line, c0, c1, sym, roles in occs:
+        o = fld(1, 2, b"".join(varint(x) for x in (line, c0, c1))) + fld(2, 2, sym.encode()) + fld(3, 0, varint(roles))
+        doc += fld(2, 2, o)
+    meta = fld(2, 2, fld(1, 2, tool.encode()) + fld(2, 2, b"1"))
+    return fld(1, 2, meta) + fld(2, 2, doc)
+
+
+SRC = "def f(): pass\nf()\nf()\n"
+DEF, REF = 1, 0
+SPF = SP + "m/f()."
+SCF = "scip-scippy python p 0.0.0 . m/f()."
+
+
+class Gate(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        write(os.path.join(oraclelib.ORACLE_DIR, "corpora", "t", "root", "m.py"), SRC)
+        ref = scip("scip-python", [(0, 4, 5, SPF, DEF), (1, 0, 1, SPF, REF), (2, 0, 1, SPF, REF)])
+        os.makedirs(os.path.join(oraclelib.ORACLE_DIR, "ref"), exist_ok=True)
+        with open(os.path.join(oraclelib.ORACLE_DIR, "ref", "t.scip"), "wb") as f:
+            f.write(ref)
+        cls.base = cls.run_dir("base", [(0, 4, 5, SCF, DEF), (1, 0, 1, SCF, REF), (2, 0, 1, SCF, REF)])
+        os.makedirs(os.path.join(oraclelib.ORACLE_DIR, "baseline"), exist_ok=True)
+        os.replace(cls.base, os.path.join(oraclelib.ORACLE_DIR, "baseline", "t"))
+        cls.base = os.path.join(oraclelib.ORACLE_DIR, "baseline", "t")
+
+    @staticmethod
+    def run_dir(name, occs):
+        d = os.path.join(_SCRATCH, "run-" + name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "scippy.scip"), "wb") as f:
+            f.write(scip("scippy", occs))
+        write(os.path.join(d, "scippy.trace"), "")
+        return d
+
+    def gate(self, rundir, *extra, allow=None):
+        allow_path = os.path.join(_SCRATCH, "allow-%d.txt" % len(os.listdir(_SCRATCH)))
+        write(allow_path, allow or "")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = gate.run(["t=" + rundir, "--allow", allow_path, "--zero-wrong", "t"] + list(extra))
+        return status, out.getvalue()
+
+    def test_same_run_passes(self):
+        status, text = self.gate(self.run_dir("same", [(0, 4, 5, SCF, DEF), (1, 0, 1, SCF, REF), (2, 0, 1, SCF, REF)]))
+        self.assertEqual(status, 0, text)
+
+    def test_lost_location_fails_and_allowlist_passes(self):
+        d = self.run_dir("lost", [(0, 4, 5, SCF, DEF), (1, 0, 1, SCF, REF)])
+        status, text = self.gate(d, "--max-strict-drop", "100")
+        self.assertEqual(status, 1, text)
+        self.assertIn("m.py:3:0  resolved -> unresolved", text)
+        status, text = self.gate(d, "--max-strict-drop", "100", allow="t\tm.py:3:0\tdeliberate\n")
+        self.assertEqual(status, 0, text)
+
+    def test_strict_drop_fails(self):
+        d = self.run_dir("drop", [(0, 4, 5, SCF, DEF), (1, 0, 1, SCF, REF)])
+        status, text = self.gate(d, allow="t\tm.py:3:0\tdeliberate\n")
+        self.assertEqual(status, 1, text)
+        self.assertIn("strict_recall_pct fell", text)
+
+    def test_two_symbols_at_one_occurrence_fail(self):
+        other = "scip-scippy python p 0.0.0 . m/g()."
+        d = self.run_dir("multi", [(0, 4, 5, SCF, DEF), (1, 0, 1, SCF, REF), (1, 0, 1, other, REF), (2, 0, 1, SCF, REF)])
+        status, text = self.gate(d, "--max-strict-drop", "100", allow="t\tm.py:2:0\tdeliberate\n")
+        self.assertEqual(status, 1, text)
+        self.assertIn("more than one symbol", text)
+
+    def test_real_wrong_fails(self):
+        g = "scip-scippy python p 0.0.0 . m/g()."
+        d = self.run_dir("wrong", [(0, 4, 5, SCF, DEF), (2, 0, 1, SCF, REF), (1, 0, 1, g, REF), (0, 0, 1, g, DEF)])
+        status, text = self.gate(d, "--max-strict-drop", "100", allow="t\tm.py:2:0\tdeliberate\n")
+        self.assertEqual(status, 1, text)
+        self.assertIn("real wrong is", text)
+
+    def test_allowlist_needs_a_reason(self):
+        p = os.path.join(_SCRATCH, "bad-allow.txt")
+        write(p, "t\tm.py:3:0\n")
+        with self.assertRaises(SystemExit):
+            gate.read_allow(p)
+
+
+class Diff(unittest.TestCase):
+    def test_diff(self):
+        a = ("m.py", (1, 0))
+        b = ("m.py", (2, 0))
+        c = ("m.py", (3, 0))
+        base = {a: frozenset({("ext", "x")}), b: frozenset({("ext", "y")})}
+        cand = {a: frozenset({("ext", "z")}), c: frozenset({("ext", "y")})}
+        d = difftool.diff(base, cand)
+        self.assertEqual((d["changed"], d["lost"], d["gained"]), ([a], [b], [c]))
+        self.assertEqual(difftool.fmt(a), "m.py:2:0")
+
+
+if __name__ == "__main__":
+    unittest.main()

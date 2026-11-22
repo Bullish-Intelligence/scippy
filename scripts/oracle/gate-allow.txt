@@ -1,0 +1,4 @@
+# Allowlist of gate.py: locations that may change from resolved to unresolved or to another target.
+# Format: CORPUS<TAB>doc:LINE:COL<TAB>reason
+# LINE is 1-based. COL is a 0-based code point offset. gate.py prints locations in this format.
+# Add a line only after you decide that the change is right, and say why in the reason.

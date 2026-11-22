@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The accuracy oracle (`scripts/oracle/`) reports named numbers: strict recall and precision, owner-class coarse, import-prefix convention, same-name other class, and real wrong. It reads a top-level module name of scip-python without backticks (`dataclasses/Field#`), and it has the classes `sp_first_binding` and `sp_builtin_type_attr`. On the standard library, wrong targets fall from 131 to 10 with no change of Scippy output. New: `track.py` (per-class CSV and deltas), `gate.py` and `run_gate.sh` (regression gate, not part of `pm verify`), `difftool.py`, `fetch_corpora.sh` (pinned corpora, now with scrapy 2.6.3 and celery 5.3.6), and `README.md`.
+
 ## [0.2.0] - 2026-11-22
 
 ### Added

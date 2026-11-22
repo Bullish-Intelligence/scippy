@@ -23,6 +23,7 @@ class FileInfo:
         self.aug = set()
         self.origins = {}  # func start line0 -> {name: origin}
         self.fnodes = {}
+        self.scopes = []  # (header_line0, end_line0) of every function and class
         try:
             src = open(os.path.join(root, doc), encoding="utf-8", errors="replace").read()
         except OSError:
@@ -77,6 +78,7 @@ class FileInfo:
                     decos.append(ast.unparse(dd))
                     self.deco_lines.add(d.lineno - 1)
                 end = ch.end_lineno - 1
+                self.scopes.append((ch.lineno - 1, end))
                 self.funcs.append((ch.lineno - 1, end, decos, in_class))
                 self.origins[ch.lineno - 1] = self._origins(ch)
                 args = ch.args
@@ -87,6 +89,7 @@ class FileInfo:
                     self._ann(ch.returns)
                 self._walk(ch, False)
             elif isinstance(ch, ast.ClassDef):
+                self.scopes.append((ch.lineno - 1, ch.end_lineno - 1))
                 self._walk(ch, True)
             else:
                 if isinstance(ch, ast.AnnAssign):
@@ -195,6 +198,18 @@ class FileInfo:
             if f[0] <= line0 <= f[1]:
                 if best is None or f[0] >= best[0]:
                     best = f
+        return best
+
+    def scope_of(self, line0):
+        """Header line of the innermost function or class whose body holds the line, or None.
+
+        A name that a `def` or `class` statement binds belongs to the scope around it, so a
+        header line counts as part of that outer scope. A multi-line header is not handled.
+        """
+        best = None
+        for start, end in self.scopes:
+            if start < line0 <= end and (best is None or start > best):
+                best = start
         return best
 
     def receiver_form(self, line0, col):
