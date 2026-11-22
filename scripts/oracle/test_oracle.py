@@ -26,6 +26,7 @@ import difftool  # noqa: E402
 import gate  # noqa: E402
 import metrics  # noqa: E402
 import oraclelib  # noqa: E402
+import owners  # noqa: E402
 import track  # noqa: E402
 
 SP = "scip-python python python-stdlib 3.11 "
@@ -151,6 +152,43 @@ class Metrics(unittest.TestCase):
             self.assertIn(word, text)
 
 
+class MetricsMulti(unittest.TestCase):
+    """A multi-symbol position is never exact. It is covered when the set holds the target."""
+
+    def make(self, **extra):
+        d = tempfile.mkdtemp(prefix="oracle-cmp-")
+        stats = {"sp_inproj": 100, "sc_inproj": 110, "both": 90, "match_overlap": 80, "match_strict": 78,
+                 "multi_symbol": 7, "both_multi": 6, "multi_covered": 4, "multi_not_covered": 2}
+        stats.update(extra)
+        write(os.path.join(d, "summary.json"), json.dumps({"stats": stats, "builtins": {}}))
+        bk = {"multi_not_covered / sp_points_at_owner_class: x": 1, "multi_not_covered / no candidate has the scip-python target": 1}
+        write(os.path.join(d, "buckets.json"), json.dumps({k: {"count": v, "samples": []} for k, v in bk.items()}))
+        return d
+
+    def test_exact_and_covered(self):
+        n = metrics.compute(self.make())["named"]
+        # Exact: 78 of 100 and 78 of 90. The six multi-symbol positions are not in `both`.
+        self.assertAlmostEqual(n["strict_recall_pct"], 78.0)
+        self.assertAlmostEqual(n["strict_precision_pct"], 100.0 * 78 / 90, places=3)
+        self.assertAlmostEqual(n["covered_recall_pct"], 82.0)
+        self.assertAlmostEqual(n["covered_precision_pct"], 100.0 * 82 / 96, places=3)
+        self.assertEqual((n["multi_symbol"], n["multi_both"], n["multi_covered"], n["multi_not_covered"]), (7, 6, 4, 2))
+        self.assertEqual(n["multi_owner_class_coarse"], 1)
+        # The multi-symbol positions do not enter the alias-follow remainder of the exact numbers.
+        self.assertEqual(n["match_through_alias_follow"], 10)
+
+    def test_without_multi_symbol_positions_covered_equals_exact(self):
+        d = self.make(multi_symbol=0, both_multi=0, multi_covered=0, multi_not_covered=0)
+        n = metrics.compute(d)["named"]
+        self.assertEqual(n["covered_recall_pct"], n["strict_recall_pct"])
+        self.assertEqual(n["covered_precision_pct"], n["strict_precision_pct"])
+
+    def test_render_names_the_multi_numbers(self):
+        text = metrics.render(metrics.compute(self.make()))
+        for word in ("covered recall", "multi-symbol positions", "exact"):
+            self.assertIn(word, text)
+
+
 class Track(unittest.TestCase):
     def test_add_and_delta(self):
         csv_path = os.path.join(tempfile.mkdtemp(), "c.csv")
@@ -273,6 +311,116 @@ class Gate(unittest.TestCase):
         write(p, "t\tm.py:3:0\n")
         with self.assertRaises(SystemExit):
             gate.read_allow(p)
+
+
+SRC_U = (
+    "class A:\n"                 # 0
+    "    def go(self): pass\n"   # 1: go at columns 8 to 10
+    "class B:\n"                 # 2
+    "    def go(self): pass\n"   # 3
+    "class C(A):\n"              # 4: A at column 8
+    "    def go(self): pass\n"   # 5
+    "def use(x):\n"              # 6
+    "    x.go()\n"               # 7: go at column 6
+    "    x.go()\n"               # 8
+)
+PY = "scip-python python p 0.0.0 "
+SC = "scip-scippy python p 0.0.0 . "
+
+
+def sc(name):
+    return SC + "m/" + name
+
+
+def u_defs(sym):
+    """The definitions of the classes and methods of SRC_U, and the base reference."""
+    return [
+        (0, 6, 7, sym("A#"), DEF), (1, 8, 10, sym("A#go()."), DEF),
+        (2, 6, 7, sym("B#"), DEF), (3, 8, 10, sym("B#go()."), DEF),
+        (4, 6, 7, sym("C#"), DEF), (5, 8, 10, sym("C#go()."), DEF),
+        (4, 8, 9, sym("A#"), REF),
+    ]
+
+
+def py(name):
+    return PY + "m/" + name
+
+
+class GateMulti(unittest.TestCase):
+    """Several symbols at one range pass for a true union and fail for any other set."""
+
+    @classmethod
+    def setUpClass(cls):
+        write(os.path.join(oraclelib.ORACLE_DIR, "corpora", "u", "root", "m.py"), SRC_U)
+        ref = scip("scip-python", u_defs(py) + [(7, 6, 8, py("A#go()."), REF), (8, 6, 8, py("A#go()."), REF)])
+        with open(os.path.join(oraclelib.ORACLE_DIR, "ref", "u.scip"), "wb") as f:
+            f.write(ref)
+        base = Gate.run_dir("ubase", u_defs(sc) + [(8, 6, 8, sc("A#go()."), REF)])
+        os.replace(base, os.path.join(oraclelib.ORACLE_DIR, "baseline", "u"))
+
+    def gate(self, name, at7):
+        d = Gate.run_dir(name, u_defs(sc) + [(8, 6, 8, sc("A#go()."), REF)] + [(7, 6, 8, s, REF) for s in at7])
+        allow = os.path.join(_SCRATCH, "allow-u-%s.txt" % name)
+        write(allow, "")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = gate.run(["u=" + d, "--allow", allow, "--zero-wrong", "u"])
+        return status, out.getvalue(), d
+
+    def test_a_union_of_unrelated_classes_passes_and_is_covered_not_exact(self):
+        status, text, d = self.gate("u-union", [sc("A#go()."), sc("B#go().")])
+        self.assertEqual(status, 0, text)
+        self.assertIn("occurrences with more than one symbol: 1 (baseline 0); true unions 1, other sets 0", text)
+        n = oraclelib.read_json(os.path.join(d, "gate-cmp", "metrics.json"))["named"]
+        self.assertEqual((n["multi_symbol"], n["multi_covered"], n["multi_not_covered"]), (1, 1, 0))
+        # The union position is covered, never exact.
+        self.assertGreater(n["covered_recall_pct"], n["strict_recall_pct"])
+        # The exact numbers do not move: the union position is not in them.
+        self.assertIn("strict_recall_pct %s (baseline %s, change +0.0000 pp)" % ((("%.4f" % n["strict_recall_pct"]),) * 2), text)
+
+    def test_a_union_that_misses_the_target_is_not_covered(self):
+        status, text, d = self.gate("u-miss", [sc("B#go()."), sc("C#go().")])
+        n = oraclelib.read_json(os.path.join(d, "gate-cmp", "metrics.json"))["named"]
+        self.assertEqual((n["multi_covered"], n["multi_not_covered"]), (0, 1))
+
+    def test_related_owners_fail(self):
+        # C inherits from A (the base reference at line 5).
+        status, text, _ = self.gate("u-related", [sc("A#go()."), sc("C#go().")])
+        self.assertEqual(status, 1, text)
+        self.assertIn("owners are related", text)
+
+    def test_the_same_owner_fails(self):
+        status, text, _ = self.gate("u-same", [sc("A#go()."), sc("A#other().")])
+        self.assertEqual(status, 1, text)
+        self.assertIn("owners are related", text)
+
+    def test_a_module_level_symbol_fails(self):
+        status, text, _ = self.gate("u-module", [sc("A#go()."), sc("go().")])
+        self.assertEqual(status, 1, text)
+        self.assertIn("not a member of a class", text)
+
+
+class Owners(unittest.TestCase):
+    def test_owner_of(self):
+        self.assertEqual(owners.owner_of(sc("A#go().")), sc("A#"))
+        self.assertEqual(owners.owner_of(sc("A#x.")), sc("A#"))
+        self.assertEqual(owners.owner_of(sc("Outer#Inner#x.")), sc("Outer#Inner#"))
+        for sym in (sc("A#"), sc("f()."), sc("f().(a)"), "local 3", sc("v.")):
+            self.assertIsNone(owners.owner_of(sym), sym)
+
+    def test_related_follows_transitive_bases_and_ends_on_a_cycle(self):
+        bases = {"C": {"B"}, "B": {"A"}, "X": {"Y"}, "Y": {"X"}}
+        self.assertTrue(owners.related("C", "A", bases))
+        self.assertTrue(owners.related("A", "C", bases))
+        self.assertTrue(owners.related("A", "A", bases))
+        self.assertFalse(owners.related("A", "D", bases))
+        self.assertTrue(owners.related("X", "Y", bases))
+        self.assertFalse(owners.related("X", "A", bases))
+
+    def test_cap(self):
+        syms = [sc("C%d#go()." % i) for i in range(5)]
+        self.assertIn("5 symbols", owners.set_problem(syms, {}))
+        self.assertIsNone(owners.set_problem(syms[:4], {}))
 
 
 class Diff(unittest.TestCase):

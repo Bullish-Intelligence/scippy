@@ -236,6 +236,12 @@ def classify(r):
     k = r["kind"]
     sp0 = r["sp"][0][0] if r["sp"] else ""
     sc0 = r["sc"][0][0] if r["sc"] else ""
+    if k == "multi_not_covered":
+        # Several Scippy symbols at one range. None has the target of scip-python.
+        spc = sp_class_path(sp0)
+        if spc and spc.endswith("#") and any(s.split(" . ", 1)[-1].startswith(spc) for s, _ in r["sc"]):
+            return ("multi_not_covered", "sp_points_at_owner_class: a candidate is a member of the class of scip-python")
+        return ("multi_not_covered", "no candidate has the scip-python target")
     if k == "different" and r.get("plaus") == "import_prefix":
         return ("both_plausible", "import_prefix: Scippy points `a` of `import a.b.c` at package a, scip-python at the submodule")
     if k.startswith("sp_missing") and r.get("plaus") == "import_prefix":

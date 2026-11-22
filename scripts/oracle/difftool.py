@@ -11,7 +11,10 @@ symbol has no definition in the project. The tool lists these changes from BASE 
 For each of the first two it also says whether scip-python agrees with the base, the candidate,
 both, or neither. A location prints as `doc:LINE:COL`: LINE is 1-based, COL is a 0-based code
 point offset. The allowlist of gate.py uses the same format.
-`--out PREFIX` writes PREFIX.changes.tsv. Import this module for `load_positions` and `diff`.
+`--out PREFIX` writes PREFIX.changes.tsv, and PREFIX.multi.tsv when the candidate has occurrences with
+several symbols. A row of the multi file holds the location, `union` or the reason that the set is
+not a true union (see owners.py), `sp=covered`, `sp=not_covered`, `sp_none`, or `sp_external`, and the
+symbols. Import this module for `load_positions` and `diff`.
 """
 import collections
 import os
@@ -21,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import compare  # noqa: E402
 import oraclelib  # noqa: E402
+import owners  # noqa: E402
 
 
 def sym_of(key):
@@ -129,10 +133,33 @@ def main():
         print("%-8s %6d  %s" % (kind, len(d[kind]), dict(agree) if kind != "gained" else ""))
         for pos in d[kind][:limit]:
             print("    " + fmt(pos))
+    if multi:
+        bases = owners.load_bases(oraclelib.scippy_index(cdir), oraclelib.reference_index(corpus, cdir), root)
+        mrows = []
+        for doc, rng, syms in sorted(multi):
+            pos = (doc, tuple(rng[:2]))
+            rt_ = rt.get(pos)
+            if not rt_:
+                cov = "sp_none"
+            elif not locs_of(rt_):
+                cov = "sp_external"
+            else:
+                cov = "sp=covered" if compare.any_match(locs_of(ct.get(pos, ())), locs_of(rt_), compare.overlap) else "sp=not_covered"
+            mrows.append((fmt(pos), owners.set_problem(syms, bases) or "union", cov, " | ".join(syms)))
+        kinds = collections.Counter((m[1] if m[1] == "union" else "not a union", m[2]) for m in mrows)
+        print("multi-symbol occurrences: %s" % dict(kinds))
+        for m in mrows[:limit]:
+            print("    " + "  ".join(m[:3]))
+    else:
+        mrows = []
     if out:
         with open(out + ".changes.tsv", "w") as f:
             for r in rows:
                 f.write("\t".join(r) + "\n")
+        if mrows:
+            with open(out + ".multi.tsv", "w") as f:
+                for r in mrows:
+                    f.write("\t".join(r) + "\n")
 
 
 if __name__ == "__main__":

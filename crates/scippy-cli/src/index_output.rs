@@ -113,6 +113,7 @@ impl RunOutput {
                 "external": r.references_external,
                 "unresolved": r.references_unresolved,
                 "ambiguous": r.references_ambiguous,
+                "union": r.references_union,
                 "bounded": r.references_bounded,
                 "bounded_by_kind": {
                     "work": b.work,

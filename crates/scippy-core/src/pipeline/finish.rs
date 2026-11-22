@@ -21,6 +21,19 @@ pub(super) fn is_method(d: &Declared) -> bool {
         && d.scopes.last().is_some_and(|s| s.kind.is_class_like())
 }
 
+/// A member that can be one candidate of a union: a method, an attribute, or a property of a
+/// class, with a symbol that other documents can address. A field is a member of its class.
+pub(super) fn is_member(d: &Declared) -> bool {
+    !d.symbol.is_local()
+        && match d.fact.kind {
+            DeclKind::Field => true,
+            DeclKind::Function | DeclKind::Variable => {
+                d.scopes.last().is_some_and(|s| s.kind.is_class_like())
+            }
+            _ => false,
+        }
+}
+
 /// The innermost class declaration whose extent holds the span.
 pub(super) fn enclosing_class(declared: &[Declared], start: u32, end: u32) -> Option<&Declared> {
     declared
@@ -42,6 +55,14 @@ pub(super) fn record_inheritance(
         if let Some(class) = enclosing_class(&doc.declared, start, end) {
             if !class.symbol.is_local() {
                 inheritance.add_method(&class.symbol, &method.display_name, method.symbol.clone());
+            }
+        }
+    }
+    for member in doc.declared.iter().filter(|d| is_member(d)) {
+        let (start, end) = member.fact.extent;
+        if let Some(class) = enclosing_class(&doc.declared, start, end) {
+            if !class.symbol.is_local() {
+                inheritance.add_member(&class.symbol, member.symbol.clone());
             }
         }
     }
@@ -77,6 +98,16 @@ pub(super) fn record_inheritance(
                     anchor_state: None,
                 });
             }
+        }
+    }
+}
+
+/// Mark each ambiguous reference whose candidates are a true union. Call it after the classes
+/// of every document are in `inheritance`: a candidate can belong to a class of another document.
+pub(super) fn mark_unions(reconciled: &mut [Reconciled], inheritance: &Inheritance) {
+    for r in reconciled {
+        if let BindingOutcome::Ambiguous(candidates) = &r.outcome {
+            r.union = inheritance.is_union(candidates);
         }
     }
 }
@@ -123,6 +154,9 @@ pub(super) fn count(report: &mut IndexReport, r: &Reconciled) {
         }
         BindingOutcome::Ambiguous(_) => {
             report.references_ambiguous += 1;
+            if r.union {
+                report.references_union += 1;
+            }
             if multi {
                 stats.ambiguous += 1;
             }
@@ -171,7 +205,8 @@ pub(super) fn trace_line(lines: &LineIndex, r: &Reconciled) -> String {
     let detail = match &r.outcome {
         BindingOutcome::Resolved(symbol) => format!("resolved\t{}", symbol.as_str()),
         BindingOutcome::Ambiguous(symbols) => format!(
-            "ambiguous\t{}",
+            "{}\t{}",
+            if r.union { "union" } else { "ambiguous" },
             symbols
                 .iter()
                 .map(SymbolId::as_str)
@@ -258,7 +293,9 @@ impl<'a> Finisher<'a> {
 
 /// Build the document: a definition occurrence for each declaration,
 /// and an occurrence for each reference that resolved.
-/// An unresolved, ambiguous, or bounded reference gets no occurrence.
+/// A union reference gets one occurrence for each candidate, all at one range, in the order of
+/// the symbols. SCIP allows this. Any other ambiguous reference, an unresolved reference, and a
+/// bounded reference get no occurrence.
 pub(super) fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]) -> Document {
     let mut occurrences = Vec::new();
     let mut symbols: BTreeMap<SymbolId, SymbolInfo> = BTreeMap::new();
@@ -317,8 +354,14 @@ pub(super) fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]
     let imports: BTreeSet<(u32, u32)> = doc.facts.imports.iter().copied().collect();
     let hidden: BTreeSet<(u32, u32)> = doc.facts.hidden.iter().copied().collect();
     for r in reconciled {
-        let BindingOutcome::Resolved(symbol) = &r.outcome else {
-            continue;
+        let symbols: Vec<&SymbolId> = match &r.outcome {
+            BindingOutcome::Resolved(symbol) => vec![symbol],
+            BindingOutcome::Ambiguous(candidates) if r.union => {
+                let mut sorted: Vec<&SymbolId> = candidates.iter().collect();
+                sorted.sort();
+                sorted
+            }
+            _ => continue,
         };
         let span = (r.reference.start_byte, r.reference.end_byte);
         // A declaration site is a definition occurrence already.
@@ -326,18 +369,21 @@ pub(super) fn build_document(language: &str, doc: Doc, reconciled: &[Reconciled]
         if defined.contains(&span) || span.0 >= span.1 || hidden.contains(&span) {
             continue;
         }
-        occurrences.push(Occurrence {
-            start_byte: span.0,
-            end_byte: span.1,
-            symbol: symbol.clone(),
-            role: if imports.contains(&span) {
-                Role::Import
-            } else if reads.contains(&span) {
-                Role::ReadAccess
-            } else {
-                Role::Reference
-            },
-        });
+        let role = if imports.contains(&span) {
+            Role::Import
+        } else if reads.contains(&span) {
+            Role::ReadAccess
+        } else {
+            Role::Reference
+        };
+        for symbol in symbols {
+            occurrences.push(Occurrence {
+                start_byte: span.0,
+                end_byte: span.1,
+                symbol: symbol.clone(),
+                role,
+            });
+        }
     }
     Document {
         path: doc.path,

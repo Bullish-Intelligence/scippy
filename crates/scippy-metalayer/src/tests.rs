@@ -192,6 +192,73 @@ fn the_relation_drops_local_targets_and_definition_sites() {
     );
 }
 
+/// A union: the index has one occurrence for each candidate at one range, and the reference
+/// stays ambiguous with both candidates. SCIP allows several occurrences at one range.
+fn union() -> AnalysisSnapshot {
+    let mut s = empty();
+    let mut a = document("a.py", "e.items\n");
+    a.symbols = vec![symbol("g A#items."), symbol("g B#items.")];
+    a.occurrences = vec![
+        // The order of the occurrences does not matter. The store sorts them by symbol.
+        occurrence(2, 7, "g B#items.", "reference"),
+        occurrence(2, 7, "g A#items.", "reference"),
+    ];
+    s.documents = vec![a];
+    s.references = vec![reference(
+        "a.py",
+        2,
+        7,
+        ReferenceOutcome::Ambiguous(vec!["g A#items.".into(), "g B#items.".into()]),
+    )];
+    s
+}
+
+#[test]
+fn a_union_stores_one_occurrence_for_each_candidate_and_one_ambiguous_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut layer = layer(dir.path());
+    publish(&mut layer, &union());
+    let view = layer.view().unwrap().unwrap();
+    // Go to definition: every occurrence at the range names one candidate.
+    let at_range: Vec<_> = view
+        .occurrences("a.py")
+        .unwrap()
+        .into_iter()
+        .filter(|o| o.span == (2, 7))
+        .map(|o| (o.symbol.symbol, o.role))
+        .collect();
+    assert_eq!(
+        at_range,
+        vec![
+            ("g A#items.".to_owned(), OccurrenceRole::Reference),
+            ("g B#items.".to_owned(), OccurrenceRole::Reference)
+        ]
+    );
+    // The reference at the range is one row with both candidates.
+    let reference = view.references_at("a.py", (2, 7)).unwrap().unwrap();
+    assert_eq!(
+        reference.outcome,
+        StoredOutcome::Ambiguous(vec![
+            SymbolRef::global("g A#items."),
+            SymbolRef::global("g B#items.")
+        ])
+    );
+    // Find references: the site is listed for each candidate, and for no other symbol.
+    for name in ["g A#items.", "g B#items."] {
+        let sites = view
+            .ambiguous_with("a.py", &SymbolRef::global(name))
+            .unwrap();
+        assert_eq!(sites.iter().map(|r| r.span).collect::<Vec<_>>(), [(2, 7)]);
+    }
+    assert!(
+        view.ambiguous_with("a.py", &SymbolRef::global("g C#items."))
+            .unwrap()
+            .is_empty()
+    );
+    // No file depends on a candidate yet: the site is only a maybe.
+    assert!(view.relations(RelationQuery::default()).unwrap().is_empty());
+}
+
 #[test]
 fn a_limited_reference_counts_and_shows_in_the_relation_and_its_supports() {
     let dir = tempfile::tempdir().unwrap();

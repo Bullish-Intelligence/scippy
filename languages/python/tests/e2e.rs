@@ -2116,3 +2116,91 @@ fn an_annotated_factory_chain_bounds_no_reference_and_each_member_resolves() {
         }
     }
 }
+
+// ---- unions: one occurrence for each candidate of unrelated classes ----
+
+#[test]
+fn a_union_of_unrelated_classes_gets_one_occurrence_for_each_member() {
+    let indexed = index("unions");
+    // `e: ListExpr | TupleExpr` then `e.items`: two classes with no relation.
+    let items = [
+        global("shapes/ListExpr#items."),
+        global("shapes/TupleExpr#items."),
+    ];
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return e.items", "items"),
+        items
+    );
+    // A guard with a tuple of classes gives the same union.
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return x.items", "items"),
+        items
+    );
+    // A method is a member too.
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return u.render()", "render"),
+        [
+            global("shapes/ListExpr#render()."),
+            global("shapes/TupleExpr#render().")
+        ]
+    );
+    // The occurrences share one range and one role, and none is a definition.
+    let occurrences = indexed.find("shapes.py", "return e.items", "items");
+    assert_eq!(occurrences.len(), 2);
+    assert_eq!(occurrences[0].range, occurrences[1].range);
+    assert_eq!(occurrences[0].symbol_roles, occurrences[1].symbol_roles);
+    assert!(occurrences.iter().all(|o| !is_definition(o)));
+    // The report counts them as ambiguous references that became unions.
+    assert_eq!(indexed.report.references_union, 4);
+    assert_eq!(indexed.report.references_ambiguous, 8);
+}
+
+#[test]
+fn related_owners_stay_ambiguous() {
+    let indexed = index("unions");
+    // `Child` inherits `Base`: an override chain, not a union.
+    for (context, word) in [
+        ("return r.render()", "render"),
+        ("return g.render()", "render"),
+        // One related pair spoils a set that also holds an unrelated class.
+        ("return m.render()", "render"),
+    ] {
+        assert!(
+            indexed.symbols_of("shapes.py", context, word).is_empty(),
+            "{context}"
+        );
+    }
+}
+
+#[test]
+fn a_set_above_the_cap_stays_ambiguous() {
+    let indexed = index("unions");
+    // Four classes are a union. Five are ambiguous, as before.
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return f.size()", "size"),
+        [
+            global("shapes/Four#size()."),
+            global("shapes/One#size()."),
+            global("shapes/Three#size()."),
+            global("shapes/Two#size().")
+        ]
+    );
+    assert!(
+        indexed
+            .symbols_of("shapes.py", "return v.size()", "size")
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_occurrences_of_a_union_are_the_same_in_every_run() {
+    let first = index("unions");
+    let second = index("unions");
+    let bytes = |indexed: &Indexed| std::fs::read(&indexed.path).unwrap();
+    assert_eq!(bytes(&first), bytes(&second));
+    // The candidates stand in the order of their symbols.
+    let symbols = first.symbols_of("shapes.py", "return f.size()", "size");
+    let mut sorted = symbols.clone();
+    sorted.sort_unstable();
+    assert_eq!(symbols, sorted);
+}

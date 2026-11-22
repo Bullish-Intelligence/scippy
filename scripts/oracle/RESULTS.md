@@ -1069,3 +1069,85 @@ are in the allowlist (R4) and the lane is landed. They have the same structure a
 cls store route re-enters the class self scope, so routes that diverge early cannot shadow each other.
 The engine design spike on precedence over whole paths will cover it.
 
+
+## Run 2026-11-22: unions, one occurrence for each candidate
+
+Scippy lane `unions` on main `ccbe8688`. Fork pin `32b5325` (unchanged). Label `unions-32b5325` in
+`classes.csv`. Base run: `objlast-32b5325`. Graph cache off, `--trace`, all six corpora in parallel.
+Correctness only: no timing was taken. Gate against `objlast-32b5325`: pass on all six corpora.
+
+Change: when a reference is ambiguous, and every candidate is a method, an attribute, or a property of
+a project class, and there are at most 4 candidates, and no owner class is one class with another owner
+or a subclass or superclass of it (transitive), the index has one occurrence for each candidate at one
+range, sorted by symbol. Everything else is as before: override chains (kinds B and D), module-level
+names, mixed kinds, members of external classes (for example `BaseExceptionGroup` and
+`ExceptionGroup`), and more than 4 candidates.
+
+New oracle numbers: exact is the old strict number, now with the rule "Scippy has one symbol". Covered
+adds the multi-symbol positions whose set holds the scip-python target. A multi-symbol position is
+never exact, and it is not in `both`. The gate prints the count against the baseline, and fails on a
+set with an unrelated-owner violation (see `owners.py`).
+
+| corpus | multi-symbol | with sp target | covered | not covered (owner-class coarse) | sp external | exact recall | covered recall | exact precision | covered precision |
+|---|---|---|---|---|---|---|---|---|---|
+| mypy | 194 | 176 | 122 | 54 (49) | 18 | 94.2603 | 94.3395 | 95.5621 | 95.5317 |
+| rich | 0 | 0 | 0 | 0 | 0 | 97.1094 | 97.1094 | 99.0604 | 99.0604 |
+| stdlib | 10 | 7 | 7 | 0 | 3 | 98.0320 | 98.0437 | 99.3090 | 99.3091 |
+| scrapy | 1 | 1 | 1 | 0 | 0 | 96.8113 | 96.8171 | 97.2817 | 97.2818 |
+| celery | 15 | 15 | 15 | 0 | 0 | 97.8231 | 97.8684 | 98.4592 | 98.4599 |
+| pydantic-ai | 110 | 110 | 109 | 1 | 0 | 96.2331 | 96.3009 | 99.1004 | 99.1004 |
+
+The exact numbers equal `objlast-32b5325` to four decimals on every corpus. `scippy_missing` falls by
+the number of multi-symbol positions that have a scip-python target (mypy 2098 to 1922, pydantic-ai
+4647 to 4537, celery 214 to 199, stdlib 771 to 764, scrapy 84 to 83). Covered precision on mypy falls
+by 0.03 pp: 176 positions join the denominator and 122 of them hold the target (54 do not).
+Real wrong: unchanged on all corpora (mypy 0, rich 0, stdlib 9, scrapy 0, celery 2, pydantic-ai 44).
+
+Ambiguous references (`references ambiguous` is the outcome of the reconciler and still counts a
+union; `references union` is a part of it):
+
+| corpus | ambiguous before | union | ambiguous left (no occurrence) |
+|---|---|---|---|
+| mypy | 313 | 194 | 119 |
+| rich | 1 | 0 | 1 |
+| stdlib | 88 | 10 | 78 |
+| scrapy | 5 | 1 | 4 |
+| celery | 26 | 15 | 11 |
+| pydantic-ai | 149 | 110 | 39 |
+
+The estimate of the task (mypy about 145, stdlib about 27, rich 1) was too low for mypy and too high
+for stdlib and rich. Cause: the stdlib and rich sets are mostly members of external classes, or have
+related owners (override chains).
+
+Review of the 330 new multi-symbol positions with `difftool.py` (its `--out` writes
+`PREFIX.multi.tsv`): lost 0 and changed 0 on every corpus, gained = the multi-symbol positions. The
+gate found 0 sets with related owners, 0 sets with a module-level symbol, and 0 sets of more than 4
+symbols (the inheritance comes from the corpus sources and from both indexes). A sample of each group
+by hand:
+
+- mypy: `ListExpr` or `TupleExpr` `.items` (27 positions), `ImportAll` or `ImportFrom` `.id`,
+  `CallableType` or `Overloaded` `.with_unpacked_kwargs()`, `FuncDef` or `OverloadedFuncDef` `.name()`.
+  Every pair is a pair of sibling classes. `Decorator` and `FuncBase` are no subclasses of each other.
+- pydantic-ai: `ModelResponse` or `StreamedResponse` `.metadata` (13), the four `FileUrl` subclasses
+  `.url`, `ApprovalRequired` or `CallDeferred` `.metadata`. Sibling classes.
+- celery: 11 of 15 are `_task_stack.push`, `.pop`, `.top`, `.stack`, where `LocalStack` is
+  `_FastLocalStack` or `_LocalStack` by a flag (`USE_FAST_LOCALS`). It is a conditional class alias. The
+  two classes are unrelated, so the set is a union of types, and scip-python agrees with one of them.
+- stdlib: `_ModuleLock` or `_DummyModuleLock` `.acquire()`, `minidom.Document` or `Element`
+  `.childNodes`.
+- Not covered: 49 of 54 on mypy are owner-class coarse (scip-python gives the class). The other 5 on
+  mypy and the 1 on pydantic-ai: scip-python picks the declaration of a base class (`FunctionLike#fallback`,
+  `Node#accept()`, `FuncBase#info`, `BaseToolReturnPart#content`), and Scippy has the members of the
+  subclasses. They are kind D questions of the engine design spike, not wrong sets.
+- 18 positions on mypy and 3 on stdlib have a scip-python target outside the project (`x.type` is
+  `builtins/type#` for scip-python). They are in `sp_builtin_type_attr` (mypy 1327 to 1345).
+
+Consumers: `scippy metalayer` reads the occurrences of a file, the references with their candidates,
+and `explain`. The store already keeps one row for each (range, symbol, role). The reference row stays
+`ambiguous` with its candidates. Tests: `crates/scippy-cli/tests/union_query.rs` (index, `.scip`
+occurrences, and `explain --to` for each candidate) and a metalayer store test. The SCIP specification
+allows several occurrences at one range (see CHANGELOG).
+
+Limit: a base class that the project does not resolve gives no relation, so two classes with a hidden
+relation would count as unrelated. The gate cross-checks with the inheritance of scip-python and the
+class statements of the sources. It found none.

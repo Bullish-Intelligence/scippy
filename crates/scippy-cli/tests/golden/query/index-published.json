@@ -26,6 +26,7 @@
       "external": 0,
       "unresolved": 5,
       "ambiguous": 2,
+      "union": 0,
       "bounded": 0,
       "bounded_by_kind": {
         "work": 0,

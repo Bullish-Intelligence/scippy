@@ -48,11 +48,14 @@ It writes `RUNDIR/cmp/` (`summary.json`, `disagreements.jsonl`, `buckets.json`, 
 ## Named numbers
 
 `metrics.py` prints these numbers. There is no blended score. Each position is one that both tools
-resolve in the project (`both`), or one that scip-python resolves (`sp`).
+resolve in the project (`both`: Scippy has one symbol there), or one that scip-python resolves (`sp`).
+A multi-symbol position is in `sp` and in the covered numbers, and in none of the exact numbers.
 
 | Number | Meaning |
 |---|---|
-| strict recall, strict precision | the start of the target definition is equal; matched / `sp`, matched / `both` |
+| strict recall, strict precision (exact) | Scippy has exactly one symbol at the position, and the start of its target definition equals the scip-python target; matched / `sp`, matched / `both` |
+| covered recall, covered precision | exact matches plus the positions with several Scippy symbols (a true union) whose set holds the scip-python target |
+| multi-symbol positions (`multi_symbol`) | positions where Scippy writes several occurrences at one range; never an exact match. `multi_both` has a scip-python in-project target; of those `multi_covered`, `multi_not_covered`, `multi_owner_class_coarse` |
 | overlap recall, overlap precision | the old raw numbers: the definition ranges overlap |
 | owner-class coarse | scip-python gives `Class#`, Scippy gives a member of that class |
 | import-prefix convention | `a` of `import a.b.c` or `a.b.X`: package (Scippy) or submodule (scip-python) |
@@ -92,7 +95,10 @@ The gate checks a candidate Scippy build against the baseline. It fails when:
 2. strict recall or strict precision falls by more than 0.05 pp (`--max-strict-drop`);
 3. a location changes from resolved to unresolved, or to a different target, and `gate-allow.txt`
    does not list it;
-4. an occurrence has more than one symbol.
+4. an occurrence has several symbols and the set is not a true union: a symbol is no member of a
+   class, there are more than 4 symbols, or two owner classes are one class or are related by
+   inheritance (`owners.py` reads the base classes from the corpus sources and from both indexes).
+   A true union passes. The gate prints the count against the baseline and the covered recall.
 
 The gate is not in `pm verify`: a mypy run takes minutes. Run it before you land a change to
 the resolver, the rules, or the fork pin.

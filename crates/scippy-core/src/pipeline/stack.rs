@@ -1,6 +1,6 @@
 //! The stack-graphs pack path: shards, binding engines, reconcile, and identities.
 
-use super::finish::{Finisher, is_method, record_inheritance};
+use super::finish::{Finisher, is_method, mark_unions, record_inheritance};
 use super::identities::{anonymous_scope, assign_identities, declare_external, identity_builder};
 use super::inputs::read_manifests;
 use super::load::load_file;
@@ -17,7 +17,7 @@ use crate::identity::{IdentityBuilder, SymbolId};
 use crate::inherit::Inheritance;
 use crate::language::{Analysis, DeclKind, ExtraFile, LanguagePack, ProjectModel, Scope};
 use crate::project::{FoundFile, ProjectRelativePath};
-use crate::reconcile::{DeclarationIndex, Targeting, reconcile};
+use crate::reconcile::{DeclarationIndex, Reconciled, Targeting, reconcile};
 use crate::report::{Diagnostic, IndexReport, Severity, Stage};
 use crate::schedule;
 use crate::source::SourceStore;
@@ -153,6 +153,9 @@ pub(super) fn index_pack(
     // The document that defines each method that can override another.
     let mut method_documents: BTreeMap<SymbolId, usize> = BTreeMap::new();
     let mut finisher = Finisher::new(pack.scip_language().to_string(), false, &externals);
+    // The classes of every document must be known before a union can be told from other
+    // ambiguity, so the documents wait here between the two loops.
+    let mut staged: Vec<(Doc, Vec<Reconciled>)> = Vec::with_capacity(docs.len());
     for doc in docs {
         let bindings = by_document.remove(&doc.path).unwrap_or_default();
         let members: HashSet<(u32, u32)> = doc.facts.members.iter().copied().collect();
@@ -178,7 +181,6 @@ pub(super) fn index_pack(
             .collect();
         let targeting = Targeting::new(&*model, containers);
         let reconciled = reconcile(&index, bindings, &members, &keywords, &targeting);
-        finisher.account(run, &doc, &reconciled);
         record_inheritance(
             &doc,
             &reconciled,
@@ -186,8 +188,13 @@ pub(super) fn index_pack(
             run.capture.as_deref_mut(),
         );
         for d in doc.declared.iter().filter(|d| is_method(d)) {
-            method_documents.insert(d.symbol.clone(), out.len());
+            method_documents.insert(d.symbol.clone(), staged.len());
         }
+        staged.push((doc, reconciled));
+    }
+    for (doc, mut reconciled) in staged {
+        mark_unions(&mut reconciled, &inheritance);
+        finisher.account(run, &doc, &reconciled);
         out.push(finisher.build(doc, &reconciled, false));
     }
     // Stage G: an override method implements the method that it shadows.

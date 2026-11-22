@@ -37,6 +37,7 @@
         "external": {"type": "integer", "minimum": 0, "description": "A part of `resolved`."},
         "unresolved": {"type": "integer", "minimum": 0},
         "ambiguous": {"type": "integer", "minimum": 0},
+        "union": {"type": "integer", "minimum": 0, "description": "A part of `ambiguous`: the candidates are members of unrelated classes, and the index has one occurrence for each."},
         "bounded": {"type": "integer", "minimum": 0},
         "bounded_by_kind": {
           "type": "object",

@@ -4,7 +4,11 @@ usage: python3 -I metrics.py CMPDIR
 Reads CMPDIR/summary.json and CMPDIR/buckets.json. Prints the metrics. Writes CMPDIR/metrics.json.
 
 Each named number answers one question. There is no blended score:
-  strict recall and precision      start of the target definition equals the start of the scip-python target
+  strict recall and precision      EXACT: Scippy has one symbol at the position, and the start of its
+                                   target definition equals the start of the scip-python target
+  covered recall and precision     the exact matches, plus the positions with several Scippy symbols
+                                   (a true union) where the set holds the scip-python target
+  multi-symbol positions           positions where Scippy has more than one symbol; never exact
   overlap recall and precision     the old raw numbers, kept for continuity
   owner-class coarse               scip-python gives the owner class, Scippy the member
   import-prefix convention         `a` of `import a.b.c` or `a.b.X`: package or submodule
@@ -55,6 +59,17 @@ def compute(cmpdir):
         "overlap_recall_pct": pct(m, sp),
         "overlap_precision_pct": pct(m, both),
     }
+    # A position with several Scippy symbols is in none of the exact numbers above. `both` holds
+    # the positions with one Scippy symbol only.
+    multi, multi_both = st.get("multi_symbol", 0), st.get("both_multi", 0)
+    covered = st.get("multi_covered", 0)
+    named["multi_symbol"] = multi
+    named["multi_both"] = multi_both
+    named["multi_covered"] = covered
+    named["multi_not_covered"] = st.get("multi_not_covered", 0)
+    named["multi_owner_class_coarse"] = count(b, ("multi_not_covered / sp_points_at_owner_class",))
+    named["covered_recall_pct"] = pct(ms + covered, sp)
+    named["covered_precision_pct"] = pct(ms + covered, both + multi_both)
     diff_total = 0
     for name, prefixes in DIFFERENT_CLASSES:
         n = count(b, prefixes)
@@ -101,7 +116,10 @@ def render(r):
     out = []
     out.append("positions: scip-python in-project %d | Scippy in-project %d | both %d" % (n["sp_inproj"], n["sc_inproj"], n["both"]))
     out.append("== named numbers ==")
-    out.append("strict recall      %.2f%%   strict precision   %.2f%%" % (n["strict_recall_pct"], n["strict_precision_pct"]))
+    out.append("strict recall      %.2f%%   strict precision   %.2f%%   (exact: one Scippy symbol)" % (n["strict_recall_pct"], n["strict_precision_pct"]))
+    out.append("covered recall     %.2f%%   covered precision  %.2f%%   (exact + multi-symbol positions that hold the target)" % (n["covered_recall_pct"], n["covered_precision_pct"]))
+    out.append("%-66s %7d" % ("multi-symbol positions (Scippy has several symbols; never exact)", n["multi_symbol"]))
+    out.append("%-66s %7d  covered %d, not covered %d (owner-class coarse %d)" % ("  of them with a scip-python in-project target", n["multi_both"], n["multi_covered"], n["multi_not_covered"], n["multi_owner_class_coarse"]))
     out.append("overlap recall     %.2f%%   overlap precision  %.2f%%   (old raw numbers)" % (n["overlap_recall_pct"], n["overlap_precision_pct"]))
     for name, _ in DIFFERENT_CLASSES:
         out.append("%-66s %7d  (%.3f%% of both)" % (LABELS[name], n[name], n[name + "_pct_of_both"]))

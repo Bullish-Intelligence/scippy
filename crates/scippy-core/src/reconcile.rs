@@ -30,7 +30,9 @@
 //! 5. A definition in a project file wins over a definition in an external asset, such as the
 //!    builtins. A project definition shadows the builtin of the same name.
 //! 6. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
-//!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved.
+//!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved. The finishing stage
+//!    later marks an Ambiguous outcome as a union when its candidates are members of unrelated
+//!    classes (`Inheritance::is_union`): the index then has one occurrence for each candidate.
 //! 7. A reference never takes a document-local symbol of another document.
 //!    A path that passes the definition node at the span of the reference itself is a value-flow
 //!    path too. The assignment `x.a = x.b` defines the name `a`, and the value of `b` flows into
@@ -229,6 +231,10 @@ pub(crate) struct Reconciled {
     pub unjoined: Vec<String>,
     /// The joined declarations as `file:start`, for the trace. An external end has the prefix `~`.
     pub targets: Vec<String>,
+    /// True when the outcome is `Ambiguous` and the candidates are a true union: members of
+    /// classes with no inheritance relation. The finishing stage sets it, after it has read the
+    /// classes of every document. The index then holds one occurrence for each candidate.
+    pub union: bool,
 }
 
 fn end_has_declaration(declarations: &DeclarationIndex, place: &Place) -> bool {
@@ -496,6 +502,7 @@ pub(crate) fn reconcile(
                 refused,
                 unjoined,
                 targets,
+                union: false,
             }
         })
         .collect()

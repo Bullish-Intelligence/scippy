@@ -11,7 +11,11 @@ A corpus fails when one of these holds:
   2. strict recall or strict precision falls by more than `--max-strict-drop` pp (default 0.05);
   3. a location changes from resolved to unresolved, or to a different target, and it is not in
      the allowlist (default gate-allow.txt next to this script);
-  4. an occurrence of the candidate has more than one symbol.
+  4. an occurrence of the candidate has more than one symbol and the set is not a true union: a
+     symbol is not a member of a class, there are more than 4 symbols, or the owner classes are
+     one class or are related by inheritance (owners.py reads the inheritance from the sources).
+     A true union is allowed. The gate prints the count against the baseline, and it prints the
+     covered recall and the number of multi-symbol positions that miss the scip-python target.
 Exit code 0: every corpus passes. 1: a check failed. 2: usage or input error.
 Allowlist lines: `CORPUS<TAB>doc:LINE:COL<TAB>reason`. LINE is 1-based and COL is a 0-based code
 point offset, the format that this gate prints. `#` starts a comment line.
@@ -24,6 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import difftool  # noqa: E402
 import oraclelib  # noqa: E402
+import owners  # noqa: E402
 from oraclelib import read_json  # noqa: E402
 import score  # noqa: E402
 
@@ -72,7 +77,7 @@ def check(corpus, rundir, bdir, allow, max_drop, zero_wrong, limit):
             fails.append("%s fell by %.4f pp (limit %.4f): %.4f -> %.4f" % (name, drop, max_drop, base[name], cur[name]))
 
     # 3. locations that changed, 4. several symbols at one occurrence
-    bt, _, _, _ = difftool.load_positions(oraclelib.scippy_index(bdir), root)
+    bt, bmulti, _, _ = difftool.load_positions(oraclelib.scippy_index(bdir), root)
     ct, multi, _, _ = difftool.load_positions(oraclelib.scippy_index(rundir), root)
     d = difftool.diff(bt, ct)
     changed = [(p, "resolved -> unresolved") for p in d["lost"]] + [(p, "target changed") for p in d["changed"]]
@@ -89,11 +94,26 @@ def check(corpus, rundir, bdir, allow, max_drop, zero_wrong, limit):
     stale = sorted(loc for (c, loc) in allow if c == corpus and loc not in changed_locs)
     if stale:
         notes.append("%d allowlist entr%s did not change (stale): %s" % (len(stale), "y" if len(stale) == 1 else "ies", ", ".join(stale[:5])))
+    problems = []
     if multi:
-        fails.append("%d occurrence(s) have more than one symbol" % len(multi))
-        for doc, rng, syms in multi[:limit]:
-            fails.append("    %s:%d:%d  %s" % (doc, rng[0] + 1, rng[1], syms))
-    notes.append("occurrences with more than one symbol: %d" % len(multi))
+        bases = owners.load_bases(oraclelib.scippy_index(rundir), oraclelib.reference_index(corpus, rundir), root)
+        for doc, rng, syms in multi:
+            why = owners.set_problem(syms, bases)
+            if why:
+                problems.append((doc, rng, syms, why))
+    notes.append("occurrences with more than one symbol: %d (baseline %d); true unions %d, other sets %d" % (
+        len(multi), len(bmulti), len(multi) - len(problems), len(problems)))
+    notes.append("multi-symbol positions with a scip-python target: %d, covered %d, not covered %d (owner-class coarse %d)" % (
+        cur["multi_both"], cur["multi_covered"], cur["multi_not_covered"], cur["multi_owner_class_coarse"]))
+    notes.append("covered recall %.4f%%, covered precision %.4f%% (baseline %.4f%%, %.4f%%)" % (
+        cur["covered_recall_pct"], cur["covered_precision_pct"],
+        base.get("covered_recall_pct", base["strict_recall_pct"]), base.get("covered_precision_pct", base["strict_precision_pct"])))
+    if problems:
+        fails.append("%d occurrence(s) have several symbols that are not a true union" % len(problems))
+        for doc, rng, syms, why in problems[:limit]:
+            fails.append("    %s:%d:%d  %s  [%s]" % (doc, rng[0] + 1, rng[1], why, " | ".join(syms)))
+        if len(problems) > limit:
+            fails.append("    ... %d more (raise --limit)" % (len(problems) - limit))
     return fails, notes
 
 

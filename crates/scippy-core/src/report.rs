@@ -186,6 +186,10 @@ pub struct IndexReport {
     pub references_external: usize,
     pub references_unresolved: usize,
     pub references_ambiguous: usize,
+    /// Ambiguous references whose candidates are members of unrelated classes: a true union.
+    /// The index has one occurrence for each candidate. The count is a part of
+    /// `references_ambiguous`.
+    pub references_union: usize,
     /// References whose search hit a work bound. They have no target.
     pub references_bounded: usize,
     /// The bounded references by kind of bound. The counts add up to `references_bounded`.
@@ -220,6 +224,7 @@ impl fmt::Display for IndexReport {
         writeln!(f, "references external: {}", self.references_external)?;
         writeln!(f, "references unresolved: {}", self.references_unresolved)?;
         writeln!(f, "references ambiguous: {}", self.references_ambiguous)?;
+        writeln!(f, "references union: {}", self.references_union)?;
         write!(f, "references bounded: {}", self.references_bounded)?;
         let m = &self.multi_target;
         write!(
@@ -321,10 +326,11 @@ mod tests {
         let text = report.to_string();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "files discovered: 3");
-        assert_eq!(lines[10], "references bounded: 2");
-        assert!(lines[11].starts_with("multi-target: raw 0 -> shadow-filtered 0"));
-        assert!(lines[12].starts_with("bounded by kind: work 0"));
-        assert_eq!(lines[13], "unresolved no-definition: 4");
+        assert_eq!(lines[10], "references union: 0");
+        assert_eq!(lines[11], "references bounded: 2");
+        assert!(lines[12].starts_with("multi-target: raw 0 -> shadow-filtered 0"));
+        assert!(lines[13].starts_with("bounded by kind: work 0"));
+        assert_eq!(lines[14], "unresolved no-definition: 4");
         assert!(!text.contains("file graphs"));
         assert!(!text.ends_with('\n'));
         report.graph_cache_enabled = true;

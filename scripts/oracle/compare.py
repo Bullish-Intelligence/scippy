@@ -310,6 +310,11 @@ def main():
         cat = category(doc, rng, roles)
         has_a = bool(ta)
         has_b = bool(tb)
+        # Scippy can write several symbols at one range (a true union). Such a position is never an
+        # exact match. It is covered when the set holds the scip-python target.
+        multi = len({k for _, k, _ in ra}) > 1
+        if multi:
+            stats["multi_symbol"] += 1
         if has_b:
             stats["sp_inproj"] += 1
             cat_stats[cat]["sp_inproj"] += 1
@@ -359,6 +364,17 @@ def main():
             stats["miss_" + how] += 1
             cat_stats[cat]["miss"] += 1
             dis.append(("sc_missing_" + how, cat, doc, rng, ra, rb, ta, tb))
+            continue
+        if has_a and has_b and multi:
+            stats["both_multi"] += 1
+            cat_stats[cat]["both_multi"] += 1
+            if any_match(ta, tb, strict):
+                stats["multi_covered"] += 1
+                cat_stats[cat]["multi_covered"] += 1
+            else:
+                stats["multi_not_covered"] += 1
+                cat_stats[cat]["multi_not_covered"] += 1
+                dis.append(("multi_not_covered", cat, doc, rng, ra, rb, ta, tb))
             continue
         if has_a and has_b:
             stats["both"] += 1
