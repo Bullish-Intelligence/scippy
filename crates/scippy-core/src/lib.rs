@@ -76,6 +76,11 @@ pub struct IndexRequest {
     pub trace: Option<PathBuf>,
     /// The number of shards that run at once. The output does not depend on it.
     pub jobs: usize,
+    /// The number of threads that resolve the references of one shard. The output does not
+    /// depend on it. `None` gives each shard its share of `jobs`: `jobs` divided by the number of
+    /// shards that run at once, at least 1. Then the shard threads times the resolve threads do
+    /// not exceed `jobs`.
+    pub resolve_threads: Option<usize>,
     /// The shards run together only while the sum of their memory estimates stays under this
     /// many bytes. A shard over the budget runs alone.
     pub memory_budget: u64,
@@ -105,6 +110,7 @@ impl IndexRequest {
             package_version: None,
             trace: None,
             jobs: schedule::default_jobs(),
+            resolve_threads: None,
             memory_budget: schedule::DEFAULT_MEMORY_BUDGET,
             graph_cache: None,
             graph_cache_max_bytes: cache::DEFAULT_MAX_BYTES,

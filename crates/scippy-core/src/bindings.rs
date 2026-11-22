@@ -10,12 +10,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use stack_graphs::arena::Handle;
 use stack_graphs::graph::{File, Node, SourceInfo, StackGraph, Symbol};
-use stack_graphs::partial::{PartialPath, PartialPaths};
+use stack_graphs::partial::{FrozenPartialPaths, PartialPath, PartialPaths};
 use stack_graphs::stitching::{
     Database, ForwardPartialPathStitcher, StitchBound, StitcherConfig, StitcherLimits,
 };
@@ -648,9 +649,15 @@ impl BindingEngine {
     /// The result lists the files in the order of `add_file`, and the nodes of a file in graph order.
     ///
     /// It also returns the cost of the searches, from the counters of the stitcher.
-    pub fn resolve(&mut self, limits: ResolveLimits) -> (Vec<RawBinding>, SearchWork) {
-        let mut out = Vec::new();
-        let mut cost = SearchWork::default();
+    ///
+    /// With `threads` above 1, the engine freezes its partial paths and resolves the references on
+    /// that many threads. Each thread works in its own overlay of the frozen paths. A search
+    /// starts from the same state in each overlay, so the result does not depend on `threads`.
+    pub fn resolve(
+        &mut self,
+        limits: ResolveLimits,
+        threads: usize,
+    ) -> (Vec<RawBinding>, SearchWork) {
         let config = StitcherConfig::default()
             .with_shadow_aware_similar_paths(self.shadow_aware)
             .with_limits(StitcherLimits {
@@ -660,67 +667,97 @@ impl BindingEngine {
                 max_path_length: None,
             })
             .with_max_scope_depth(self.max_scope_depth);
-        let files = std::mem::take(&mut self.files);
-        let external = &self.external;
-        for (file, path) in &files {
-            let references: Vec<Handle<Node>> = self
-                .graph
-                .nodes_for_file(*file)
-                .filter(|&n| self.graph[n].is_reference())
-                .collect();
-            for node in references {
-                let Some(reference) = self.anchor(node, path) else {
+        let mut jobs: Vec<(Handle<Node>, SourceAnchor)> = Vec::new();
+        for (file, path) in &self.files {
+            for node in self.graph.nodes_for_file(*file) {
+                if !self.graph[node].is_reference() {
                     continue;
-                };
-                let reference_name = self.graph[node].symbol();
-                let mut kept: Vec<(PartialPath, RawEnd)> = Vec::new();
-                let mut all: BTreeSet<RawEnd> = BTreeSet::new();
-                let searched = catch_unwind(AssertUnwindSafe(|| {
-                    ForwardPartialPathStitcher::find_complete_partial_paths_in_scope(
-                        &self.graph,
-                        &mut self.partials,
-                        &self.database,
-                        node,
-                        config,
-                        &stack_graphs::NoCancellation,
-                        |graph, partials, path: &PartialPath| {
-                            // Drop every path that another path shadows. The engine does not
-                            // do it. Its own test runner applies the same filter.
-                            let end = end_of(graph, partials, path, external, reference_name);
-                            all.insert(end.clone());
-                            if kept.iter().any(|(other, _)| other.shadows(partials, path)) {
-                                return;
-                            }
-                            kept.retain(|(other, _)| !path.shadows(partials, other));
-                            kept.push((path.clone(), end));
-                        },
-                    )
-                }));
-                let bound = match searched {
-                    Ok(Ok(stats)) => {
-                        cost.record(stats.work, stats.peak_queue_len, stats.arena_cells_added);
-                        stats.bounded.map(|b| match b {
-                            StitchBound::Work => Bound::Work,
-                            StitchBound::QueueLength => Bound::QueueLength,
-                            StitchBound::ArenaCells => Bound::ArenaCells,
-                            // The search dropped a long path and went on. It has no path-length
-                            // limit here, so this value does not occur. Treat it as a failure.
-                            StitchBound::PathLength => Bound::Failed,
-                        })
-                    }
-                    Ok(Err(_)) | Err(_) => Some(Bound::Failed),
-                };
-                let ends: BTreeSet<RawEnd> = kept.into_iter().map(|(_, end)| end).collect();
-                let shadowed_ends = all.difference(&ends).cloned().collect();
-                out.push(RawBinding {
-                    reference,
-                    ends: ends.into_iter().collect(),
-                    shadowed_ends,
-                    bound,
-                });
+                }
+                if let Some(reference) = self.anchor(node, path) {
+                    jobs.push((node, reference));
+                }
             }
         }
-        self.files = files;
+        let graph = &self.graph;
+        let database = &self.database;
+        let external = &self.external;
+        let mut cost = SearchWork::default();
+        let mut out = Vec::with_capacity(jobs.len());
+        if threads <= 1 || jobs.len() < 2 {
+            let partials = &mut self.partials;
+            for (node, reference) in jobs {
+                let (binding, counters) =
+                    resolve_one(graph, partials, database, external, config, node, reference);
+                if let Some((work, queue, cells)) = counters {
+                    cost.record(work, queue, cells);
+                }
+                out.push(binding);
+            }
+            return (out, cost);
+        }
+        let frozen = std::mem::replace(&mut self.partials, PartialPaths::new()).freeze();
+        // The threads take chunks of references in turn. Each result keeps its index, so the
+        // merge gives the order of `jobs` whatever thread resolved a reference.
+        const CHUNK: usize = 16;
+        let next = AtomicUsize::new(0);
+        let jobs = &jobs;
+        let parts: Vec<Vec<(usize, ResolvedOne)>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads)
+                .map(|_| {
+                    let frozen = &frozen;
+                    let next = &next;
+                    // A resolve thread needs the stack of a shard worker.
+                    let builder =
+                        std::thread::Builder::new().stack_size(crate::schedule::WORKER_STACK_BYTES);
+                    let spawned = builder.spawn_scoped(scope, move || {
+                        let mut partials = frozen.overlay();
+                        let mut mine = Vec::new();
+                        loop {
+                            let start = next.fetch_add(CHUNK, Ordering::Relaxed);
+                            if start >= jobs.len() {
+                                break;
+                            }
+                            for (i, (node, reference)) in
+                                jobs.iter().enumerate().skip(start).take(CHUNK)
+                            {
+                                let one = resolve_one(
+                                    graph,
+                                    &mut partials,
+                                    database,
+                                    external,
+                                    config,
+                                    *node,
+                                    reference.clone(),
+                                );
+                                mine.push((i, one));
+                            }
+                        }
+                        mine
+                    });
+                    spawned.expect("spawn a resolve thread")
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|w| w.join().expect("a resolve thread panicked"))
+                .collect()
+        });
+        let mut slots: Vec<Option<ResolvedOne>> = Vec::new();
+        slots.resize_with(jobs.len(), || None);
+        for (i, one) in parts.into_iter().flatten() {
+            slots[i] = Some(one);
+        }
+        self.partials = match FrozenPartialPaths::thaw(frozen) {
+            Ok(partials) => partials,
+            Err(_) => unreachable!("every overlay has dropped"),
+        };
+        for slot in slots {
+            let (binding, counters) = slot.expect("every reference has a result");
+            if let Some((work, queue, cells)) = counters {
+                cost.record(work, queue, cells);
+            }
+            out.push(binding);
+        }
         (out, cost)
     }
 
@@ -728,6 +765,72 @@ impl BindingEngine {
         let info = self.graph.source_info(node)?;
         anchor_from_info(info, path)
     }
+}
+
+/// The result of one search: the binding, and the counters of the stitcher when the search
+/// returned them.
+type ResolvedOne = (RawBinding, Option<(usize, usize, usize)>);
+
+/// Resolve one reference node with bounded work.
+fn resolve_one(
+    graph: &StackGraph,
+    partials: &mut PartialPaths,
+    database: &Database,
+    external: &HashSet<String>,
+    config: StitcherConfig,
+    node: Handle<Node>,
+    reference: SourceAnchor,
+) -> ResolvedOne {
+    let reference_name = graph[node].symbol();
+    let mut kept: Vec<(PartialPath, RawEnd)> = Vec::new();
+    let mut all: BTreeSet<RawEnd> = BTreeSet::new();
+    let searched = catch_unwind(AssertUnwindSafe(|| {
+        ForwardPartialPathStitcher::find_complete_partial_paths_in_scope(
+            graph,
+            partials,
+            database,
+            node,
+            config,
+            &stack_graphs::NoCancellation,
+            |graph, partials, path: &PartialPath| {
+                // Drop every path that another path shadows. The engine does not
+                // do it. Its own test runner applies the same filter.
+                let end = end_of(graph, partials, path, external, reference_name);
+                all.insert(end.clone());
+                if kept.iter().any(|(other, _)| other.shadows(partials, path)) {
+                    return;
+                }
+                kept.retain(|(other, _)| !path.shadows(partials, other));
+                kept.push((path.clone(), end));
+            },
+        )
+    }));
+    let mut counters = None;
+    let bound = match searched {
+        Ok(Ok(stats)) => {
+            counters = Some((stats.work, stats.peak_queue_len, stats.arena_cells_added));
+            stats.bounded.map(|b| match b {
+                StitchBound::Work => Bound::Work,
+                StitchBound::QueueLength => Bound::QueueLength,
+                StitchBound::ArenaCells => Bound::ArenaCells,
+                // The search dropped a long path and went on. It has no path-length
+                // limit here, so this value does not occur. Treat it as a failure.
+                StitchBound::PathLength => Bound::Failed,
+            })
+        }
+        Ok(Err(_)) | Err(_) => Some(Bound::Failed),
+    };
+    let ends: BTreeSet<RawEnd> = kept.into_iter().map(|(_, end)| end).collect();
+    let shadowed_ends = all.difference(&ends).cloned().collect();
+    (
+        RawBinding {
+            reference,
+            ends: ends.into_iter().collect(),
+            shadowed_ends,
+            bound,
+        },
+        counters,
+    )
 }
 
 fn anchor_from_info(info: &SourceInfo, path: &ProjectRelativePath) -> Option<SourceAnchor> {
@@ -959,5 +1062,73 @@ global ROOT_NODE
             *byte ^= 0xff;
         }
         assert_falls_back(flipped);
+    }
+
+    /// Rules with references. An assignment defines its name at the root. Each identifier is a
+    /// reference to its name.
+    const REFERENCE_TSG: &str = r#"global FILE_PATH
+global ROOT_NODE
+(assignment left: (identifier) @n) {
+  node def
+  attr (def) type = "pop_symbol", symbol = (source-text @n), is_definition, source_node = @n
+  edge ROOT_NODE -> def
+}
+(identifier) @id {
+  node ref
+  attr (ref) type = "push_symbol", symbol = (source-text @id), is_reference, source_node = @id
+  edge ref -> ROOT_NODE
+}
+"#;
+
+    /// Build an engine over `count` small files. Each file defines two names and refers to
+    /// names of the next file and to a name that nobody defines.
+    fn engine_with_references(count: usize) -> BindingEngine {
+        let mut rules = rules(None);
+        rules.tsg_source = REFERENCE_TSG;
+        let (mut engine, _) = start(&rules);
+        for n in 0..count {
+            let next = (n + 1) % count;
+            let source = format!("v{n} = 1\nw{n} = v{n}\nprint(v{next}, w{next}, lost{n}, v{n})\n");
+            let path = ProjectRelativePath::new(&format!("m{n}.py")).unwrap();
+            engine
+                .add_file(0, &path, &source, &[], true)
+                .expect("the file builds");
+        }
+        engine
+    }
+
+    #[test]
+    fn resolving_on_threads_gives_the_bindings_of_one_thread() {
+        let mut engine = engine_with_references(40);
+        let cells = engine.partials.allocated_cells();
+        let (one, one_work) = engine.resolve(ResolveLimits::default(), 1);
+        assert!(one.len() > 4 * 16, "the references fill several chunks");
+        assert!(
+            one.iter().any(|b| !b.ends.is_empty()),
+            "some references resolve"
+        );
+        assert!(
+            one.iter().any(|b| b.ends.is_empty()),
+            "some references do not"
+        );
+        assert_eq!(cells, engine.partials.allocated_cells());
+        let expected = format!("{one:?}");
+        for threads in [2, 4, 7] {
+            let (many, many_work) = engine.resolve(ResolveLimits::default(), threads);
+            assert_eq!(expected, format!("{many:?}"), "{threads} threads");
+            assert_eq!(one_work, many_work, "{threads} threads");
+            // The engine takes its partial paths back after the threads end.
+            assert_eq!(cells, engine.partials.allocated_cells());
+        }
+        let (again, _) = engine.resolve(ResolveLimits::default(), 1);
+        assert_eq!(expected, format!("{again:?}"));
+    }
+
+    #[test]
+    fn more_threads_than_references_work() {
+        let mut engine = engine_with_references(1);
+        let (one, _) = engine.resolve(ResolveLimits::default(), 1);
+        let (many, _) = engine.resolve(ResolveLimits::default(), 64);
+        assert_eq!(format!("{one:?}"), format!("{many:?}"));
     }
 }

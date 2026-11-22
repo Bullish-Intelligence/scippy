@@ -84,6 +84,9 @@ pub(super) fn index_pack(
         members: &members,
         request,
         cache,
+        resolve_threads: request
+            .resolve_threads
+            .unwrap_or_else(|| schedule::default_resolve_threads(request.jobs, groups.len())),
     };
     let jobs: Vec<(u64, usize)> = groups
         .iter()
@@ -327,6 +330,8 @@ pub(super) struct ShardContext<'a> {
     request: &'a IndexRequest,
     /// The state of the graph cache for the whole run.
     cache: &'a Arc<CacheGate>,
+    /// The number of threads that resolve the references of one shard.
+    resolve_threads: usize,
 }
 
 impl ShardContext<'_> {
@@ -412,7 +417,7 @@ pub(super) fn index_shard(
     }
     report.graph_cache_hits = engine.cache_hits;
     report.graph_cache_misses = engine.cache_misses;
-    let (bindings, search_work) = engine.resolve(cx.request.resolve_limits);
+    let (bindings, search_work) = engine.resolve(cx.request.resolve_limits, cx.resolve_threads);
     report.search_work = search_work;
     Ok(ShardOutput {
         docs,

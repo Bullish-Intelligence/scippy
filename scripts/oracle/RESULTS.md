@@ -755,3 +755,44 @@ depth cap). Cross-file `TypeVar`s. Literal-versus-annotation ambiguity in 7 mypy
 (`server/update.py:1129`, `1135`, `1137`, and `stubdoc.py:472`, `475`, `477`, `514`).
 
 The gate (`projectman verify`, full) is green on the lane. No TypeScript golden file changed.
+
+## Run 2026-11-21: resolve threads over frozen partial paths
+
+Fork commit dc75eb5 on c8e54f0; Scippy lane `resolve-threads` on main 6c0c0d3. The baseline is the
+saved run of Scippy 6f43c300 on the pin 27e2435 (`pin-27e2435/runs`). Scored against scip-python
+0.6.8, graph cache off, `-j 8` on 8 logical cores, `--trace`. The machine was shared with other
+work (load average 3 to 8), so the times are indicative.
+
+The fork commit adds `PartialPaths::freeze` and `FrozenPartialPaths::overlay`. An overlay reads the
+frozen arenas and adds its new cells to its own storage. Scippy resolves the references of a shard
+on threads. Each thread owns one overlay, takes the references in chunks of 16, and writes each
+result to the slot of its reference. The merge reads the slots in order. The new option
+`--resolve-threads N` sets the number of threads. The default is `--jobs` divided by the number of
+shards that run at once, at least 1. Each corpus below is one shard, so the default is 8 threads.
+
+The fork commits between the pin 27e2435 of the baseline and dc75eb5 are 349fb5d (shadow check in
+one pass), c8e54f0 (cached regular expression of `replace`), and dc75eb5 (the overlay arenas).
+
+| Corpus | rich | stdlib | mypy |
+|---|---|---|---|
+| Wall time, 1 thread | 13.1 s | 112.1 s | 189.9 s |
+| Wall time, default (8 threads) | 10.7 s | 59.7 s | 95.9 s |
+| Peak memory, 1 thread to 8 threads | 0.57 to 0.59 GB | 1.59 to 2.33 GB | 4.20 to 4.16 GB |
+| `index.scip` at 1 and 8 threads | identical | identical | identical |
+| `--trace` at 1 and 8 threads | identical | identical | identical |
+| Output against the baseline run of 6f43c300 | identical | identical | identical |
+| Raw recall | 96.82% | 97.73% | 94.24% |
+| Precision (raw) | 99.06% | 99.20% | 95.56% |
+| Wrong targets | 0 | 131 | 0 |
+| Changed locations against the baseline | 0 | 0 | 0 |
+
+The `index.scip` and `--trace` files of the 8-thread run have the same SHA-256 as the files of the
+saved baseline run, so the two fork commits between the pins (349fb5d, c8e54f0) change no result on
+these corpora. The oracle metrics equal the baseline metrics line by line. A run of the baseline in
+the same session was not repeated: the baseline wall times in `pin-27e2435` ran under another load.
+
+The speed-up is 1.2x on rich (10 s of work), 1.9x on stdlib, and 2.0x on mypy. The machine had
+8 cores and a load of 3 to 8, so the figures understate an idle machine. The peak memory of stdlib
+rises by 0.75 GB. The cause is not measured. The likely cause is that eight searches run at once,
+and each one holds its own arena cells. The unit test
+`resolving_on_threads_gives_the_bindings_of_one_thread` checks 1, 2, 4, and 7 threads on 40 files.

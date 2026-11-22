@@ -6,7 +6,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 /// The stack of a worker. The main thread has 8 MiB. The workers need no less.
-const WORKER_STACK_BYTES: usize = 256 << 20;
+pub(crate) const WORKER_STACK_BYTES: usize = 256 << 20;
 
 /// The memory budget that a run uses when the caller gives none: 50 GiB.
 pub(crate) const DEFAULT_MEMORY_BUDGET: u64 = 50 << 30;
@@ -14,6 +14,15 @@ pub(crate) const DEFAULT_MEMORY_BUDGET: u64 = 50 << 30;
 /// The number of workers that a run uses when the caller gives none.
 pub(crate) fn default_jobs() -> usize {
     thread::available_parallelism().map_or(1, |n| n.get())
+}
+
+/// The number of threads that resolve the references of one shard when the caller gives none.
+///
+/// At most `min(jobs, shards)` shards run at once. Each of them gets the same share of `jobs`,
+/// so the shard threads times the resolve threads stay at or under `jobs`. A share is at least 1.
+pub(crate) fn default_resolve_threads(jobs: usize, shards: usize) -> usize {
+    let at_once = jobs.max(1).min(shards.max(1));
+    (jobs / at_once).max(1)
 }
 
 /// Lock a mutex and recover the guard when another thread panicked while it held the lock.
@@ -129,6 +138,26 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn the_resolve_threads_share_the_jobs_between_the_shards() {
+        // One shard gets every job.
+        assert_eq!(default_resolve_threads(16, 1), 16);
+        // Fewer shards than jobs: the share rounds down.
+        assert_eq!(default_resolve_threads(16, 3), 5);
+        assert_eq!(default_resolve_threads(16, 4), 4);
+        // At least as many shards as jobs: one thread for each shard.
+        assert_eq!(default_resolve_threads(16, 16), 1);
+        assert_eq!(default_resolve_threads(16, 100), 1);
+        assert_eq!(default_resolve_threads(1, 5), 1);
+        // The shard threads times the resolve threads never exceed the jobs.
+        for jobs in 1..40 {
+            for shards in 0..60 {
+                let at_once = jobs.min(shards.max(1));
+                assert!(at_once * default_resolve_threads(jobs, shards) <= jobs);
+            }
+        }
+    }
 
     #[test]
     fn the_default_budget_is_50_gib() {

@@ -41,7 +41,7 @@ This table says only what the tests cover.
 | Platform | Linux x86_64, built and tested in the devenv. No other platform is built or tested. |
 | Rust toolchain | The devenv provides rustc 1.99.0. `Cargo.toml` declares `rust-version = 1.85` and edition 2024. Only the devenv toolchain is tested. |
 | `scip` CLI | v0.10.0. The tests use it. |
-| Stack Graphs fork | `Bullish-Intelligence/stack-graphs` at rev `c8e54f077bbdcc7322337a1331ca19b2d7e7f3c2`. Four crates use one pin. |
+| Stack Graphs fork | `Bullish-Intelligence/stack-graphs` at rev `dc75eb5679625a819eb88f9a84ce4057f6e57641`. Four crates use one pin. |
 
 Exit codes of `scippy index`: 0 complete, 3 finished but incomplete, 1 failure, 2 usage
 (see "The result of `scippy index`").
@@ -366,7 +366,7 @@ the root. Tests and scripts of a dependency stay out. Without a manifest, nothin
 The resolver of the Python and TypeScript packs is our fork, `Bullish-Intelligence/stack-graphs`. The root `Cargo.toml`
 pins it to one commit for the four fork crates. To bump the pin, change the `rev` of the
 four lines to the same commit and run the full verify.
-The pin is `c8e54f077bbdcc7322337a1331ca19b2d7e7f3c2`. Commit `9a584b8` is an ancestor of the pin. It speeds up the stitcher and adds the option to turn off the debug
+The pin is `dc75eb5679625a819eb88f9a84ce4057f6e57641`. Commit `9a584b8` is an ancestor of the pin. It speeds up the stitcher and adds the option to turn off the debug
 attributes (see "Performance" below). Commit `91450c8` resolves the names in `match` patterns. Commit `013c27c` added
 the synthesized `__init__` of model classes and `TypedDict` classes (see below). Commit `be7ece9` added type parameters, type aliases, the walrus, and relative
 imports with any number of dots. Commit `55f33f4` added the synthesized `__init__` of dataclasses
@@ -585,6 +585,14 @@ depend on the number of workers.
 - The scheduler starts the largest shards first. It starts a shard only when the estimates of the
   running shards and of this shard stay under the budget. A shard over the budget runs alone.
 - A project with one shard, or no shards, runs on the calling thread.
+- `--resolve-threads N` sets the number of threads that resolve the references of one shard. The
+  default is the value of `--jobs` divided by the number of shards that run at once, at least 1.
+  So the shard threads times the resolve threads do not exceed `--jobs`. A project with one shard
+  and `--jobs 8` resolves on 8 threads. The engine freezes the partial paths of the shard. Each
+  thread works in its own overlay of them, takes the references in chunks of 16, and writes each
+  result to a slot of its reference. The merge reads the slots in order, so the `.scip` file and
+  the `--trace` file do not depend on `--resolve-threads`. The overlays add little memory: the
+  peak resident memory of mypy stays at 4.2 GB.
 
 Set `SCIPPY_SHARD_LOG=1` to print the estimate, the start resident memory, and the peak resident
 memory of each shard. A sampling thread reads `VmRSS` every 10 ms, so the log does not change the
