@@ -11,8 +11,9 @@
 //! It reads no syntax. It never guesses: an unresolved supertype and a supertype outside the
 //! project give no relationship.
 //!
-//! The module also tells whether the candidates of an ambiguous reference form a true union:
-//! members of classes that have no inheritance relation. See [`Inheritance::is_union`].
+//! The module also tells whether the candidates of an ambiguous reference form a union: members of
+//! distinct classes. See [`Inheritance::is_union`]. For an override chain of attributes, it picks
+//! one candidate. See [`Inheritance::pick_attribute`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +28,10 @@ pub(crate) struct Inheritance {
     methods: BTreeMap<SymbolId, BTreeMap<String, SymbolId>>,
     /// The class that owns each member: a method, an attribute, or a property.
     owners: BTreeMap<SymbolId, SymbolId>,
+    /// The symbols of all methods.
+    method_symbols: BTreeSet<SymbolId>,
+    /// The members that an annotation declares (`x: T` in a class body, `self.x: T = v`).
+    annotated: BTreeSet<SymbolId>,
 }
 
 /// The most candidates that an ambiguous reference can have and still count as a union.
@@ -43,6 +48,7 @@ impl Inheritance {
 
     /// Record a method that `class` declares. A symbol that the code declares twice is one method.
     pub fn add_method(&mut self, class: &SymbolId, name: &str, method: SymbolId) {
+        self.method_symbols.insert(method.clone());
         self.methods
             .entry(class.clone())
             .or_default()
@@ -53,6 +59,51 @@ impl Inheritance {
     /// Record that `class` owns `member`: a method, an attribute, or a property.
     pub fn add_member(&mut self, class: &SymbolId, member: SymbolId) {
         self.owners.entry(member).or_insert_with(|| class.clone());
+    }
+
+    /// Record that an annotation declares `member`.
+    pub fn add_annotated(&mut self, member: SymbolId) {
+        self.annotated.insert(member);
+    }
+
+    /// The one target of an attribute override chain, when there is one.
+    ///
+    /// Every candidate is an attribute, not a method. The owners are distinct classes, and each
+    /// pair of them is related by inheritance. An annotated declaration wins over a plain store.
+    /// Among the remaining candidates, the most derived owner wins. A type checker reads the same
+    /// value: the declared type first, else the most derived store. Without a unique winner, the
+    /// result is `None`.
+    pub fn pick_attribute(&self, candidates: &[SymbolId]) -> Option<SymbolId> {
+        if candidates.len() < 2 || candidates.iter().any(|c| self.method_symbols.contains(c)) {
+            return None;
+        }
+        let owners = candidates
+            .iter()
+            .map(|c| self.owners.get(c))
+            .collect::<Option<Vec<_>>>()?;
+        let derives = |a: &SymbolId, b: &SymbolId| self.ancestors(a).contains(b);
+        let is_chain = owners.iter().enumerate().all(|(i, a)| {
+            owners[i + 1..]
+                .iter()
+                .all(|b| derives(a, b) || derives(b, a))
+        });
+        if !is_chain {
+            return None;
+        }
+        let mut pool: Vec<usize> = (0..candidates.len())
+            .filter(|&i| self.annotated.contains(&candidates[i]))
+            .collect();
+        if pool.is_empty() {
+            pool = (0..candidates.len()).collect();
+        }
+        let mut winners = pool.iter().filter(|&&i| {
+            pool.iter()
+                .all(|&j| i == j || derives(owners[i], owners[j]))
+        });
+        match (winners.next(), winners.next()) {
+            (Some(&one), None) => Some(candidates[one].clone()),
+            _ => None,
+        }
     }
 
     /// Every direct or indirect supertype of `class`. A cycle ends.
@@ -67,18 +118,16 @@ impl Inheritance {
         seen
     }
 
-    /// True when the candidates of an ambiguous reference are the members of unrelated classes.
+    /// True when the candidates of an ambiguous reference are members of distinct classes.
     ///
-    /// A true union is a value with the type `A | B`, or a value that `isinstance(x, (A, B))`
+    /// A union is a value with the type `A | B`, or a value that `isinstance(x, (A, B))`
     /// narrows. Each candidate then belongs to its own class, and the reference names the member
-    /// of whichever class the value has. The conditions:
+    /// of whichever class the value has. The owners can be related: a base declaration and its
+    /// overrides form an override chain, and the receiver can have any class of the chain.
+    /// The conditions:
     /// - there are two candidates at least, and `UNION_CAP` at most;
     /// - every candidate is a member that a class of the project owns;
-    /// - no owner is one class with another owner, or a subclass or superclass of it, directly
-    ///   or through other classes. Such a set is an override chain or a shadowed member.
-    ///
-    /// A supertype that the project does not resolve gives no relation, so a union of two classes
-    /// can hide a relation that the resolver does not know.
+    /// - no two candidates have one owner. Such a set is a shadowed member.
     pub fn is_union(&self, candidates: &[SymbolId]) -> bool {
         if candidates.len() < 2 || candidates.len() > UNION_CAP {
             return false;
@@ -86,15 +135,11 @@ impl Inheritance {
         let Some(owners) = candidates
             .iter()
             .map(|c| self.owners.get(c))
-            .collect::<Option<Vec<_>>>()
+            .collect::<Option<BTreeSet<_>>>()
         else {
             return false;
         };
-        owners.iter().enumerate().all(|(i, a)| {
-            owners[i + 1..]
-                .iter()
-                .all(|b| a != b && !self.ancestors(a).contains(b) && !self.ancestors(b).contains(a))
-        })
+        owners.len() == candidates.len()
     }
 
     /// The base methods that each method overrides, by method symbol.
@@ -262,24 +307,69 @@ mod tests {
     }
 
     #[test]
-    fn related_owners_are_no_union() {
+    fn related_owners_are_an_override_chain_and_form_a_union() {
         let mut i = Inheritance::default();
         class(&mut i, "Base", &[], &["run"]);
         class(&mut i, "Child", &["Base"], &["run"]);
         class(&mut i, "Grand", &["Child"], &["run"]);
         class(&mut i, "Other", &[], &["run"]);
         // Direct and indirect inheritance, in both orders.
-        assert!(!i.is_union(&[member("Base", "run"), member("Child", "run")]));
-        assert!(!i.is_union(&[member("Grand", "run"), member("Base", "run")]));
-        assert!(!i.is_union(&[member("Child", "run"), member("Grand", "run")]));
-        // One related pair spoils a set of three.
-        assert!(!i.is_union(&[
+        assert!(i.is_union(&[member("Base", "run"), member("Child", "run")]));
+        assert!(i.is_union(&[member("Grand", "run"), member("Base", "run")]));
+        assert!(i.is_union(&[
+            member("Base", "run"),
+            member("Child", "run"),
+            member("Grand", "run")
+        ]));
+        // An unrelated class joins the chain.
+        assert!(i.is_union(&[
             member("Other", "run"),
             member("Base", "run"),
             member("Grand", "run")
         ]));
-        // An unrelated class joins the base in a union.
-        assert!(i.is_union(&[member("Other", "run"), member("Base", "run")]));
+        // One class never joins itself.
+        assert!(!i.is_union(&[member("Base", "run"), member("Base", "run")]));
+    }
+
+    /// A class with attributes (members that are no methods).
+    fn attrs(inheritance: &mut Inheritance, name: &str, supertypes: &[&str], attributes: &[&str]) {
+        for supertype in supertypes {
+            inheritance.add_supertype(&sym(name), sym(supertype));
+        }
+        for a in attributes {
+            inheritance.add_member(&sym(name), sym(&format!("{name}.{a}")));
+        }
+    }
+
+    #[test]
+    fn an_attribute_chain_picks_the_annotated_declaration_else_the_most_derived() {
+        let mut i = Inheritance::default();
+        attrs(&mut i, "Base", &[], &["t"]);
+        attrs(&mut i, "Mid", &["Base"], &["t"]);
+        attrs(&mut i, "Leaf", &["Mid"], &["t"]);
+        attrs(&mut i, "Other", &[], &["t"]);
+        let all = [member("Base", "t"), member("Mid", "t"), member("Leaf", "t")];
+        // No annotation: the most derived store wins.
+        assert_eq!(i.pick_attribute(&all), Some(member("Leaf", "t")));
+        // An annotation in the base wins over the stores of the subclasses.
+        i.add_annotated(member("Base", "t"));
+        assert_eq!(i.pick_attribute(&all), Some(member("Base", "t")));
+        // Two annotations: the most derived annotated one wins.
+        i.add_annotated(member("Mid", "t"));
+        assert_eq!(i.pick_attribute(&all), Some(member("Mid", "t")));
+        // An unrelated owner makes the set a union, not a chain.
+        assert_eq!(
+            i.pick_attribute(&[member("Base", "t"), member("Other", "t")]),
+            None
+        );
+        // A method chain gives no pick.
+        let mut m = Inheritance::default();
+        class(&mut m, "Base", &[], &["run"]);
+        class(&mut m, "Child", &["Base"], &["run"]);
+        assert_eq!(
+            m.pick_attribute(&[member("Base", "run"), member("Child", "run")]),
+            None
+        );
     }
 
     #[test]
@@ -317,9 +407,7 @@ mod tests {
         let mut i = Inheritance::default();
         class(&mut i, "X", &["Y"], &["go"]);
         class(&mut i, "Y", &["X"], &["go"]);
-        class(&mut i, "Z", &[], &["go"]);
-        assert!(!i.is_union(&[member("X", "go"), member("Y", "go")]));
-        assert!(i.is_union(&[member("X", "go"), member("Z", "go")]));
+        assert_eq!(i.ancestors(&sym("X")).len(), 2);
     }
 
     #[test]

@@ -97,9 +97,8 @@ The gate checks a candidate Scippy build against the baseline. It fails when:
 3. a location changes from resolved to unresolved, or to a different target, and `gate-allow.txt`
    does not list it;
 4. an occurrence has several symbols and the set is not a true union: a symbol is no member of a
-   class, there are more than 4 symbols, or two owner classes are one class or are related by
-   inheritance (`owners.py` reads the base classes from the corpus sources and from both indexes).
-   A true union passes. The gate prints the count against the baseline and the covered recall.
+   class, there are more than 4 symbols, or two symbols have one owner class. The owner classes
+   can be related by inheritance: an override chain is a union (`owners.py`). A true union passes. The gate prints the count against the baseline and the covered recall.
 
 The gate is not in `pm verify`: a mypy run takes minutes. Run it before you land a change to
 the resolver, the rules, or the fork pin.

@@ -1193,3 +1193,32 @@ name at the use site, so the 4 uses of `_legacy_httpx` in `_ssrf.py` stayed real
 name at the Scippy definition and needs an import statement of that name above it. `sp_local_class_owner`
 needs a `class` line at the scip-python definition. `sp_class_cell` needs an assignment at the Scippy
 definition.
+
+
+## Run 2026-11-23: override chains are unions
+
+Scippy lane `unions2` on main `12b97298`. Fork pin `6c1b28c` (unchanged). Base run: a fresh run of main.
+Graph cache off, `--trace`, all six corpora. Correctness only: no timing was taken.
+
+Change: a related owner is legal in a union (an override chain).
+
+- A method chain names every override. The static type of the receiver decides the right one, and
+  no rule can read it.
+- An attribute chain gets one target: the annotated declaration (`x: T`, `x: T = v`, `self.x: T = v`),
+  else the most derived store. Offline, this rule equals scip-python on 46 of 46 references with one
+  scip-python target in the chain.
+- The gate (`owners.py`) no longer reads the base classes. A set fails when two symbols have one owner.
+
+Ambiguous references with no occurrence, main to lane: mypy 30 to 5, stdlib 41 to 26, pydantic-ai 36 to 10,
+celery 8 to 0, scrapy 4 to 1, rich 1 to 1. Total 120 to 43.
+
+`difftool.py`, main against the lane: lost 0 and changed 0 on every corpus. Gained: mypy 25, stdlib 15,
+pydantic-ai 26, celery 8, scrapy 3, rich 0. That is 49 more exact positions in `both` on the five corpora
+(mypy 16, stdlib 13, pydantic-ai 11, celery 6, scrapy 3). Real wrong does not change (mypy 0, stdlib 9,
+pydantic-ai 44, celery 2, scrapy 0, rich 0).
+
+Gate against the stored baseline: lane and main fail on the same 9 locations. They come from the pin
+`6c1b28c`. The lane `gatefix` owns them: stdlib `unittest/mock.py:460:56` and `unittest/signals.py`
+(4 positions), pydantic-ai `openai.py:4353:88` and `google.py:2289:13`, `2289:41`, `2290:13`.
+The lane adds no failing location. Every multi-symbol set is a union (0 other sets).
+Exact recall: mypy 94.2727, stdlib 98.1604, pydantic-ai 96.2530, celery 97.8744, scrapy 96.8689, rich 97.1780.

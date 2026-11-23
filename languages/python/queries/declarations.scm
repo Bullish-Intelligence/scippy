@@ -107,6 +107,18 @@
   attribute: (identifier) @name @definition.field
   (#eq? @receiver "self"))
 
+; Annotated declarations of a member: `x: T` and `x: T = v` in a class body, and `self.x: T = v`
+; in a method. The name token is the same token as the declaration `@name`.
+(assignment
+  left: (identifier) @annotated
+  type: (type))
+(assignment
+  left: (attribute
+    object: (identifier) @receiver
+    attribute: (identifier) @annotated)
+  type: (type)
+  (#eq? @receiver "self"))
+
 ; Parameters.
 (parameter/identifier) @name @definition.parameter
 (parameter/default_parameter

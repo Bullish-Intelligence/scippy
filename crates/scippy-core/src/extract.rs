@@ -68,6 +68,8 @@ pub(crate) struct Facts {
     pub keywords: Vec<(u32, u32)>,
     /// Spans of identifiers that name a supertype in the header of a class.
     pub supertypes: Vec<(u32, u32)>,
+    /// Spans of the names that an annotation declares: `x: T` in a class body, and `self.x: T = v`.
+    pub annotated: Vec<(u32, u32)>,
     /// Extents of the nodes that hold declarations and have no name, such as arrow functions.
     pub scopes: Vec<(u32, u32)>,
     /// Pairs of a binding name and the span of the reference that gives the name its target.
@@ -100,6 +102,7 @@ pub(crate) struct Extractor {
     keyword: Option<u32>,
     module: Option<u32>,
     supertype: Option<u32>,
+    annotated: Option<u32>,
     scope: Option<u32>,
     anchor: Option<u32>,
     alias_name: Option<u32>,
@@ -126,6 +129,7 @@ impl Extractor {
         let mut keyword = None;
         let mut module = None;
         let mut supertype = None;
+        let mut annotated = None;
         let mut scope = None;
         let mut anchor = None;
         let mut alias_name = None;
@@ -141,6 +145,7 @@ impl Extractor {
                 "keyword" => keyword = Some(index),
                 "module" => module = Some(index),
                 "supertype" => supertype = Some(index),
+                "annotated" => annotated = Some(index),
                 "scope" => scope = Some(index),
                 "anchor" => anchor = Some(index),
                 "alias.name" => alias_name = Some(index),
@@ -165,6 +170,7 @@ impl Extractor {
             keyword,
             module,
             supertype,
+            annotated,
             scope,
             anchor,
             alias_name,
@@ -199,6 +205,7 @@ impl Extractor {
         let mut members = Vec::new();
         let mut keywords = Vec::new();
         let mut supertypes = Vec::new();
+        let mut annotated_spans = Vec::new();
         let mut scopes = Vec::new();
         let mut aliases = Vec::new();
         let mut hidden_spans = Vec::new();
@@ -244,6 +251,9 @@ impl Extractor {
             }
             if let Some(supertype) = self.supertype.and_then(node) {
                 supertypes.push((supertype.start_byte() as u32, supertype.end_byte() as u32));
+            }
+            if let Some(name) = self.annotated.and_then(node) {
+                annotated_spans.push((name.start_byte() as u32, name.end_byte() as u32));
             }
             if let Some(member) = self.member.and_then(node) {
                 members.push((member.start_byte() as u32, member.end_byte() as u32));
@@ -339,6 +349,9 @@ impl Extractor {
         supertypes.sort_unstable();
         supertypes.dedup();
         facts.supertypes = supertypes;
+        annotated_spans.sort_unstable();
+        annotated_spans.dedup();
+        facts.annotated = annotated_spans;
         scopes.sort_unstable();
         scopes.dedup();
         facts.scopes = scopes;

@@ -11,9 +11,10 @@ guard (ADR-011): it runs in the tests, and it is not supported.
 names across files with the Stack Graphs engine, and writes definition, import, and reference
 occurrences. A reference that the engine cannot resolve to one declaration gets no target, with
 one exception: a union. When the candidates of an ambiguous reference are members of at most four
-classes that have no inheritance relation (`e: A | B` then `e.items`, or `isinstance(x, (A, B))`),
+distinct classes (`e: A | B` then `e.items`, or `isinstance(x, (A, B))`, or an override chain),
 the index has one occurrence for each candidate, all at one range. SCIP allows several
-occurrences at one range.
+occurrences at one range. An attribute override chain is no union: it gets one target (the
+annotated declaration, else the most derived store).
 `scippy languages` lists the built-in language packs.
 
 The Loci pack (Gate 5) indexes a notes vault: a project root that has `.loci/vault.toml`.
@@ -516,13 +517,19 @@ The reconciler turns the engine paths of one reference into one target, or none.
 - It ignores an end that joins no declaration, such as an import alias or a module.
 - It prefers a definition in the project over a definition in an external asset.
 - It counts distinct symbols. One symbol is Resolved. Two or more are Ambiguous.
-- The finishing stage marks an Ambiguous reference as a union when every candidate is a method,
-  an attribute, or a property of a class of the project, there are at most 4 candidates, and no
-  owner class is one class with another owner, or a subclass or superclass of it (direct or
-  through other classes). A union gets one occurrence for each candidate, in the order of the
-  symbols. The store keeps the reference as ambiguous with its candidates. Override chains,
-  module-level names, mixed kinds, members of external classes, and more than 4 candidates stay
-  ambiguous with no occurrence. A base class that the project does not resolve gives no relation.
+- The finishing stage resolves an attribute override chain to one candidate. Every candidate is
+  an attribute of a class of the project, and each pair of owner classes is related by
+  inheritance. The annotated declaration wins (`x: T`, `x: T = v`, `self.x: T = v`, found with
+  the `@annotated` capture). Without one, the most derived owner wins. Without a unique winner,
+  the reference stays ambiguous.
+- The finishing stage marks any other Ambiguous reference as a union when every candidate is a
+  method, an attribute, or a property of a class of the project, there are at most 4 candidates,
+  and the owner classes are distinct. The owner classes can be related: a method override chain
+  names every override. A union gets one occurrence for each candidate, in the order of the
+  symbols. The store keeps the reference as ambiguous with its candidates. Module-level names,
+  mixed kinds, members of external classes, two members of one class, and more than 4
+  candidates stay ambiguous with no occurrence. A base class that the project does not resolve
+  gives no relation.
 - It prefers the nearest binding. The engine follows values, so a name such as `self` reaches
   its parameter and then the class that the value comes from. The reconciler drops an end
   when its path passes the definition of another symbol. The language pack marks member

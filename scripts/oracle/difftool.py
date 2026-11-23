@@ -13,7 +13,7 @@ both, or neither. A location prints as `doc:LINE:COL`: LINE is 1-based, COL is a
 point offset. The allowlist of gate.py uses the same format.
 `--out PREFIX` writes PREFIX.changes.tsv, and PREFIX.multi.tsv when the candidate has occurrences with
 several symbols. A row of the multi file holds the location, `union` or the reason that the set is
-not a true union (see owners.py), `sp=covered`, `sp=not_covered`, `sp_none`, or `sp_external`, and the
+not a union (see owners.py), `sp=covered`, `sp=not_covered`, `sp_none`, or `sp_external`, and the
 symbols. Import this module for `load_positions` and `diff`.
 """
 import collections
@@ -134,7 +134,6 @@ def main():
         for pos in d[kind][:limit]:
             print("    " + fmt(pos))
     if multi:
-        bases = owners.load_bases(oraclelib.scippy_index(cdir), oraclelib.reference_index(corpus, cdir), root)
         mrows = []
         for doc, rng, syms in sorted(multi):
             pos = (doc, tuple(rng[:2]))
@@ -145,7 +144,7 @@ def main():
                 cov = "sp_external"
             else:
                 cov = "sp=covered" if compare.any_match(locs_of(ct.get(pos, ())), locs_of(rt_), compare.overlap) else "sp=not_covered"
-            mrows.append((fmt(pos), owners.set_problem(syms, bases) or "union", cov, " | ".join(syms)))
+            mrows.append((fmt(pos), owners.set_problem(syms) or "union", cov, " | ".join(syms)))
         kinds = collections.Counter((m[1] if m[1] == "union" else "not a union", m[2]) for m in mrows)
         print("multi-symbol occurrences: %s" % dict(kinds))
         for m in mrows[:limit]:

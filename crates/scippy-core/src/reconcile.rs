@@ -31,7 +31,8 @@
 //!    builtins. A project definition shadows the builtin of the same name.
 //! 6. The ends that join to declarations give the symbols. One distinct symbol means Resolved.
 //!    Two or more distinct symbols mean Ambiguous. No symbol means Unresolved. The finishing stage
-//!    later marks an Ambiguous outcome as a union when its candidates are members of unrelated
+//!    later resolves an attribute override chain to one candidate (`Inheritance::pick_attribute`).
+//!    It marks any other Ambiguous outcome as a union when its candidates are members of distinct
 //!    classes (`Inheritance::is_union`): the index then has one occurrence for each candidate.
 //! 7. A reference never takes a document-local symbol of another document.
 //!    A path that passes the definition node at the span of the reference itself is a value-flow

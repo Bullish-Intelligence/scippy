@@ -66,6 +66,13 @@ pub(super) fn record_inheritance(
             }
         }
     }
+    let annotated: BTreeSet<(u32, u32)> = doc.facts.annotated.iter().copied().collect();
+    for member in doc.declared.iter().filter(|d| is_member(d)) {
+        let name = (member.fact.anchor.start_byte, member.fact.anchor.end_byte);
+        if annotated.contains(&name) {
+            inheritance.add_annotated(member.symbol.clone());
+        }
+    }
     let resolved: HashMap<(u32, u32), &SymbolId> = reconciled
         .iter()
         .filter_map(|r| match &r.outcome {
@@ -102,11 +109,16 @@ pub(super) fn record_inheritance(
     }
 }
 
-/// Mark each ambiguous reference whose candidates are a true union. Call it after the classes
+/// Resolve each ambiguous reference that is an attribute override chain, and mark each other
+/// ambiguous reference whose candidates are a union. Call it after the classes
 /// of every document are in `inheritance`: a candidate can belong to a class of another document.
 pub(super) fn mark_unions(reconciled: &mut [Reconciled], inheritance: &Inheritance) {
     for r in reconciled {
         if let BindingOutcome::Ambiguous(candidates) = &r.outcome {
+            if let Some(pick) = inheritance.pick_attribute(candidates) {
+                r.outcome = BindingOutcome::Resolved(pick);
+                continue;
+            }
             r.union = inheritance.is_union(candidates);
         }
     }

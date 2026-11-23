@@ -461,16 +461,16 @@ class GateMulti(unittest.TestCase):
         n = oraclelib.read_json(os.path.join(d, "gate-cmp", "metrics.json"))["named"]
         self.assertEqual((n["multi_covered"], n["multi_not_covered"]), (0, 1))
 
-    def test_related_owners_fail(self):
-        # C inherits from A (the base reference at line 5).
+    def test_related_owners_are_an_override_chain_and_pass(self):
+        # C inherits from A.
         status, text, _ = self.gate("u-related", [sc("A#go()."), sc("C#go().")])
-        self.assertEqual(status, 1, text)
-        self.assertIn("owners are related", text)
+        self.assertEqual(status, 0, text)
+        self.assertIn("true unions 1, other sets 0", text)
 
     def test_the_same_owner_fails(self):
         status, text, _ = self.gate("u-same", [sc("A#go()."), sc("A#other().")])
         self.assertEqual(status, 1, text)
-        self.assertIn("owners are related", text)
+        self.assertIn("two symbols have one owner", text)
 
     def test_a_module_level_symbol_fails(self):
         status, text, _ = self.gate("u-module", [sc("A#go()."), sc("go().")])
@@ -486,19 +486,14 @@ class Owners(unittest.TestCase):
         for sym in (sc("A#"), sc("f()."), sc("f().(a)"), "local 3", sc("v.")):
             self.assertIsNone(owners.owner_of(sym), sym)
 
-    def test_related_follows_transitive_bases_and_ends_on_a_cycle(self):
-        bases = {"C": {"B"}, "B": {"A"}, "X": {"Y"}, "Y": {"X"}}
-        self.assertTrue(owners.related("C", "A", bases))
-        self.assertTrue(owners.related("A", "C", bases))
-        self.assertTrue(owners.related("A", "A", bases))
-        self.assertFalse(owners.related("A", "D", bases))
-        self.assertTrue(owners.related("X", "Y", bases))
-        self.assertFalse(owners.related("X", "A", bases))
+    def test_the_owners_of_a_set_are_distinct(self):
+        self.assertIsNone(owners.set_problem([sc("A#go()."), sc("B#go().")]))
+        self.assertIn("one owner", owners.set_problem([sc("A#go()."), sc("A#x.")]))
 
     def test_cap(self):
         syms = [sc("C%d#go()." % i) for i in range(5)]
-        self.assertIn("5 symbols", owners.set_problem(syms, {}))
-        self.assertIsNone(owners.set_problem(syms[:4], {}))
+        self.assertIn("5 symbols", owners.set_problem(syms))
+        self.assertIsNone(owners.set_problem(syms[:4]))
 
 
 class Diff(unittest.TestCase):

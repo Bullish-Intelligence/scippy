@@ -186,7 +186,7 @@ pub struct IndexReport {
     pub references_external: usize,
     pub references_unresolved: usize,
     pub references_ambiguous: usize,
-    /// Ambiguous references whose candidates are members of unrelated classes: a true union.
+    /// Ambiguous references whose candidates are members of distinct classes: a union.
     /// The index has one occurrence for each candidate. The count is a part of
     /// `references_ambiguous`.
     pub references_union: usize,

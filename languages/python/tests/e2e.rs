@@ -2151,25 +2151,36 @@ fn a_union_of_unrelated_classes_gets_one_occurrence_for_each_member() {
     assert_eq!(occurrences[0].symbol_roles, occurrences[1].symbol_roles);
     assert!(occurrences.iter().all(|o| !is_definition(o)));
     // The report counts them as ambiguous references that became unions.
-    assert_eq!(indexed.report.references_union, 4);
+    assert_eq!(indexed.report.references_union, 7);
     assert_eq!(indexed.report.references_ambiguous, 8);
 }
 
 #[test]
-fn related_owners_stay_ambiguous() {
+fn related_owners_are_an_override_chain_with_one_occurrence_for_each_override() {
     let indexed = index("unions");
-    // `Child` inherits `Base`: an override chain, not a union.
-    for (context, word) in [
-        ("return r.render()", "render"),
-        ("return g.render()", "render"),
-        // One related pair spoils a set that also holds an unrelated class.
-        ("return m.render()", "render"),
-    ] {
-        assert!(
-            indexed.symbols_of("shapes.py", context, word).is_empty(),
-            "{context}"
-        );
-    }
+    // `Child` inherits `Base`: an override chain. The receiver can be either class, so the
+    // index names the base declaration and the override.
+    let base_and_child = [
+        global("shapes/Base#render()."),
+        global("shapes/Child#render()."),
+    ];
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return r.render()", "render"),
+        base_and_child
+    );
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return g.render()", "render"),
+        base_and_child
+    );
+    // An unrelated class joins the chain.
+    assert_eq!(
+        indexed.symbols_of("shapes.py", "return m.render()", "render"),
+        [
+            global("shapes/Base#render()."),
+            global("shapes/Child#render()."),
+            global("shapes/Solo#render().")
+        ]
+    );
 }
 
 #[test]
