@@ -461,11 +461,22 @@ class GateMulti(unittest.TestCase):
         n = oraclelib.read_json(os.path.join(d, "gate-cmp", "metrics.json"))["named"]
         self.assertEqual((n["multi_covered"], n["multi_not_covered"]), (0, 1))
 
-    def test_related_owners_are_an_override_chain_and_pass(self):
-        # C inherits from A.
+    def test_an_override_chain_passes(self):
+        # C inherits from A (the base reference at line 4).
         status, text, _ = self.gate("u-related", [sc("A#go()."), sc("C#go().")])
         self.assertEqual(status, 0, text)
         self.assertIn("true unions 1, other sets 0", text)
+
+    def test_related_owners_that_are_not_a_chain_from_one_base_fail(self):
+        # C inherits from A, and B is not related to A.
+        status, text, _ = self.gate("u-notchain", [sc("A#go()."), sc("C#go()."), sc("B#go().")])
+        self.assertEqual(status, 1, text)
+        self.assertIn("owners are related", text)
+
+    def test_an_attribute_chain_fails(self):
+        status, text, _ = self.gate("u-attr", [sc("A#x."), sc("C#x.")])
+        self.assertEqual(status, 1, text)
+        self.assertIn("owners are related", text)
 
     def test_the_same_owner_fails(self):
         status, text, _ = self.gate("u-same", [sc("A#go()."), sc("A#other().")])
@@ -486,14 +497,47 @@ class Owners(unittest.TestCase):
         for sym in (sc("A#"), sc("f()."), sc("f().(a)"), "local 3", sc("v.")):
             self.assertIsNone(owners.owner_of(sym), sym)
 
-    def test_the_owners_of_a_set_are_distinct(self):
-        self.assertIsNone(owners.set_problem([sc("A#go()."), sc("B#go().")]))
-        self.assertIn("one owner", owners.set_problem([sc("A#go()."), sc("A#x.")]))
+    def test_related_follows_transitive_bases_and_ends_on_a_cycle(self):
+        bases = {"C": {"B"}, "B": {"A"}, "X": {"Y"}, "Y": {"X"}}
+        self.assertTrue(owners.related("C", "A", bases))
+        self.assertTrue(owners.related("A", "C", bases))
+        self.assertTrue(owners.related("A", "A", bases))
+        self.assertFalse(owners.related("A", "D", bases))
+        self.assertTrue(owners.related("X", "Y", bases))
+        self.assertFalse(owners.related("X", "A", bases))
+
+    def test_the_owners_of_a_set(self):
+        bases = {sc("C#"): {sc("B#")}, sc("B#"): {sc("A#")}}
+        go = lambda *cs: [sc(c + "#go().") for c in cs]  # noqa: E731
+        # Unrelated owners pass, and the order does not matter.
+        self.assertIsNone(owners.set_problem(go("A", "D"), bases))
+        # An override chain from one base passes, with a skipped level too.
+        self.assertIsNone(owners.set_problem(go("A", "B", "C"), bases))
+        self.assertIsNone(owners.set_problem(go("C", "A"), bases))
+        self.assertIsNone(owners.set_problem(go("A", "C"), bases))
+        # Related owners with an unrelated third owner are not a chain from one base.
+        self.assertIn("owners are related", owners.set_problem(go("A", "C", "D"), bases))
+        # Two siblings of one base without the base are related to no one: they pass.
+        bases2 = {sc("B#"): {sc("A#")}, sc("C#"): {sc("A#")}}
+        self.assertIsNone(owners.set_problem(go("B", "C"), bases2))
+        # A chain needs the base in the set: two siblings and a subclass of one are not a chain.
+        bases3 = dict(bases2, **{sc("E#"): {sc("B#")}})
+        self.assertIn("owners are related", owners.set_problem(go("B", "C", "E"), bases3))
+        # An attribute chain has one target.
+        self.assertIn("owners are related", owners.set_problem([sc("A#x."), sc("C#x.")], bases))
+        # Methods with different names are not a chain.
+        self.assertIn("owners are related", owners.set_problem([sc("A#go()."), sc("C#run().")], bases))
+        # The same owner fails.
+        self.assertIn("one owner", owners.set_problem([sc("A#go()."), sc("A#x.")], bases))
+
+    def test_member_name(self):
+        self.assertEqual(owners.member_name(sc("A#go().")), "go")
+        self.assertIsNone(owners.member_name(sc("A#x.")))
 
     def test_cap(self):
         syms = [sc("C%d#go()." % i) for i in range(5)]
-        self.assertIn("5 symbols", owners.set_problem(syms))
-        self.assertIsNone(owners.set_problem(syms[:4]))
+        self.assertIn("5 symbols", owners.set_problem(syms, {}))
+        self.assertIsNone(owners.set_problem(syms[:4], {}))
 
 
 class Diff(unittest.TestCase):
