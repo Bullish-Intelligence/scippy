@@ -1151,3 +1151,45 @@ allows several occurrences at one range (see CHANGELOG).
 Limit: a base class that the project does not resolve gives no relation, so two classes with a hidden
 relation would count as unrelated. The gate cross-checks with the inheritance of scip-python and the
 class statements of the sources. It found none.
+
+## Run 2026-11-23: oracle class `sp_wrong`
+
+Scippy lane `spwrong` on main `12b97298`. Fork pin `6c1b28c`. Label `spwrong-6c1b28c` in
+`classes.csv`. Graph cache off, `--trace`, all six corpora in parallel. Correctness only: no timing was
+taken. No Scippy code changed, only the analyzer (`analyze.py`) and the named numbers (`metrics.py`).
+
+Change: a different target that no earlier class explains was `scippy_wrong`. Now `sp_wrong_cause` runs
+before that. Each of its five rules names one scip-python behaviour and reads the source text, so a new
+Scippy fault stays in real wrong:
+
+- `sp_class_pattern_keyword`: the keyword of a class pattern (`case C(a=a)`). Scip-python gives the
+  capture variable, Scippy the attribute of `C`.
+- `sp_module_for_name`: the first binding of a name is an import (`import httpx as x`, then
+  `x = None`). Scip-python gives the module that holds the name, Scippy a binding of the name.
+- `sp_import_first_binding_other_module`: `from .a import X` after `from .b import X`. Scip-python gives
+  the X of `b`.
+- `sp_local_class_owner`: a member of a class in a function. Scippy gives a local symbol,
+  scip-python the class.
+- `sp_class_cell`: `__class__` that a method assigns. Scippy gives a local, scip-python the method.
+
+| corpus | real wrong before | `sp_wrong` | real wrong | exact recall | exact precision |
+|---|---|---|---|---|---|
+| mypy | 0 | 0 | 0 | 94.2636 | 95.5534 |
+| rich | 0 | 0 | 0 | 97.1780 | 99.0611 |
+| stdlib | 9 | 9 | 0 | 98.1404 | 99.2846 |
+| scrapy | 0 | 0 | 0 | 96.8516 | 97.2828 |
+| celery | 2 | 0 | 2 | 97.8563 | 98.4598 |
+| pydantic-ai | 44 | 44 | 0 | 96.2461 | 99.1024 |
+
+The exact numbers do not change: the analyzer reads the same indexes. Covered numbers do not change
+either. Where the 53 positions go: pydantic-ai 26 `sp_class_pattern_keyword` and 18
+`sp_module_for_name`; stdlib 5 `sp_local_class_owner`, 3 `sp_class_cell`, and 1
+`sp_import_first_binding_other_module`. The 2 celery positions stay real wrong: `celery/worker/request.py:780`
+(a name in a method of a class in a function, where a parameter of the function has the name) and
+`celery/local.py:81` (`__module__` in a class body). No rule covers them on purpose.
+
+Review of the rules: the first version of `sp_module_for_name` did not read the source and used the
+name at the use site, so the 4 uses of `_legacy_httpx` in `_ssrf.py` stayed real wrong. It now reads the
+name at the Scippy definition and needs an import statement of that name above it. `sp_local_class_owner`
+needs a `class` line at the scip-python definition. `sp_class_cell` needs an assignment at the Scippy
+definition.

@@ -102,6 +102,84 @@ class FirstBinding(unittest.TestCase):
         self.assertFalse(analyze.sp_first_binding(r))
 
 
+class SpWrong(unittest.TestCase):
+    """Rules of `sp_wrong_cause`: scip-python is the wrong or coarse side."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="oracle-src-")
+        analyze.root = self.dir
+        write(os.path.join(self.dir, "sw_m.py"),
+              "def f(v):\n"
+              "    match v:\n"
+              "        case P(a=a, b=b):\n"              # line 3: keyword `a` at col 16, capture at col 18
+              "            pass\n"
+              "        case P(a=a):\n"                   # line 5: the capture of an earlier case is reused
+              "            pass\n"
+              "    g(a=a)\n"                           # line 7: a call, not a pattern
+              "class K:\n"
+              "    def m(self):\n"
+              "        __class__ = 1\n"                # line 10: `__class__` at col 8
+              "        return self.obj\n")             # line 11: `obj` at col 20
+        write(os.path.join(self.dir, "sw_n.py"), "import httpx as h\nh = None\n")
+        write(os.path.join(self.dir, "sw_u.py"), "from .unix import X\n")
+
+    def pattern(self, rng, sp_def):
+        return row(doc="sw_m.py", text="a", rng=rng, sc=[["scip-scippy python p 0.0.0 . m/P#a.", [0, 0]]], sp=[["local 1", [0, 0]]],
+                   sc_def=[["sw_m.py", [0, 0, 0, 1]]], sp_def=[["sw_m.py", sp_def]])
+
+    def test_class_pattern_keyword(self):
+        r = self.pattern([2, 15, 2, 16], [2, 17, 2, 18])
+        self.assertEqual(analyze.classify(r)[0], "sp_wrong")
+
+    def test_class_pattern_keyword_with_a_capture_of_an_earlier_case(self):
+        r = self.pattern([4, 15, 4, 16], [2, 17, 2, 18])
+        self.assertEqual(analyze.classify(r)[0], "sp_wrong")
+
+    def test_keyword_of_a_call_is_not_a_pattern(self):
+        r = self.pattern([6, 6, 6, 7], [6, 8, 6, 9])
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+    def test_module_for_a_name(self):
+        r = row(doc="sw_n.py", text="h", sc=[["scip-scippy python p 0.0.0 . n/h.", [0, 0]]], sp=[["scip-python python p 0.0.0 `p.n`/__init__:", [0, 0]]],
+                sc_def=[["sw_n.py", [1, 0, 1, 1]]], sp_def=[["sw_n.py", [0, 0, 0, 0]]])
+        self.assertEqual(analyze.classify(r)[0], "sp_wrong")
+
+    def test_module_of_another_file_is_no_rule(self):
+        r = row(doc="sw_n.py", text="h", sc=[["scip-scippy python p 0.0.0 . n/h.", [0, 0]]], sp=[["scip-python python p 0.0.0 `p.m`/__init__:", [0, 0]]],
+                sc_def=[["sw_n.py", [1, 0, 1, 1]]], sp_def=[["sw_m.py", [0, 0, 0, 0]]])
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+    def test_module_for_a_name_needs_an_import_binding(self):
+        r = row(doc="sw_m.py", text="h", sc=[["scip-scippy python p 0.0.0 . m/h.", [0, 0]]], sp=[["scip-python python p 0.0.0 `p.m`/__init__:", [0, 0]]],
+                sc_def=[["sw_m.py", [1, 0, 1, 1]]], sp_def=[["sw_m.py", [0, 0, 0, 0]]])
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+    def test_local_class_owner(self):
+        r = row(cat="attribute", doc="sw_m.py", text="obj", rng=[10, 20, 10, 23], sc=[["local 4", [0, 0]]],
+                sp=[["scip-python python p 0.0.0 `p.m`/K#", [0, 0]]], sc_def=[["sw_m.py", [10, 8, 10, 11]]], sp_def=[["sw_m.py", [7, 6, 7, 7]]])
+        self.assertEqual(analyze.classify(r)[0], "sp_wrong")
+        r["sp_def"] = [["sw_m.py", [0, 4, 0, 5]]]  # a line that is no class
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+    def test_import_names_the_module_that_scippy_gives(self):
+        r = row(cat="import", doc="sw_u.py", text="X", rng=[0, 17, 0, 18], sc=[["scip-scippy python p 0.0.0 . unix/X.", [0, 0]]],
+                sp=[["scip-python python p 0.0.0 `p.win`/X.", [0, 0]]], sc_def=[["unix.py", [3, 0, 3, 1]]], sp_def=[["win.py", [3, 0, 3, 1]]])
+        self.assertEqual(analyze.classify(r)[0], "sp_wrong")
+        r["sp_def"] = [["other.py", [3, 0, 3, 1]]]
+        r["sc_def"] = [["other2.py", [3, 0, 3, 1]]]
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+    def test_class_cell(self):
+        r = row(doc="sw_m.py", text="__class__", sc=[["local 3", [0, 0]]], sp=[["scip-python python p 0.0.0 `p.m`/C#g().", [0, 0]]],
+                sc_def=[["sw_m.py", [9, 8, 9, 17]]], sp_def=[["sw_m.py", [8, 8, 8, 9]]])
+        self.assertEqual(analyze.classify(r)[0], "sp_wrong")
+        r["sc_def"] = [["sw_m.py", [0, 0, 0, 1]]]  # not an assignment
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+        r["sc_def"] = [["sw_m.py", [9, 8, 9, 17]]]
+        r["text"] = "other"
+        self.assertEqual(analyze.classify(r)[0], "scippy_wrong")
+
+
 class BuiltinTypeAttr(unittest.TestCase):
     def test_attribute_named_type(self):
         r = row(kind="sp_missing_external", cat="attribute", text="type", sp=[[SP + "builtins/type#", [0, 0]]],

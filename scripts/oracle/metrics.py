@@ -14,6 +14,7 @@ Each named number answers one question. There is no blended score:
   import-prefix convention         `a` of `import a.b.c` or `a.b.X`: package or submodule
   same-name other class            both give a member of that name, in different classes
   scip-python first binding        scip-python takes the first of two declarations of a name
+  scip-python wrong or coarse      a named rule of analyze.py (`sp_wrong_cause`) shows that scip-python is the wrong side
   real wrong                       none of the above: the wrong-target class of Scippy
 """
 import json
@@ -31,6 +32,7 @@ DIFFERENT_CLASSES = [
     ("same_name_other_class", ("both_plausible / same_name_member_in_another_class", "both_plausible / sp_points_at_a_class_that_is_not_the_owner")),
     ("function_type_parameter", ("both_plausible / function_type_parameter",)),
     ("sp_first_binding", ("sp_first_binding / ",)),
+    ("sp_wrong", ("sp_wrong / ",)),
     ("real_wrong", ("scippy_wrong / ",)),
 ]
 
@@ -107,6 +109,7 @@ LABELS = {
     "same_name_other_class": "same-name member in another class",
     "function_type_parameter": "function type parameter (symbol convention)",
     "sp_first_binding": "scip-python first binding (name declared twice)",
+    "sp_wrong": "scip-python wrong or coarse (a named rule of analyze.py)",
     "real_wrong": "real wrong (Scippy)",
 }
 

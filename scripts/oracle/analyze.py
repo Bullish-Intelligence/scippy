@@ -231,6 +231,86 @@ def sp_builtin_type_attr(r):
     )
 
 
+def _src_lines(doc):
+    return cause.info(root, doc).lines
+
+
+def _text_at(lines, rng):
+    """The source text of a one-line range, or "" (the name where a definition is, not where it is used)."""
+    return lines[rng[0]][rng[1]:rng[3]] if rng[0] < len(lines) and rng[0] == rng[2] else ""
+
+
+def _binds_by_import(lines, name, before):
+    """True when an import statement above line `before` mentions `name`."""
+    if not name.isidentifier():
+        return False
+    pat = re.compile(r"\s*(?:import|from\s+\S+\s+import)\b.*\b" + re.escape(name) + r"\b")
+    return any(pat.match(x) for x in lines[:before])
+
+
+def _stem(doc):
+    base = os.path.basename(doc)
+    return os.path.basename(os.path.dirname(doc)) if base == "__init__.py" else base[:-3]
+
+
+def sp_wrong_cause(r):
+    """Return a sub-class string when scip-python is the wrong or coarse side, else None.
+
+    Each rule names one scip-python behaviour and reads the source text, so a new Scippy
+    fault is not hidden by it.
+    """
+    if not (r["sc"] and r["sp"] and r["sc_def"] and r["sp_def"]):
+        return None
+    doc, (l0, c0, l1, c1) = r["doc"], r["rng"]
+    lines = _src_lines(doc)
+    if l0 >= len(lines):
+        return None
+    line = lines[l0]
+    sc0, sp0 = r["sc"][0][0], r["sp"][0][0]
+    sc_doc, sc_rng = r["sc_def"][0]
+    sp_doc, sp_rng = r["sp_def"][0]
+    # 1. Keyword of a class pattern: `case C(name=capture)`. The keyword names an attribute of C.
+    #    scip-python gives the capture variable that the same pattern defines after the keyword.
+    #    scip-python reuses one local for a name that two patterns of the function bind, so the
+    #    capture may come from an earlier `case`.
+    sp_text = _text_at(lines, sp_rng)
+    if sp0.startswith("local ") and sp_doc == doc and re.match(r"\s*=(?!=)", line[c1:]) and (
+        (sp_rng[0] == l0 and sp_rng[1] > c1) or sp_text == r["text"]
+    ):
+        for back in range(l0, max(l0 - 8, -1), -1):
+            t = lines[back].lstrip()
+            if t.startswith("case "):
+                # The pattern spans the lines from `case` to the occurrence: its brackets stay open.
+                head = "\n".join(lines[back:l0] + [line[:c0]])
+                if any(x.rstrip().endswith(":") for x in lines[back:l0]):
+                    break  # a complete `case` line: the occurrence is in its body
+                if sum(head.count(c) for c in "([{") > sum(head.count(c) for c in ")]}"):
+                    return "sp_class_pattern_keyword: `case C(name=capture)`, scip-python gives the capture variable, Scippy the attribute `name` of C"
+                break
+    # 2. A name whose first binding is an import, as in `try: import httpx as x` then
+    #    `except ImportError: x = None`. scip-python gives the module that holds the name.
+    if r["cat"] in ("name", "import") and sp0.endswith("/__init__:") and sp_doc == sc_doc and list(sp_rng) == [0, 0, 0, 0] and list(sc_rng) != [0, 0, 0, 0] \
+            and _binds_by_import(_src_lines(sc_doc), _text_at(_src_lines(sc_doc), sc_rng), sc_rng[0]):
+        return "sp_module_for_name: scip-python gives the module that holds the name, Scippy a binding of the name"
+    # 3. `from .a import X` names module a. scip-python gives the X of another module: the first
+    #    binding of X in the file, in a branch for another platform.
+    m = re.match(r"\s*from\s+\.*([\w.]+)\s+import\b", line)
+    if m and r["cat"] in ("name", "import") and _stem(sc_doc) == m.group(1).split(".")[-1] and _stem(sp_doc) != _stem(sc_doc):
+        return "sp_import_first_binding_other_module: `from .a import X` after `from .b import X`, scip-python gives the X of b"
+    # 4. Member of a class that a function holds: Scippy gives a local symbol, scip-python the class.
+    sp_lines = _src_lines(sp_doc)
+    sp_line = sp_lines[sp_rng[0]] if sp_rng[0] < len(sp_lines) else ""
+    if r["cat"] == "attribute" and sc0.startswith("local ") and sp0.endswith("#") and sp_doc == sc_doc and sp_rng[0] <= sc_rng[0] and line[:c0].endswith(".") \
+            and sp_line.lstrip().startswith("class "):
+        return "sp_local_class_owner: member of a class in a function, Scippy gives a local symbol, scip-python the class"
+    # 5. `__class__` that a method assigns is a local. scip-python gives the method.
+    sc_lines = _src_lines(sc_doc)
+    sc_line = sc_lines[sc_rng[0]] if sc_rng[0] < len(sc_lines) else ""
+    if r["text"] == "__class__" and sc0.startswith("local ") and sp0.endswith(").") and re.match(r"\s*=(?!=)", sc_line[sc_rng[3]:]):
+        return "sp_class_cell: `__class__` assigned in a method is a local, scip-python gives the method"
+    return None
+
+
 def classify(r):
     """Return the (bucket, sub-class) of one disagreement row."""
     k = r["kind"]
@@ -264,6 +344,9 @@ def classify(r):
             return ("both_plausible", "import_prefix_at_usage_site: Scippy points the leading name (`mypy` of `mypy.nodes.X`) at the package, scip-python at a submodule")
         if sp_first_binding(r):
             return ("sp_first_binding", "scip-python points at the first declaration of a name that the scope declares twice, Scippy at a later one")
+        w = sp_wrong_cause(r)
+        if w:
+            return ("sp_wrong", w)
         return ("scippy_wrong", wrong_cause(r))
     if k.startswith("sc_missing"):
         return ("scippy_missing", miss_cause(r))

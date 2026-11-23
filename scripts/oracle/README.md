@@ -62,6 +62,7 @@ A multi-symbol position is in `sp` and in the covered numbers, and in none of th
 | same-name other class | both give a member with the same name, in different classes |
 | function type parameter | symbol convention for a type parameter of a function |
 | scip-python first binding (`sp_first_binding`) | scip-python takes the first of two declarations of a name in one scope; Scippy takes a later live one (`enum.py`: `Enum = Flag = ... = None`, then `class Flag`) |
+| scip-python wrong or coarse (`sp_wrong`) | a different target where a named rule of `sp_wrong_cause` in `analyze.py` shows that scip-python is the wrong side: the keyword of a class pattern (`case C(a=a)`), the module that holds a name that has an import binding first, `from .a import X` after `from .b import X`, a member of a class in a function, and `__class__` that a method assigns |
 | real wrong | a different target that none of the classes above explains |
 | scip-python builtin type attribute (`sp_builtin_type_attr`) | scip-python gives `builtins/type#` for an attribute named `type`; counted apart, it is not a position of `both` |
 
