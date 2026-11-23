@@ -1222,3 +1222,144 @@ Gate against the stored baseline: lane and main fail on the same 9 locations. Th
 (4 positions), pydantic-ai `openai.py:4353:88` and `google.py:2289:13`, `2289:41`, `2290:13`.
 The lane adds no failing location. Every multi-symbol set is a union (0 other sets).
 Exact recall: mypy 94.2727, stdlib 98.1604, pydantic-ai 96.2530, celery 97.8744, scrapy 96.8689, rich 97.1780.
+
+## Run 2026-11-23: scope model, class patterns, conditional values, NamedTuple, member order (fork `5105b5a`)
+
+Fork pin `5105b5a`. Scippy: the member candidates of a reference go to `order_by_mro` (the C3 order of
+the receiver class), `max_work` 2,000,000. Base for the comparison: the run `unions-32b5325`. The new
+baseline of the gate is the run `integrate4-5105b5a` (six corpora, correctness only, graph cache off).
+
+Fork commits since `32b5325` (all on the Python rules): `6c1b28c` hoisting of function locals;
+`552c3a4` boundary node of a function; `e92fcaf` and `4e7ad8f` class body, lambda, comprehension, and
+`nonlocal` on the boundary model (a method no longer sees the names of its class body); `4d09702` the
+rules return the members of all base classes and Scippy orders them; `2fdf026` a case pattern inside a
+list pattern reads at the statement, and a conditional value is the value of both branches; `205880f`
+unpacking of a NamedTuple by field position; `5105b5a` an annotated attribute store keeps its
+annotation route only.
+
+Named numbers (before = `unions-32b5325`, after = `integrate4-5105b5a`). Columns: exact recall,
+covered recall, exact precision (all in percent), real wrong, ambiguous references, union references,
+bounded references, bounded by kind (work/queue-length/arena-cells/failed).
+
+| Corpus | Exact recall | Covered recall | Exact precision | Real wrong | Ambiguous | Union | Bounded | Bounded by kind |
+|---|---|---|---|---|---|---|---|---|
+| mypy | 94.26 to 94.37 | 94.34 to 94.46 | 95.56 to 95.65 | 0 | 313 to 221 | 194 to 213 | 0 | 0/0/0/0 |
+| rich | 97.11 to 97.66 | 97.11 to 97.66 | 99.06 to 99.04 | 0 | 1 | 0 | 0 | 0/0/0/0 |
+| stdlib | 98.03 to 98.17 | 98.04 to 98.18 | 99.31 to 99.28 | 9 | 88 to 42 | 10 to 11 | 10 to 8 | 3/7/0/0 to 1/7/0/0 |
+| scrapy | 96.81 to 96.89 | 96.82 to 96.89 | 97.28 | 0 | 5 to 3 | 1 | 0 | 0/0/0/0 |
+| celery | 97.82 to 97.89 | 97.87 to 97.94 | 98.46 | 2 to 1 | 26 to 23 | 15 | 18 to 20 | 13/5/0/0 to 0/20/0/0 |
+| pydantic-ai | 96.23 to 96.43 | 96.30 to 96.50 | 99.10 to 99.22 | 44 | 149 to 128 | 110 to 115 | 0 | 0/0/0/0 |
+
+Change of the locations against `unions-32b5325` (`difftool.py`): mypy lost 2, changed 202, gained 145;
+rich lost 3, changed 0, gained 127; stdlib lost 17, changed 2, gained 113; scrapy lost 0, changed 0,
+gained 16; celery lost 1, changed 1, gained 62; pydantic-ai lost 20, changed 186, gained 194.
+- Lost: scip-python gives no project target for all but one of them (external 35, none 7). The one
+  exception is `pydantic_ai/durable_exec/temporal/_model_errors.py:209:47` (`ModelAPIError.__module__`):
+  the old target was `builtins/object#__module__`, scip-python gives a class of the project, and
+  Scippy gives nothing now. Neither agrees.
+- Changed: scip-python agrees with the new target at 334 locations (mypy 149, pydantic-ai 183, stdlib
+  1, celery 1), has no project target at 38 (mypy), agrees with the old and the new target (the new
+  set is larger) at 16, and names a project target that neither names at 3 (`models/google.py:2289:13`,
+  `:2289:41`, `:2290:13`: four candidate classes now, a true union, scip-python names a fifth). There is
+  no location where scip-python agrees with the old target and the result changed or got lost.
+
+Earlier regressions of the split run: `unittest/signals.py` 12, 13, 14, 17 and `models/openai.py:4353:88`
+resolve as in `unions-32b5325`. `unittest/mock.py:460:56` is `object.__doc__` in both runs, and
+scip-python gives the `__doc__` of the class (neither agrees). With the pin `4d09702` (17 locations
+where scip-python agrees with the old target lost it or changed it) the gate found these causes. The
+last three fork commits and two Scippy changes fixed all of them:
+- `rich/segment.py:579:38`, `:610:44`: `text, style, _ = segment` of a NamedTuple (`205880f`). Before it,
+  the local `style` took the field of the class body through the scope leak.
+- `scrapy/http/request/json_request.py:19:42` and `response/text.py:31:43`: `Request.attributes` in the body
+  of a subclass took the annotated attribute of the subclass. `order_by_mro` used the enclosing class as
+  the receiver for every member reference. Now it does so only for the own object of a method (`self`,
+  `cls`, `super()`); the Python pack tells it with the fact `own_members`.
+- pydantic-ai `durable_exec/_operation.py:354:27`, `:357:41` (`5105b5a`), `ui/_event_stream.py:534:16` to
+  `:542:18`, `models/anthropic/__init__.py:1383:18`, `tool_manager.py:455:30`, and celery
+  `concurrency/prefork.py:134:29` (`2fdf026`): class names in nested case patterns, and values of a
+  conditional expression.
+- celery `canvas.py:682:17`: the search of this reference rose from under 1,000,000 to between 1,000,000
+  and 1,250,000 units of work with `e92fcaf` and hit the limit. The default `max_work` is 2,000,000 now.
+  With the larger limit the 13 references of `canvas.py:1191-1262` that stopped at the work limit stop at
+  the queue limit (celery: work 13 to 0, queue-length 5 to 20); the two references `canvas.py:1187:32`
+  and `:1189:32` join them. The total rises from 18 to 20. No corpus rises by more than 3.
+
+Gate: with the allowlist emptied and the new baseline, 6 of 6 corpora pass. Against the old baseline
+`df9cecaa` the gate failed on 380 changed locations (in the main, improvements where scip-python agrees
+with the new target, and unions), so the baseline moves (README, "Gate"). The old baseline is in `ORACLE_DIR/baseline-df9cecaa`. The allowlist
+holds no line now: all 349 lines changed against the old baseline only.
+
+## Run 2026-11-23: combined policy of member choice (fork `f051ca6`)
+
+Fork pin `f051ca6` (`5105b5a` plus one fixture). Scippy: the lane `integrate4` (C3 order, own object of a
+method, `max_work` 2,000,000) merged with main `8ca3c68` (override chain as a union, attribute chain with
+one target, strict gate). Run label `merge5-f051ca6` in `classes.csv`. Six corpora, correctness only,
+graph cache off, `--trace`. Before = a fresh run of `ab0128d` (label `ab0128d-fresh`, folder
+`baseline-ab0128d`). The gate baseline is now this run (`ORACLE_DIR/baseline`). The older baselines are in
+`baseline-df9cecaa` and `baseline-ab0128d`. The allowlist stays empty.
+
+The combined policy (`Inheritance::select` in `inherit.rs`):
+
+- Known receiver: the own object of a method (`self`, `cls`, `super()`), when every candidate belongs
+  to its class or to a base. The C3 order of the class picks one target: an annotated declaration first,
+  else the first class in the order that owns a candidate.
+- Other receiver, several attribute candidates with related owners in one chain: one target
+  (`pick_attribute`): the annotated declaration first, else the most derived store.
+- Other receiver, several candidates with one method among them: no pick. Candidates of distinct classes
+  are a union (at most 4). A base class with overrides below it is a union of the overrides: all
+  candidates are methods of one name, and one owner is a base of all the others. Related attributes
+  that form no chain, and a method set with no common base, stay ambiguous. The strict gate
+  (`owners.py`) applies the same rule, so `is_union` now matches it.
+- Other receiver, one candidate or one owner: the receiver is the one class that has all owners in its
+  order (the scrapy shape: `Request.attributes` in the body of a subclass gives the member of `Request`).
+
+Named numbers (before = `ab0128d-fresh`, after = `merge5-f051ca6`). Columns: exact recall, covered recall,
+covered precision (percent), real wrong (after `sp_wrong`), `sp_wrong`, ambiguous references (union
+included), union references, bounded references, bounded by kind (work/queue-length/arena-cells/failed).
+
+| corpus | exact recall | covered recall | covered precision | real wrong | sp_wrong | ambiguous | union | bounded | bounded work/queue/arena/failed |
+|---|---|---|---|---|---|---|---|---|---|
+| mypy | 94.2727 to 94.3694 | 94.3551 to 94.461 | 95.5224 to 95.622 | 0 to 0 | 0 to 0 | 208 to 225 | 203 to 217 | 0 to 0 | 0/0/0/0 to 0/0/0/0 |
+| rich | 97.178 to 97.6581 | 97.178 to 97.663 | 99.0611 to 99.0411 | 0 to 0 | 0 to 0 | 1 to 2 | 0 to 1 | 0 to 0 | 0/0/0/0 to 0/0/0/0 |
+| stdlib | 98.1604 to 98.1704 | 98.1721 to 98.1838 | 99.2832 to 99.2849 | 0 to 0 | 9 to 9 | 38 to 42 | 12 to 11 | 10 to 8 | 3/7/0/0 to 1/7/0/0 |
+| scrapy | 96.8689 to 96.8862 | 96.8746 to 96.8919 | 97.2834 to 97.2839 | 0 to 0 | 0 to 0 | 2 to 3 | 1 to 1 | 0 to 0 | 0/0/0/0 to 0/0/0/0 |
+| celery | 97.8744 to 97.8895 | 97.9257 to 97.9378 | 98.4608 to 98.461 | 2 to 1 | 0 to 0 | 17 to 24 | 17 to 16 | 18 to 20 | 12/6/0/0 to 0/20/0/0 |
+| pydantic-ai | 96.253 to 96.4199 | 96.3302 to 96.4989 | 99.1007 to 99.2183 | 0 to 0 | 44 to 44 | 138 to 144 | 128 to 131 | 0 to 0 | 0/0/0/0 to 0/0/0/0 |
+
+Locations of `difftool.py` (before to after), by what scip-python says:
+
+| Corpus | Lost | Changed | Gained |
+|---|---|---|---|
+| mypy | 3: 1 external, 1 neither, 1 base only | 287: 158 candidate only, 114 external (`type` attribute), 15 both | 23 |
+| rich | 0 | 0 | 113 |
+| stdlib | 9: 7 external, 2 none | 2: 1 candidate only, 1 both | 14 |
+| scrapy | 0 | 0 | 6 |
+| celery | 2: 2 base only (bounded) | 1 candidate only | 43 |
+| pydantic-ai | 5: 4 external, 1 none | 184: 183 candidate only, 1 both | 147 |
+
+Review of the lost locations:
+
+- 7 stdlib (`unittest/mock.py:2891`, `:2892`, `:3026`, `:3028`): the keyword of `MagicMock(name=...)`
+  now has the two candidates `CallableMixin.__init__` and `NonCallableMock.__init__`. scip-python gives a
+  local symbol (no project target).
+- 4 pydantic-ai and 1 mypy (`cerebras.py:53:62`, `github_copilot.py:167:65`, `snowflake.py:83:62`,
+  `usage.py:292:34`, `mypy/nodes.py:3692:28`): scip-python agrees with the old external target
+  (`str.removeprefix`, `str.replace`, `dict.items`, `str.startswith`). The old target was luck. The old
+  rules let a method see the names of its class body: `name` in a lambda meant the property
+  `def name(self) -> str` of the class, and `details` meant the annotated class attribute. The scope
+  model of the fork removes this leak (`e92fcaf`), so the reference has no path. A correct result needs type inference of a lambda parameter or of a local value. They are not allowlisted: the new baseline holds them as unresolved.
+- `pydantic_ai/run.py:913:78` (no scip-python answer) and `mypy/semanal.py:1337:22` (scip-python and the
+  old target differ): not agreed.
+- `mypy/server/update.py:1168:12` (`node.fullname` after `isinstance(node, (FuncDef, MypyFile,
+  OverloadedFuncDef))`): the old set `FuncBase`, `MypyFile`, `SymbolNode` was no override chain (`FuncBase`
+  has no base `SymbolNode`) and failed the strict gate on `ab0128d` as well. It is ambiguous now.
+  scip-python gives `FuncBase#fullname`. This is the one location with a scip-python agreement lost for
+  a gate reason. The two `xml/dom/minidom.py` sets (`ownerDocument`, `parentNode`: attributes of sibling
+  classes) failed the same way and are ambiguous now. scip-python gives nothing there.
+- 2 celery (`canvas.py:1187:32`, `:1189:32`): bounded at the queue limit (`work` 12 to 0, `queue-length`
+  6 to 20; 18 to 20 in all, a rise of 2). With `--max-queue-len` 4000 and 10000 the 20 references stay
+  bounded (by work 2 and 7 at the larger limits), so the limits stay.
+
+The unit tests of `inherit.rs` cover the known receiver (MRO, diamond, the argparse shape, `object` last),
+a base-typed receiver with overrides (union, and ambiguous above 4), the attribute chain with an
+annotated base, and the scrapy shape. The language test `e2e.rs` has `a_base_class_in_a_class_body_gives_its_own_member`.

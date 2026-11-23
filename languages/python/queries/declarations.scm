@@ -190,5 +190,11 @@
      (subscript value: (identifier) @supertype)
      (subscript value: (attribute attribute: (identifier) @supertype))]))
 
+; The object of a member: `self` in `self.x`, `Request` in `Request.x`, `super()` in `super().x`.
+; The extractor keeps the members of the own object of a method (the first parameter, or `super()`).
+(attribute
+  object: (_) @own.object
+  attribute: (identifier) @own.member)
+
 ; A lambda holds its parameters. It has no name, so it is an anonymous scope.
 (lambda) @scope

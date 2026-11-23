@@ -68,8 +68,13 @@ pub(crate) struct Facts {
     pub keywords: Vec<(u32, u32)>,
     /// Spans of identifiers that name a supertype in the header of a class.
     pub supertypes: Vec<(u32, u32)>,
-    /// Spans of the names that an annotation declares: `x: T` in a class body, and `self.x: T = v`.
+    /// Spans of the names of declarations that carry a type annotation, such as the `x` in
+    /// `x: int = 0` or in `self.x: int = 0`.
     pub annotated: Vec<(u32, u32)>,
+    /// Spans of the members of the own object of a method: the `x` in `self.x`, in `cls.x`, and in
+    /// `super().x`. `self` and `cls` are the first parameter of the method that holds the
+    /// reference. Any other object, such as the `Request` in `Request.x`, is not in this list.
+    pub own_members: Vec<(u32, u32)>,
     /// Extents of the nodes that hold declarations and have no name, such as arrow functions.
     pub scopes: Vec<(u32, u32)>,
     /// Pairs of a binding name and the span of the reference that gives the name its target.
@@ -103,6 +108,8 @@ pub(crate) struct Extractor {
     module: Option<u32>,
     supertype: Option<u32>,
     annotated: Option<u32>,
+    own_member: Option<u32>,
+    own_object: Option<u32>,
     scope: Option<u32>,
     anchor: Option<u32>,
     alias_name: Option<u32>,
@@ -130,6 +137,8 @@ impl Extractor {
         let mut module = None;
         let mut supertype = None;
         let mut annotated = None;
+        let mut own_member = None;
+        let mut own_object = None;
         let mut scope = None;
         let mut anchor = None;
         let mut alias_name = None;
@@ -146,6 +155,8 @@ impl Extractor {
                 "module" => module = Some(index),
                 "supertype" => supertype = Some(index),
                 "annotated" => annotated = Some(index),
+                "own.member" => own_member = Some(index),
+                "own.object" => own_object = Some(index),
                 "scope" => scope = Some(index),
                 "anchor" => anchor = Some(index),
                 "alias.name" => alias_name = Some(index),
@@ -171,6 +182,8 @@ impl Extractor {
             module,
             supertype,
             annotated,
+            own_member,
+            own_object,
             scope,
             anchor,
             alias_name,
@@ -206,6 +219,7 @@ impl Extractor {
         let mut keywords = Vec::new();
         let mut supertypes = Vec::new();
         let mut annotated_spans = Vec::new();
+        let mut own_members = Vec::new();
         let mut scopes = Vec::new();
         let mut aliases = Vec::new();
         let mut hidden_spans = Vec::new();
@@ -252,8 +266,16 @@ impl Extractor {
             if let Some(supertype) = self.supertype.and_then(node) {
                 supertypes.push((supertype.start_byte() as u32, supertype.end_byte() as u32));
             }
-            if let Some(name) = self.annotated.and_then(node) {
-                annotated_spans.push((name.start_byte() as u32, name.end_byte() as u32));
+            if let Some(annotated) = self.annotated.and_then(node) {
+                annotated_spans.push((annotated.start_byte() as u32, annotated.end_byte() as u32));
+            }
+            if let (Some(attribute), Some(object)) = (
+                self.own_member.and_then(node),
+                self.own_object.and_then(node),
+            ) {
+                if is_own_object(object, source) {
+                    own_members.push((attribute.start_byte() as u32, attribute.end_byte() as u32));
+                }
             }
             if let Some(member) = self.member.and_then(node) {
                 members.push((member.start_byte() as u32, member.end_byte() as u32));
@@ -352,6 +374,9 @@ impl Extractor {
         annotated_spans.sort_unstable();
         annotated_spans.dedup();
         facts.annotated = annotated_spans;
+        own_members.sort_unstable();
+        own_members.dedup();
+        facts.own_members = own_members;
         scopes.sort_unstable();
         scopes.dedup();
         facts.scopes = scopes;
@@ -523,4 +548,57 @@ fn first_error(tree: &Tree) -> Option<SyntaxError> {
             }
         }
     }
+}
+
+/// True when `object` is the own object of a method: a call of `super()`, or a name that is the
+/// first parameter of a method (`self`, `cls`) around the node. Python names only: other
+/// languages have no capture of this kind.
+fn is_own_object(object: tree_sitter::Node, source: &str) -> bool {
+    let text = |n: tree_sitter::Node| source.get(n.start_byte()..n.end_byte()).unwrap_or("");
+    match object.kind() {
+        "call" => object
+            .child_by_field_name("function")
+            .is_some_and(|f| f.kind() == "identifier" && text(f) == "super"),
+        "identifier" => {
+            let name = text(object);
+            let mut node = object.parent();
+            while let Some(n) = node {
+                if n.kind() == "function_definition"
+                    && is_method_node(n)
+                    && first_parameter(n, source).is_some_and(|p| p == name)
+                {
+                    return true;
+                }
+                node = n.parent();
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// True when the function sits directly in a class body, possibly under decorators.
+fn is_method_node(function: tree_sitter::Node) -> bool {
+    let mut parent = function.parent();
+    if parent.is_some_and(|p| p.kind() == "decorated_definition") {
+        parent = parent.and_then(|p| p.parent());
+    }
+    parent
+        .filter(|p| p.kind() == "block")
+        .and_then(|b| b.parent())
+        .is_some_and(|c| c.kind() == "class_definition")
+}
+
+/// The name of the first parameter of a function.
+fn first_parameter<'a>(function: tree_sitter::Node, source: &'a str) -> Option<&'a str> {
+    let parameters = function.child_by_field_name("parameters")?;
+    let first = parameters.named_child(0)?;
+    let name = match first.kind() {
+        "identifier" => first,
+        "typed_parameter" | "default_parameter" | "typed_default_parameter" => {
+            first.named_child(0).filter(|n| n.kind() == "identifier")?
+        }
+        _ => return None,
+    };
+    source.get(name.start_byte()..name.end_byte())
 }

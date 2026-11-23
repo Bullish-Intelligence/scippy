@@ -1,6 +1,6 @@
 //! The stack-graphs pack path: shards, binding engines, reconcile, and identities.
 
-use super::finish::{Finisher, is_method, mark_unions, record_inheritance};
+use super::finish::{Finisher, is_method, mark_unions, order_by_mro, record_inheritance};
 use super::identities::{anonymous_scope, assign_identities, declare_external, identity_builder};
 use super::inputs::read_manifests;
 use super::load::load_file;
@@ -193,6 +193,7 @@ pub(super) fn index_pack(
         staged.push((doc, reconciled));
     }
     for (doc, mut reconciled) in staged {
+        order_by_mro(&doc, &mut reconciled, &inheritance, &externals);
         mark_unions(&mut reconciled, &inheritance);
         finisher.account(run, &doc, &reconciled);
         out.push(finisher.build(doc, &reconciled, false));

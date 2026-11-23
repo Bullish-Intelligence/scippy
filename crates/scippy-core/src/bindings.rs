@@ -43,6 +43,9 @@ pub(crate) const BUILTINS_NAME: &str = "<builtins>";
 /// A work limit of 300,000 removed all 81 in clinch and 50 of 56 in mr.
 /// A work limit of 1,000,000 removed all of them. It raised the peak memory by 8% in clinch
 /// and by 4% in mr, and the wall time did not rise beyond the noise of the runs.
+/// The scope model of the fork at e92fcaf adds work to some searches. One reference in celery
+/// (`celery/canvas.py:682`, `link.stamp`) rose from under 1,000,000 to between 1,000,000 and
+/// 1,250,000 work and hit the limit. It resolves at 1,250,000. The limit is now 2,000,000.
 /// The arena limit is for one search, and `--jobs` searches run at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -58,7 +61,7 @@ pub struct ResolveLimits {
 impl Default for ResolveLimits {
     fn default() -> Self {
         Self {
-            max_work: 1_000_000,
+            max_work: 2_000_000,
             max_queue_len: 2_000,
             max_arena_cells: 20_000_000,
         }

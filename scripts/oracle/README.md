@@ -84,7 +84,7 @@ One CSV holds the counts of every run: `scripts/oracle/classes.csv`
     python3 -I scripts/oracle/track.py runs
 
 `add` refuses a (run, corpus) pair that the CSV already has. The baseline run is
-`df9cecaa-2026-11-22`. Run `track.py delta` for each pin bump. For one location, use
+`merge5-f051ca6` (the old baseline `df9cecaa-2026-11-22` stays in `classes.csv`). Run `track.py delta` for each pin bump. For one location, use
 `difftool.py CORPUS BASE_RUNDIR CAND_RUNDIR`: it lists the locations that are lost, changed, or
 gained, and says if scip-python agrees with the base or with the candidate.
 

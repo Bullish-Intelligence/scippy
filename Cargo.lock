@@ -1077,7 +1077,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "lsp-positions"
 version = "0.3.4"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b#6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=f051ca6f0f4f67786cb90f5907ef44c2052f0a8e#f051ca6f0f4f67786cb90f5907ef44c2052f0a8e"
 dependencies = [
  "bincode",
  "memchr",
@@ -1762,7 +1762,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stack-graphs"
 version = "0.14.1"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b#6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=f051ca6f0f4f67786cb90f5907ef44c2052f0a8e#f051ca6f0f4f67786cb90f5907ef44c2052f0a8e"
 dependencies = [
  "bincode",
  "bitvec",
@@ -2017,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-graph"
 version = "0.12.0"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b#6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=f051ca6f0f4f67786cb90f5907ef44c2052f0a8e#f051ca6f0f4f67786cb90f5907ef44c2052f0a8e"
 dependencies = [
  "log",
  "regex",
@@ -2087,7 +2087,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-stack-graphs"
 version = "0.10.0"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b#6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=f051ca6f0f4f67786cb90f5907ef44c2052f0a8e#f051ca6f0f4f67786cb90f5907ef44c2052f0a8e"
 dependencies = [
  "anyhow",
  "controlled-option",
@@ -2107,7 +2107,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-stack-graphs-python"
 version = "0.3.0"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b#6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=f051ca6f0f4f67786cb90f5907ef44c2052f0a8e#f051ca6f0f4f67786cb90f5907ef44c2052f0a8e"
 dependencies = [
  "stack-graphs",
  "tree-sitter-python",
@@ -2117,7 +2117,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-stack-graphs-typescript"
 version = "0.4.0"
-source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b#6c1b28c7f34ceeb1b3dd0832b1e1ac367f29068b"
+source = "git+https://github.com/Bullish-Intelligence/stack-graphs?rev=f051ca6f0f4f67786cb90f5907ef44c2052f0a8e#f051ca6f0f4f67786cb90f5907ef44c2052f0a8e"
 dependencies = [
  "anyhow",
  "glob",

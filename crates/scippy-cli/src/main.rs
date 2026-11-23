@@ -129,7 +129,7 @@ struct IndexArgs {
     #[arg(long, requires = "metalayer")]
     no_identity: bool,
     /// Stop the search for one reference after this many units of work. The reference has no
-    /// target. The default is in `ResolveLimits`.
+    /// target. The default is 2,000,000 (see `ResolveLimits`).
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     max_work: Option<u64>,
     /// Stop the search for one reference when this many paths wait for extension.

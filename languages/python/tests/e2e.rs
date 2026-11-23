@@ -259,9 +259,11 @@ fn a_class_body_name_resolves_in_the_class_body_and_not_in_a_method() {
             .find("fields.py", "print(count)", "count")
             .is_empty()
     );
+    // The scope model of the rules does not reach the class body from a method, so the pack has
+    // no end to refuse. The reference is unresolved for the rules, not for the pack.
     assert_eq!(
         indexed.report.unresolved_reasons.get("not-targetable"),
-        Some(&1)
+        None
     );
 }
 
@@ -2151,8 +2153,29 @@ fn a_union_of_unrelated_classes_gets_one_occurrence_for_each_member() {
     assert_eq!(occurrences[0].symbol_roles, occurrences[1].symbol_roles);
     assert!(occurrences.iter().all(|o| !is_definition(o)));
     // The report counts them as ambiguous references that became unions.
-    assert_eq!(indexed.report.references_union, 7);
+    assert_eq!(indexed.report.references_union, 6);
     assert_eq!(indexed.report.references_ambiguous, 8);
+}
+
+#[test]
+fn a_base_class_in_a_class_body_gives_its_own_member() {
+    // `Request.attributes` in the body of `JsonRequest` names the member of `Request`. It is no
+    // `self.attributes`, so the annotated member of the subclass must not win. The own object
+    // of a method (`self`) still gets the annotated member of the most derived class.
+    let indexed = index("base_attribute");
+    assert_eq!(
+        indexed.symbols_of("requests.py", "= Request.attributes + (", "attributes"),
+        [global("requests/Request#attributes.")]
+    );
+    assert_eq!(
+        indexed.symbols_of("requests.py", "return self.attributes", "attributes"),
+        [global("requests/JsonRequest#attributes.")]
+    );
+    // A value of the base class type in a method is not the own object either.
+    assert_eq!(
+        indexed.symbols_of("requests.py", "return request.attributes", "attributes"),
+        [global("requests/Request#attributes.")]
+    );
 }
 
 #[test]
@@ -2172,14 +2195,12 @@ fn related_owners_are_an_override_chain_with_one_occurrence_for_each_override() 
         indexed.symbols_of("shapes.py", "return g.render()", "render"),
         base_and_child
     );
-    // An unrelated class joins the chain.
-    assert_eq!(
-        indexed.symbols_of("shapes.py", "return m.render()", "render"),
-        [
-            global("shapes/Base#render()."),
-            global("shapes/Child#render()."),
-            global("shapes/Solo#render().")
-        ]
+    // An unrelated class joins the chain: no owner is a base of all the others, so the
+    // reference stays ambiguous.
+    assert!(
+        indexed
+            .symbols_of("shapes.py", "return m.render()", "render")
+            .is_empty()
     );
 }
 

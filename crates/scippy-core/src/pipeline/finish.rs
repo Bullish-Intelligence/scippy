@@ -5,7 +5,7 @@ use crate::bindings::Bound;
 use crate::emit::{Document, Occurrence, Role, SymbolInfo};
 use crate::identity::SymbolId;
 use crate::inherit::Inheritance;
-use crate::language::DeclKind;
+use crate::language::{DeclKind, ReferenceKind};
 use crate::positions::LineIndex;
 use crate::project::ProjectRelativePath;
 use crate::reconcile::{BindingOutcome, Reconciled, UnresolvedReason};
@@ -58,19 +58,19 @@ pub(super) fn record_inheritance(
             }
         }
     }
+    let annotated: HashSet<(u32, u32)> = doc.facts.annotated.iter().copied().collect();
     for member in doc.declared.iter().filter(|d| is_member(d)) {
         let (start, end) = member.fact.extent;
         if let Some(class) = enclosing_class(&doc.declared, start, end) {
             if !class.symbol.is_local() {
-                inheritance.add_member(&class.symbol, member.symbol.clone());
+                let span = (member.fact.anchor.start_byte, member.fact.anchor.end_byte);
+                inheritance.add_named_member(
+                    &class.symbol,
+                    &member.display_name,
+                    member.symbol.clone(),
+                    annotated.contains(&span),
+                );
             }
-        }
-    }
-    let annotated: BTreeSet<(u32, u32)> = doc.facts.annotated.iter().copied().collect();
-    for member in doc.declared.iter().filter(|d| is_member(d)) {
-        let name = (member.fact.anchor.start_byte, member.fact.anchor.end_byte);
-        if annotated.contains(&name) {
-            inheritance.add_annotated(member.symbol.clone());
         }
     }
     let resolved: HashMap<(u32, u32), &SymbolId> = reconciled
@@ -120,6 +120,42 @@ pub(super) fn mark_unions(reconciled: &mut [Reconciled], inheritance: &Inheritan
                 continue;
             }
             r.union = inheritance.is_union(candidates);
+        }
+    }
+}
+
+/// Pick one candidate for each member reference whose candidates the order of the classes
+/// decides. A resolved member reference can change too: an annotated declaration of the member in
+/// a base class wins over the declaration that the rules found. Call it after the classes of
+/// every document are in `inheritance`, and before `mark_unions`. The language rules return the
+/// members of all base classes. The order between the bases is the MRO of the receiver class.
+pub(super) fn order_by_mro(
+    doc: &Doc,
+    reconciled: &mut [Reconciled],
+    inheritance: &Inheritance,
+    externals: &BTreeMap<SymbolId, SymbolInfo>,
+) {
+    let is_external = |s: &SymbolId| externals.contains_key(s);
+    let own_members: HashSet<(u32, u32)> = doc.facts.own_members.iter().copied().collect();
+    for r in reconciled {
+        if r.kind != ReferenceKind::Member {
+            continue;
+        }
+        let candidates: Vec<SymbolId> = match &r.outcome {
+            BindingOutcome::Resolved(symbol) => vec![symbol.clone()],
+            BindingOutcome::Ambiguous(candidates) => candidates.clone(),
+            _ => continue,
+        };
+        // The enclosing class is the receiver only for the own object of a method (`self.m`,
+        // `cls.m`, `super().m`). `Base.m` in a class body, or `other.m`, names the member of
+        // another value, so its receiver follows from the candidates.
+        let own = own_members.contains(&(r.reference.start_byte, r.reference.end_byte));
+        let enclosing =
+            enclosing_class(&doc.declared, r.reference.start_byte, r.reference.end_byte)
+                .map(|c| &c.symbol)
+                .filter(|s| own && !s.is_local());
+        if let Some(chosen) = inheritance.select(&candidates, enclosing, &is_external) {
+            r.outcome = BindingOutcome::Resolved(chosen);
         }
     }
 }
